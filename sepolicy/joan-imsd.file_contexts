@@ -1,0 +1,1 @@
+/(vendor|system/vendor)/bin/joan-ims    u:object_r:netmgrd_exec:s0

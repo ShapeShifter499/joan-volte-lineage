@@ -1,0 +1,5 @@
+# joan-volte-lineage build artifacts
+out/
+native/build/
+ims-service/build/
+*.apk.orig

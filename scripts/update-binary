@@ -1,0 +1,91 @@
+#!/sbin/sh
+# Lineage recovery installer — joan-volte (no Magisk, no CIL append).
+#
+# v3: files-only. SELinux handled by labeling the binary netmgrd_exec
+# (existing vendor policy domain already allows xfrm/netlink there —
+# proven live 2026-08-26). Drops the vendor_sepolicy.cil append entirely:
+# it never entered the loaded policy and its 0-byte-backup failure mode
+# aborted installs on dynamic-partition devices when /vendor wasn't yet
+# mounted in recovery.
+OUTFD="/proc/self/fd/$2"
+ZIP="$3"
+TMP=/tmp/joan-volte
+
+ui_print() {
+  echo "ui_print $1" > "$OUTFD"
+  echo "ui_print" > "$OUTFD"
+}
+
+error() {
+  ui_print "ERROR: $1"
+  exit 1
+}
+
+need_file() {
+  f="$1"
+  min="$2"
+  [ -f "$f" ] || error "missing $f"
+  sz=$(wc -c < "$f" | tr -d ' ')
+  ui_print "  $(basename $f) ($sz bytes)"
+  [ "$sz" -ge "$min" ] || error "$(basename $f) too small ($sz)"
+}
+
+copy_file() {
+  src="$1"
+  dst="$2"
+  mode="$3"
+  con="$4"
+  mkdir -p "$(dirname "$dst")"
+  cat "$src" > "$dst" || error "write $dst"
+  chmod "$mode" "$dst"
+  sz1=$(wc -c < "$src" | tr -d ' ')
+  sz2=$(wc -c < "$dst" | tr -d ' ')
+  [ "$sz1" = "$sz2" ] || error "size mismatch $dst ($sz2 != $sz1)"
+  chcon "$con" "$dst" 2>/dev/null || true
+}
+
+ui_print "joan-volte v3: joan-ims + ImsService apk"
+
+rm -rf "$TMP"
+mkdir -p "$TMP"
+unzip -o "$ZIP" -d "$TMP" || error "unzip failed"
+
+need_file "$TMP/vendor/bin/joan-ims" 10000
+need_file "$TMP/vendor/etc/init/joan-ims.rc" 80
+need_file "$TMP/app/joan-ims.apk" 5000
+
+ui_print "Mounting vendor (dynamic partitions)"
+umount -l /vendor 2>/dev/null || true
+VENDOR_DEV=""
+for d in /dev/block/mapper/vendor /dev/block/mapper/vendor_a \
+         /dev/block/by-name/vendor /dev/block/bootdevice/by-name/vendor; do
+  if [ -b "$d" ]; then
+    VENDOR_DEV="$d"
+    break
+  fi
+done
+ui_print "  vendor dev=$VENDOR_DEV"
+[ -n "$VENDOR_DEV" ] || error "no vendor block device"
+mkdir -p /vendor
+mount -o rw -t ext4 "$VENDOR_DEV" /vendor || mount -o rw "$VENDOR_DEV" /vendor || error "mount vendor failed"
+mount -o rw,remount /vendor 2>/dev/null || true
+
+# System product partition for priv-app + perms.
+ui_print "Mounting system rw"
+mount -o rw,remount / 2>/dev/null || true
+mkdir -p /system/priv-app/joan-ims
+
+ui_print "Installing joan-ims (netmgrd_exec label)"
+copy_file "$TMP/vendor/bin/joan-ims" /vendor/bin/joan-ims 755 u:object_r:netmgrd_exec:s0
+copy_file "$TMP/vendor/etc/init/joan-ims.rc" /vendor/etc/init/joan-ims.rc 644 u:object_r:vendor_configs_file:s0
+
+ui_print "Installing ImsService priv-app"
+copy_file "$TMP/app/joan-ims.apk" /system/priv-app/joan-ims/joan-ims.apk 644 u:object_r:system_file:s0
+if [ -f "$TMP/etc/permissions/org.joan.ims.xml" ]; then
+  copy_file "$TMP/etc/permissions/org.joan.ims.xml" \
+    /system/etc/permissions/org.joan.ims.xml 644 u:object_r:system_file:s0
+fi
+
+sync
+ui_print "Done. Reboot system."
+exit 0

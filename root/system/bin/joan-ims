@@ -1,0 +1,9 @@
+#!/system/bin/sh
+# Wrapper: portable Python UA until a bionic native binary exists.
+export JOAN_IMS_HOME=/system/etc/joan-imsd
+export PYTHONPATH="${JOAN_IMS_HOME}:${PYTHONPATH}"
+if command -v python3 >/dev/null 2>&1; then
+  exec python3 -u "${JOAN_IMS_HOME}/joan_ims_live.py" "$@"
+fi
+log -t joan-ims "no python3 on PATH; UA not started"
+exit 0

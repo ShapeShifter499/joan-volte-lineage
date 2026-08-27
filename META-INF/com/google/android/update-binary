@@ -1,0 +1,121 @@
+#!/sbin/sh
+# Lineage recovery installer — joan-volte (no Magisk).
+OUTFD="/proc/self/fd/$2"
+ZIP="$3"
+TMP=/tmp/joan-volte
+
+ui_print() {
+  echo "ui_print $1" > "$OUTFD"
+  echo "ui_print" > "$OUTFD"
+}
+
+error() {
+  ui_print "ERROR: $1"
+  exit 1
+}
+
+need_file() {
+  f="$1"; min="$2"
+  [ -f "$f" ] || error "missing $f"
+  sz=$(wc -c < "$f" | tr -d ' ')
+  ui_print "  $f ($sz bytes)"
+  [ "$sz" -ge "$min" ] || error "$f too small ($sz)"
+}
+
+rw_mount() {
+  # $1=name $2=mountpoint
+  name="$1"; mnt="$2"
+  umount -l "$mnt" 2>/dev/null || true
+  mkdir -p "$mnt"
+  dev=""
+  for d in /dev/block/mapper/${name} /dev/block/mapper/${name}_a \
+           /dev/block/by-name/${name} /dev/block/bootdevice/by-name/${name}; do
+    [ -b "$d" ] && dev="$d" && break
+  done
+  [ -n "$dev" ] || return 1
+  blockdev --setrw "$dev" 2>/dev/null || true
+  mount -t ext4 -o rw,noatime "$dev" "$mnt" 2>/dev/null \
+    || mount -o rw "$dev" "$mnt" 2>/dev/null || return 1
+  mount -o rw,remount "$mnt" 2>/dev/null || true
+  ui_print "  mounted $name $dev -> $mnt"
+  df -h "$mnt" | tail -1 | while read line; do ui_print "  df $line"; done
+  return 0
+}
+
+try_write() {
+  src="$1"; dst="$2"
+  mkdir -p "$(dirname "$dst")"
+  if cat "$src" > "$dst" 2>/tmp/joan-werr; then
+    return 0
+  fi
+  ui_print "  write fail $dst: $(cat /tmp/joan-werr 2>/dev/null)"
+  rm -f "$dst"
+  return 1
+}
+
+ui_print "joan-volte: persist joan-ims"
+
+rm -rf "$TMP"
+mkdir -p "$TMP"
+unzip -o "$ZIP" -d "$TMP" || error "unzip failed"
+need_file "$TMP/vendor/bin/joan-ims" 10000
+need_file "$TMP/vendor/etc/init/joan-ims.rc" 80
+
+rw_mount vendor /vendor || ui_print "WARN: vendor mount failed"
+rw_mount system /mnt/system || rw_mount system /system || ui_print "WARN: system mount failed"
+# GApps-style system root
+if [ -d /mnt/system/system ]; then SYS=/mnt/system/system
+elif [ -d /system/system ]; then SYS=/system/system
+else SYS=/system
+fi
+ui_print "  SYS=$SYS"
+
+BIN=""
+for cand in /vendor/bin/joan-ims "$SYS/bin/joan-ims" /system_ext/bin/joan-ims; do
+  dir=$(dirname "$cand")
+  [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null || continue
+  ui_print "Trying $cand"
+  if try_write "$TMP/vendor/bin/joan-ims" "$cand"; then
+    chmod 755 "$cand"
+    chcon u:object_r:netmgrd_exec:s0 "$cand" 2>/dev/null || true
+    sz=$(wc -c < "$cand" | tr -d ' ')
+    ui_print "  wrote $cand ($sz)"
+    [ "$sz" -ge 10000 ] || continue
+    BIN="$cand"
+    break
+  fi
+done
+[ -n "$BIN" ] || error "write joan-ims (vendor/system still ro or full)"
+
+# init.rc next to a parsed init dir, with the real binary path
+RC_SRC="$TMP/vendor/etc/init/joan-ims.rc"
+cat > "$TMP/joan-ims.rc" << EOF
+service vendor.joan-ims $BIN register
+    class late_start
+    user root
+    group radio inet system
+    capabilities NET_ADMIN NET_RAW NET_BIND_SERVICE
+    seclabel u:r:netmgrd:s0
+
+on property:sys.boot_completed=1
+    start vendor.joan-ims
+EOF
+
+RC=""
+for cand in /vendor/etc/init/joan-ims.rc "$SYS/etc/init/joan-ims.rc" /system_ext/etc/init/joan-ims.rc; do
+  mkdir -p "$(dirname "$cand")" 2>/dev/null || continue
+  if try_write "$TMP/joan-ims.rc" "$cand"; then
+    chmod 644 "$cand"
+    chcon u:object_r:vendor_configs_file:s0 "$cand" 2>/dev/null || true
+    chcon u:object_r:system_file:s0 "$cand" 2>/dev/null || true
+    RC="$cand"
+    ui_print "  init $RC"
+    break
+  fi
+done
+[ -n "$RC" ] || error "write init.rc"
+
+sync
+ui_print "Installed $BIN"
+ui_print "Done. Reboot system."
+exit 0

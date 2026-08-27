@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Privapp permissions for the Joan ImsService priv-app. -->
+<permissions>
+    <privapp-permissions package="org.joan.ims">
+        <permission name="android.permission.MODIFY_PHONE_STATE" />
+        <permission name="android.permission.READ_PRIVILEGED_PHONE_STATE" />
+        <permission name="android.permission.CONNECTIVITY_USE_RESTRICTED_NETWORKS" />
+        <permission name="android.permission.BIND_IMS_SERVICE" />
+    </privapp-permissions>
+</permissions>

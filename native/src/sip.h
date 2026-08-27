@@ -1,0 +1,92 @@
+/* sip.h — SIP REGISTER builder + response parsing for joan IMS.
+ * Ported from the proven pmOS builders (joan_ims_register.py / ua / ipsec).
+ */
+#ifndef JOAN_IMS_SIP_H
+#define JOAN_IMS_SIP_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#define SIP_MAX_MSG 4096
+
+typedef struct {
+    char impi[256];        /* user@realm — never logged */
+    char impu[256];        /* public identity (sip:…) or empty to use impi */
+    char realm[128];       /* msg.pc.t-mobile.com */
+    char local_ip[64];     /* unbracketed text form */
+    int local_port;
+    char pcscf[80];
+    int pcscf_port;
+    char imei[24];
+    int have_id;           /* impi non-empty with '@' */
+} sip_identity_t;
+
+typedef struct {
+    unsigned spi_c, spi_s;
+    unsigned port_c, port_s;
+} sec_params_t;
+
+/* Default random Security-Client params (spi 256..2^31-1, port pair). */
+void joan_sec_params_default(sec_params_t *out);
+
+/* The Security-Client header VALUE we offer (both REGISTERs identical). */
+void joan_security_client_value(const sec_params_t *m, char *dst, size_t n);
+
+/* State carried between first and second REGISTER. */
+typedef struct {
+    char call_id[64];
+    char from_tag[16];
+    char branch[40];
+    sec_params_t mine;     /* our Security-Client params */
+} sip_txn_t;
+
+typedef struct {
+    char nonce_b64[512];
+    char algorithm[32];
+    int have_nonce;
+    char sec_server[512];
+    int have_sec_server;
+} sip_challenge_t;
+
+typedef struct {
+    int status;                       /* e.g. 200, 401, 403 */
+    char reason[64];
+    char www_authenticate[1024];
+    int have_www_auth;
+    char security_server[512];
+    int have_sec_server;
+    char service_route[512];
+    int have_service_route;
+    int expires;                      /* -1 if absent */
+    char date_hdr[64];
+} sip_response_t;
+
+void txn_new(sip_txn_t *t, const sip_identity_t *id, sec_params_t mine);
+
+/* Build REGISTER into out. Returns length or -1. cseq 1 = unprotected. */
+int build_register(
+        char *out, size_t outlen,
+        const sip_identity_t *id,
+        sip_txn_t *txn,
+        int cseq,
+        const sip_challenge_t *ch,   /* NULL => unprotected */
+        const uint8_t *res,          /* 16-byte AKA RES or NULL */
+        const uint8_t *ck,
+        const uint8_t *ik);
+
+int parse_response(const char *msg, size_t len, sip_response_t *r);
+
+/* Digest response per RFC 3310 (AKAv1-MD5 password=RES). */
+int aka_digest_response_hex(
+        const char *username,
+        const char *realm,
+        const char *method,
+        const char *uri,
+        const char *nonce_b64,
+        const uint8_t *res,
+        const char *qop,             /* "auth" or NULL */
+        const char *nc,
+        const char *cnonce,
+        char *out_hex /* 33 */);
+
+#endif /* JOAN_IMS_SIP_H */
