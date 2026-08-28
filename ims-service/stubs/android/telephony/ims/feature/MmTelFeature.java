@@ -32,6 +32,10 @@ public abstract class MmTelFeature extends ImsFeature {
 
     public void onFeatureReady() {}
 
+    public boolean queryCapabilityConfiguration(int capability, int radioTech) {
+        return false;
+    }
+
     public void onFeatureRemoved() {}
 
     /** Framework-facing status update (mirrors final wrapper). */

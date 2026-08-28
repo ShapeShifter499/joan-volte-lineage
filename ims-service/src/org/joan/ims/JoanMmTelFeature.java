@@ -26,15 +26,19 @@ public class JoanMmTelFeature extends MmTelFeature {
             CapabilityChangeRequest request, CapabilityCallbackProxy c) {
         Log.i(TAG, "changeEnabledCapabilities");
         JoanDriver.start(app);
-        notifyRegisteredCapability();
+        markReady();
     }
 
     @Override
     public void onFeatureReady() {
         Log.i(TAG, "onFeatureReady");
         JoanDriver.start(app);
-        setFeatureState(ImsFeature.STATE_READY);
-        notifyRegisteredCapability();
+        markReady();
+    }
+
+    @Override
+    public boolean queryCapabilityConfiguration(int capability, int radioTech) {
+        return capability == MmTelCapabilities.CAPABILITY_TYPE_VOICE;
     }
 
     @Override
@@ -57,7 +61,13 @@ public class JoanMmTelFeature extends MmTelFeature {
         return PROCESS_CALL_CSFB;
     }
 
-    private void notifyRegisteredCapability() {
+    private void markReady() {
+        try {
+            setFeatureState(ImsFeature.STATE_READY);
+        } catch (Throwable t) {
+            Log.w(TAG, "setFeatureState failed "
+                    + t.getClass().getSimpleName());
+        }
         try {
             notifyCapabilitiesStatusChanged(new MmTelCapabilities(
                     MmTelCapabilities.CAPABILITY_TYPE_VOICE));

@@ -29,6 +29,10 @@ public class ImsService extends Service {
         return null;
     }
 
+    public ImsFeatureConfiguration querySupportedImsFeatures() {
+        return new ImsFeatureConfiguration();
+    }
+
     public void enableIms(int slotId) {}
 
     public void disableIms(int myslotId) {}

@@ -2,10 +2,17 @@ package org.joan.ims;
 
 import android.util.Log;
 
+import android.telephony.ims.ImsFeatureConfiguration;
+import android.telephony.ims.feature.ImsFeature;
+
 /**
  * Framework ImsService: the binder entry telephony binds to (manifest
  * action android.telephony.ims.ImsService). Binding starts the ctl driver;
  * registration state flows through JoanRegistration.
+ *
+ * querySupportedImsFeatures() is required on Android 12+: the default
+ * implementation returns an empty set, which left MmTel UNAVAILABLE and
+ * Dialer on CS even though the native UA was REGISTERED.
  */
 public class JoanImsService extends android.telephony.ims.ImsService {
     private static final String TAG = "JoanIms";
@@ -16,6 +23,15 @@ public class JoanImsService extends android.telephony.ims.ImsService {
         JoanTrace.init(getApplicationContext());
         JoanTrace.note("ImsService onCreate; starting driver");
         JoanDriver.start(getApplicationContext());
+    }
+
+    @Override
+    public ImsFeatureConfiguration querySupportedImsFeatures() {
+        Log.i(TAG, "querySupportedImsFeatures MMTEL");
+        return new ImsFeatureConfiguration.Builder()
+                .addFeature(0, ImsFeature.FEATURE_EMERGENCY_MMTEL)
+                .addFeature(0, ImsFeature.FEATURE_MMTEL)
+                .build();
     }
 
     @Override
