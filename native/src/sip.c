@@ -321,6 +321,14 @@ int parse_response(const char *msg, size_t len, sip_response_t *r)
     r->have_service_route = header_value(msg, "Service-Route",
                                          r->service_route,
                                          sizeof(r->service_route)) >= 0;
+    r->have_contact = header_value(msg, "Contact", r->contact,
+                                   sizeof(r->contact)) >= 0;
+    r->have_record_route = header_value(msg, "Record-Route",
+                                        r->record_route,
+                                        sizeof(r->record_route)) >= 0;
+    r->have_p_associated_uri = header_value(msg, "P-Associated-URI",
+                                            r->p_associated_uri,
+                                            sizeof(r->p_associated_uri)) >= 0;
     char exp[32];
     if (header_value(msg, "Expires", exp, sizeof(exp)) >= 0)
         r->expires = atoi(exp);
@@ -381,7 +389,14 @@ int build_invite(char *out, size_t outlen,
                  int rtp_port,
                  sip_dialog_t *dlg)
 {
-    const char *public_id = id->impu[0] ? id->impu : id->impi;
+    /* No IMPI fallback here, deliberately. The IMPI is
+     * IMSI@ims.mnc<MNC>.mcc<MCC>.3gppnetwork.org: falling back to it puts
+     * the subscriber's permanent IMSI in From/Contact/P-Preferred-Identity,
+     * and the far end shows it as the caller ID. A call without a public
+     * identity is a bug, not something to paper over. */
+    if (!id->impu[0])
+        return -1;
+    const char *public_id = id->impu;
     char aor[300];
     if (!strncmp(public_id, "tel:", 4) || !strncmp(public_id, "sip:", 4))
         snprintf(aor, sizeof(aor), "%s", public_id);
@@ -438,7 +453,8 @@ int build_invite(char *out, size_t outlen,
 
 int build_ack(char *out, size_t outlen,
               const sip_identity_t *id,
-              const char *dest,
+              const char *target,     /* Request-URI: remote target */
+              const char *to_uri,     /* To header: the URI we dialled */
               const char *route,
               const char *sec_verify,
               const sip_dialog_t *dlg,
@@ -457,7 +473,7 @@ int build_ack(char *out, size_t outlen,
     mk_branch(branch, sizeof(branch));
 
     appender_t a = { out, outlen };
-    app(&a, "ACK %s SIP/2.0\r\n", dest);
+    app(&a, "ACK %s SIP/2.0\r\n", target);
     app(&a, "Via: SIP/2.0/UDP %s:%d;branch=%s;rport\r\n",
         host, id->local_port, branch);
     app(&a, "Max-Forwards: 70\r\n");
@@ -465,11 +481,93 @@ int build_ack(char *out, size_t outlen,
         app(&a, "Route: %s\r\n", route);
     app(&a, "From: <%s>;tag=%s\r\n", aor, dlg->from_tag);
     if (to_tag && to_tag[0])
-        app(&a, "To: <%s>;tag=%s\r\n", dest, to_tag);
+        app(&a, "To: <%s>;tag=%s\r\n", to_uri, to_tag);
     else
-        app(&a, "To: <%s>\r\n", dest);
+        app(&a, "To: <%s>\r\n", to_uri);
     app(&a, "Call-ID: %s\r\n", dlg->call_id);
     app(&a, "CSeq: %d ACK\r\n", dlg->cseq);
+    if (sec_verify && sec_verify[0])
+        app(&a, "Security-Verify: %s\r\n", sec_verify);
+    app(&a, "Content-Length: 0\r\n");
+    app(&a, "\r\n");
+    return (int)(outlen - a.left);
+}
+
+
+int build_bye(char *out, size_t outlen,
+              const sip_identity_t *id,
+              const char *target,     /* Request-URI: remote target */
+              const char *to_uri,     /* To header: the URI we dialled */
+              const char *route,
+              const char *sec_verify,
+              const sip_dialog_t *dlg,
+              const char *to_tag)
+{
+    const char *public_id = id->impu[0] ? id->impu : id->impi;
+    char aor[300];
+    if (!strncmp(public_id, "tel:", 4) || !strncmp(public_id, "sip:", 4))
+        snprintf(aor, sizeof(aor), "%s", public_id);
+    else
+        snprintf(aor, sizeof(aor), "sip:%s", public_id);
+
+    char host[80];
+    bracket(id->local_ip, host, sizeof(host));
+    char branch[40];
+    mk_branch(branch, sizeof(branch));
+
+    appender_t a = { out, outlen };
+    app(&a, "BYE %s SIP/2.0\r\n", target);
+    app(&a, "Via: SIP/2.0/UDP %s:%d;branch=%s;rport\r\n",
+        host, id->local_port, branch);
+    app(&a, "Max-Forwards: 70\r\n");
+    if (route && route[0])
+        app(&a, "Route: %s\r\n", route);
+    app(&a, "From: <%s>;tag=%s\r\n", aor, dlg->from_tag);
+    if (to_tag && to_tag[0])
+        app(&a, "To: <%s>;tag=%s\r\n", to_uri, to_tag);
+    else
+        app(&a, "To: <%s>\r\n", to_uri);
+    app(&a, "Call-ID: %s\r\n", dlg->call_id);
+    app(&a, "CSeq: %d BYE\r\n", dlg->cseq + 1);
+    if (sec_verify && sec_verify[0])
+        app(&a, "Security-Verify: %s\r\n", sec_verify);
+    app(&a, "Content-Length: 0\r\n");
+    app(&a, "\r\n");
+    return (int)(outlen - a.left);
+}
+
+
+int build_cancel(char *out, size_t outlen,
+                 const sip_identity_t *id,
+                 const char *dest,
+                 const char *route,
+                 const char *sec_verify,
+                 const sip_dialog_t *dlg)
+{
+    if (!id->impu[0])
+        return -1;
+    char aor[300];
+    const char *public_id = id->impu;
+    if (!strncmp(public_id, "tel:", 4) || !strncmp(public_id, "sip:", 4))
+        snprintf(aor, sizeof(aor), "%s", public_id);
+    else
+        snprintf(aor, sizeof(aor), "sip:%s", public_id);
+
+    char host[80];
+    bracket(id->local_ip, host, sizeof(host));
+
+    appender_t a = { out, outlen };
+    app(&a, "CANCEL %s SIP/2.0\r\n", dest);
+    /* Same branch as the INVITE: that is the matching key. */
+    app(&a, "Via: SIP/2.0/UDP %s:%d;branch=%s;rport\r\n",
+        host, id->local_port, dlg->branch);
+    app(&a, "Max-Forwards: 70\r\n");
+    if (route && route[0])
+        app(&a, "Route: %s\r\n", route);
+    app(&a, "From: <%s>;tag=%s\r\n", aor, dlg->from_tag);
+    app(&a, "To: <%s>\r\n", dest);
+    app(&a, "Call-ID: %s\r\n", dlg->call_id);
+    app(&a, "CSeq: %d CANCEL\r\n", dlg->cseq);
     if (sec_verify && sec_verify[0])
         app(&a, "Security-Verify: %s\r\n", sec_verify);
     app(&a, "Content-Length: 0\r\n");

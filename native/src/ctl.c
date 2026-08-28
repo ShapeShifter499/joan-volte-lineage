@@ -182,6 +182,11 @@ static void handle_line(int fd, char *line)
         return;
     }
 
+    if (!strcmp(verb, "HANGUP")) {
+        respond(fd, ua_call_hangup() == 0 ? "OK" : "ERR", "hangup");
+        return;
+    }
+
     if (!strcmp(verb, "CALL") && nf == 2) {
         int rc = ua_call_invite(fields[1]);
         if (rc == 0) {

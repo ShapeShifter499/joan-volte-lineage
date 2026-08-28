@@ -39,6 +39,10 @@ int ua_register_stage1(char *nonce_out, size_t nonce_len);
  * and ACKed. */
 int ua_call_invite(const char *dest);
 
+/* End the call established by ua_call_invite(). Returns 0 if a BYE was
+ * sent, -1 if no call is up. */
+int ua_call_hangup(void);
+
 int ua_register_stage2(const uint8_t *res, size_t res_len,
                        const uint8_t *ck, const uint8_t *ik);
 

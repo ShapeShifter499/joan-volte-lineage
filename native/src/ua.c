@@ -28,8 +28,21 @@ static struct {
     char sec_verify[512];
     int  port_c;          /* our protected client port */
     int  pcscf_port_s;    /* where protected requests go */
+    char public_id[300];   /* IMPU from P-Associated-URI; NEVER the IMPI */
     int  valid;
 } g_reg;
+
+/* The dialog of the call currently up. ua_call_invite() left its dialog on
+ * the stack, so once it returned there was no way to send a BYE and the
+ * call sat established until the far end or a session timer killed it. */
+static struct {
+    sip_dialog_t dlg;
+    char dest[300];        /* original request URI */
+    char target[300];      /* remote target from the 2xx Contact */
+    char route[512];       /* route set: Record-Route if the 2xx carried one */
+    char to_tag[64];
+    int  active;
+} g_call;
 static ua_state_t g_state;
 static char g_err[160];
 
@@ -446,7 +459,37 @@ int ua_register_stage2(const uint8_t *res, size_t res_len,
                  g_ch.sec_server);
         g_reg.port_c = (int)ue_sec.port_c;
         g_reg.pcscf_port_s = (int)pcscf_sec.port_s;
+        /* Take the public identity from P-Associated-URI.
+         *
+         * Without it build_invite() falls back to the IMPI, which is
+         * IMSI@ims.mnc<MNC>.mcc<MCC>.3gppnetwork.org -- so an outgoing call
+         * presents the subscriber's permanent IMSI as its calling identity
+         * and the far end displays it as the caller ID. That happened on a
+         * live call. The IMPI authenticates us; it is not a public
+         * identity and must never leave in From, Contact or
+         * P-Preferred-Identity.
+         *
+         * P-Associated-URI is the core telling us which public identities
+         * it registered, so it is both correct and carrier-neutral. Prefer
+         * a tel: URI, else the first sip: URI. */
+        if (resp.have_p_associated_uri) {
+            const char *p = resp.p_associated_uri;
+            const char *pick = strstr(p, "<tel:");
+            if (!pick)
+                pick = strstr(p, "<sip:");
+            if (pick) {
+                pick++;
+                const char *gt = strchr(pick, '>');
+                size_t l = gt ? (size_t)(gt - pick) : 0;
+                if (l && l < sizeof(g_reg.public_id)) {
+                    memcpy(g_reg.public_id, pick, l);
+                    g_reg.public_id[l] = '\0';
+                }
+            }
+        }
         g_reg.valid = 1;
+        klog(LOG_INFO, "public identity from P-Associated-URI: %s",
+             g_reg.public_id[0] ? "yes" : "NONE (calls blocked)");
         klog(LOG_INFO, "REGISTERED expires=%d service-route=%s",
              resp.expires > 0 ? resp.expires : 600000,
              resp.have_service_route ? "yes" : "none");
@@ -513,10 +556,19 @@ int ua_call_invite(const char *dest)
         return -41;
     }
 
+    /* Refuse to dial without a public identity rather than fall back to
+     * the IMPI and leak the IMSI as caller ID. */
+    if (!g_reg.public_id[0]) {
+        fail("no public identity (IMPU); refusing to dial", 47);
+        return -47;
+    }
+
     sip_identity_t id = g_cfg->id;
     id.local_port = g_reg.port_c;
     id.pcscf_port = g_reg.pcscf_port_s;
+    snprintf(id.impu, sizeof(id.impu), "%s", g_reg.public_id);
 
+    memset(&g_call, 0, sizeof(g_call));
     sip_dialog_t dlg;
     memset(&dlg, 0, sizeof(dlg));
     char msg[SIP_MAX_MSG];
@@ -562,10 +614,39 @@ int ua_call_invite(const char *dest)
         }
         if (resp.status >= 200 && resp.status < 300) {
             extract_to_tag(rx, to_tag, sizeof(to_tag));
+            snprintf(g_call.dest, sizeof(g_call.dest), "%s", dest);
+            snprintf(g_call.to_tag, sizeof(g_call.to_tag), "%s", to_tag);
+            /* RFC 3261: an in-dialog request goes to the remote target,
+             * which is the Contact of the 2xx -- not the URI we originally
+             * dialled. Sending BYE to the dialled AOR gets 481 Call/
+             * Transaction Does Not Exist, which is what happened. */
+            if (resp.have_contact) {
+                const char *lt = strchr(resp.contact, '<');
+                const char *gt = lt ? strchr(lt, '>') : NULL;
+                if (lt && gt && (size_t)(gt - lt) < sizeof(g_call.target)) {
+                    size_t tl = (size_t)(gt - lt - 1);
+                    memcpy(g_call.target, lt + 1, tl);
+                    g_call.target[tl] = '\0';
+                } else {
+                    snprintf(g_call.target, sizeof(g_call.target), "%s",
+                             resp.contact);
+                }
+            } else {
+                snprintf(g_call.target, sizeof(g_call.target), "%s", dest);
+            }
+            snprintf(g_call.route, sizeof(g_call.route), "%s",
+                     resp.have_record_route ? resp.record_route
+                                            : g_reg.service_route);
+            klog(LOG_INFO, "dialog target captured (rr=%s)",
+                 resp.have_record_route ? "yes" : "no");
+            g_call.dlg = dlg;
+            g_call.active = 1;
             char ack[SIP_MAX_MSG];
-            int an = build_ack(ack, sizeof(ack), &id, dest,
-                               g_reg.service_route, g_reg.sec_verify,
-                               &dlg, to_tag);
+            int an = build_ack(ack, sizeof(ack), &id,
+                               g_call.target[0] ? g_call.target : dest,
+                               dest, g_call.route[0] ? g_call.route
+                                                     : g_reg.service_route,
+                               g_reg.sec_verify, &dlg, to_tag);
             if (an > 0 && sip_sendto(s, g_reg.pcscf_port_s, ack,
                                      (size_t)an) == 0)
                 klog(LOG_INFO, "call answered, ACK sent");
@@ -579,8 +660,61 @@ int ua_call_invite(const char *dest)
         rc = -46;
         break;
     }
-    if (rc == -45)
+    if (rc == -45) {
+        /* Withdraw the INVITE rather than leaving the far end ringing
+         * until its own timer gives up. */
+        char cancel[SIP_MAX_MSG];
+        int cn = build_cancel(cancel, sizeof(cancel), &id, dest,
+                              g_reg.service_route, g_reg.sec_verify, &dlg);
+        if (cn > 0 && sip_sendto(s, g_reg.pcscf_port_s, cancel,
+                                 (size_t)cn) == 0)
+            klog(LOG_INFO, "setup timed out, CANCEL sent");
+        else
+            klog(LOG_WARN, "setup timed out, CANCEL failed");
         fail("invite no final reply", 45);
+    }
     close(s);
+    return rc;
+}
+
+
+int ua_call_hangup(void)
+{
+    if (!g_call.active) {
+        klog(LOG_WARN, "hangup with no call up");
+        return -1;
+    }
+    sip_identity_t id = g_cfg->id;
+    id.local_port = g_reg.port_c;
+    id.pcscf_port = g_reg.pcscf_port_s;
+
+    char msg[SIP_MAX_MSG];
+    int n = build_bye(msg, sizeof(msg), &id, g_call.target, g_call.dest,
+                      g_call.route, g_reg.sec_verify,
+                      &g_call.dlg, g_call.to_tag);
+    if (n <= 0) {
+        g_call.active = 0;
+        return -1;
+    }
+    int s = sip_socket_bind(g_reg.port_c);
+    if (s < 0) {
+        g_call.active = 0;
+        return -1;
+    }
+    int rc = -1;
+    if (sip_sendto(s, g_reg.pcscf_port_s, msg, (size_t)n) == 0) {
+        char rx[2048];
+        int r = sip_wait_recv(s, g_port_s_fd, rx, sizeof(rx), 5000);
+        if (r > 0) {
+            sip_response_t resp;
+            if (parse_response(rx, (size_t)r, &resp) == 0)
+                klog(LOG_INFO, "bye reply: %d %s", resp.status, resp.reason);
+        } else {
+            klog(LOG_WARN, "bye sent, no reply");
+        }
+        rc = 0;
+    }
+    close(s);
+    g_call.active = 0;
     return rc;
 }

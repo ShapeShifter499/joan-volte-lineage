@@ -58,6 +58,12 @@ typedef struct {
     int have_sec_server;
     char service_route[512];
     int have_service_route;
+    char contact[256];                /* remote target for in-dialog reqs */
+    int have_contact;
+    char record_route[512];
+    int have_record_route;
+    char p_associated_uri[512];       /* public identities the core registered */
+    int have_p_associated_uri;
     int expires;                      /* -1 if absent */
     char date_hdr[64];
 } sip_response_t;
@@ -97,10 +103,33 @@ int build_invite(char *out, size_t outlen,
                  int rtp_port,
                  sip_dialog_t *dlg);
 
+/* CANCEL withdraws an INVITE that has not been answered. RFC 3261: it
+ * reuses the INVITE's Request-URI, Call-ID, From-tag, CSeq number and --
+ * critically -- the INVITE's Via branch, which is how the server matches
+ * it to the transaction. */
+int build_cancel(char *out, size_t outlen,
+                 const sip_identity_t *id,
+                 const char *dest,
+                 const char *route,
+                 const char *sec_verify,
+                 const sip_dialog_t *dlg);
+
+/* BYE ends an established dialog. Same routing and security agreement as
+ * the INVITE; CSeq is incremented past the INVITE's. */
+int build_bye(char *out, size_t outlen,
+              const sip_identity_t *id,
+              const char *target,     /* Request-URI: remote target */
+              const char *to_uri,     /* To header: the URI we dialled */
+              const char *route,
+              const char *sec_verify,
+              const sip_dialog_t *dlg,
+              const char *to_tag);
+
 /* ACK for a 2xx, routed to the same target. */
 int build_ack(char *out, size_t outlen,
               const sip_identity_t *id,
-              const char *dest,
+              const char *target,     /* Request-URI: remote target */
+              const char *to_uri,     /* To header: the URI we dialled */
               const char *route,
               const char *sec_verify,
               const sip_dialog_t *dlg,
