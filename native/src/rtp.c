@@ -28,6 +28,64 @@ static unsigned g_recv;
 static struct sockaddr_storage g_dst;
 static socklen_t g_dlen;
 
+/* Loopback PCMU bridge to the ImsService (AudioRecord/AudioTrack). */
+#define MEDIA_PORT 15091
+static int g_media_fd = -1;
+static struct sockaddr_in g_media_peer;
+static int g_have_media_peer;
+static unsigned char g_uplink[PCMU_SAMPLES];
+static int g_have_uplink;
+
+static int media_bind(void)
+{
+    int s = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    if (s < 0)
+        return -1;
+    int one = 1;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_port = htons(MEDIA_PORT);
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(s, (struct sockaddr *)&a, sizeof(a)) < 0) {
+        klog(LOG_WARN, "rtp media bind 127.0.0.1:%d errno=%d", MEDIA_PORT, errno);
+        close(s);
+        return -1;
+    }
+    klog(LOG_INFO, "rtp media 127.0.0.1:%d", MEDIA_PORT);
+    return s;
+}
+
+static void media_drain_uplink(void)
+{
+    if (g_media_fd < 0)
+        return;
+    unsigned char buf[512];
+    struct sockaddr_in peer;
+    socklen_t plen = sizeof(peer);
+    for (;;) {
+        ssize_t r = recvfrom(g_media_fd, buf, sizeof(buf), 0,
+                             (struct sockaddr *)&peer, &plen);
+        if (r <= 0)
+            break;
+        g_media_peer = peer;
+        g_have_media_peer = 1;
+        if (r >= PCMU_SAMPLES) {
+            memcpy(g_uplink, buf, PCMU_SAMPLES);
+            g_have_uplink = 1;
+        }
+    }
+}
+
+static void media_push_downlink(const unsigned char *ulaw, int n)
+{
+    if (g_media_fd < 0 || !g_have_media_peer || n <= 0)
+        return;
+    sendto(g_media_fd, ulaw, (size_t)n, 0,
+           (const struct sockaddr *)&g_media_peer, sizeof(g_media_peer));
+}
+
 /* ITU-T G.711 µ-law. */
 static uint8_t linear_to_ulaw(int16_t pcm)
 {
@@ -141,7 +199,12 @@ int rtp_start(const char *local_ip, const char *iface,
     g_phase = 0;
     g_sent = 0;
     g_recv = 0;
+    g_have_uplink = 0;
+    g_have_media_peer = 0;
     g_next_ms = now_ms();
+    if (g_media_fd >= 0)
+        close(g_media_fd);
+    g_media_fd = media_bind();
     klog(LOG_INFO, "rtp start PCMU %d -> %d", local_port, remote_port);
     return 0;
 }
@@ -151,6 +214,11 @@ void rtp_stop(void)
     if (g_fd >= 0)
         close(g_fd);
     g_fd = -1;
+    if (g_media_fd >= 0)
+        close(g_media_fd);
+    g_media_fd = -1;
+    g_have_media_peer = 0;
+    g_have_uplink = 0;
     if (g_active)
         klog(LOG_INFO, "rtp stop sent=%u recv=%u", g_sent, g_recv);
     g_active = 0;
@@ -189,8 +257,13 @@ static void rtp_send_one(void)
     pkt[9] = (unsigned char)(g_ssrc >> 16);
     pkt[10] = (unsigned char)(g_ssrc >> 8);
     pkt[11] = (unsigned char)g_ssrc;
-    for (int i = 0; i < PCMU_SAMPLES; i++)
-        pkt[RTP_HDR + i] = linear_to_ulaw(0);
+    media_drain_uplink();
+    if (g_have_uplink)
+        memcpy(pkt + RTP_HDR, g_uplink, PCMU_SAMPLES);
+    else
+        for (int i = 0; i < PCMU_SAMPLES; i++)
+            pkt[RTP_HDR + i] = linear_to_ulaw(0);
+    g_have_uplink = 0;
     ssize_t w = sendto(g_fd, pkt, sizeof(pkt), 0,
                        (struct sockaddr *)&g_dst, g_dlen);
     if (w == (ssize_t)sizeof(pkt)) {
@@ -212,6 +285,8 @@ static void rtp_drain(void)
         if (r <= 0)
             break;
         g_recv++;
+        if (r > RTP_HDR)
+            media_push_downlink(buf + RTP_HDR, (int)r - RTP_HDR);
     }
 }
 

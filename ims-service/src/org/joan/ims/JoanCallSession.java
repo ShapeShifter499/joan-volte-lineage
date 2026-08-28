@@ -1,5 +1,6 @@
 package org.joan.ims;
 
+import android.content.Context;
 import android.telephony.ims.ImsCallProfile;
 import android.telephony.ims.ImsCallSessionListener;
 import android.telephony.ims.ImsReasonInfo;
@@ -20,13 +21,15 @@ import android.util.Log;
  */
 public class JoanCallSession extends ImsCallSessionImplBase {
     private static final String TAG = "JoanIms";
+    private final Context app;
     private final ImsCallProfile profile;
     private volatile ImsCallSessionListener listener;
     private volatile int state = STATE_IDLE;
     private final String callId;
     private volatile boolean watchHangup;
 
-    JoanCallSession(ImsCallProfile profile) {
+    JoanCallSession(Context app, ImsCallProfile profile) {
+        this.app = app.getApplicationContext();
         this.profile = profile;
         this.callId = "joan-" + Long.toHexString(System.nanoTime());
     }
@@ -77,6 +80,7 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             if (resp != null && resp.startsWith("OK")) {
                 state = STATE_ESTABLISHED;
                 notifyStarted(used);
+                JoanMedia.start(this.app);
                 watchRemoteHangup();
             } else {
                 failStart(resp == null ? "ctl failed" : "call failed");
@@ -107,6 +111,7 @@ public class JoanCallSession extends ImsCallSessionImplBase {
 
     private void hangupAsync() {
         watchHangup = false;
+        JoanMedia.stop();
         new Thread(() -> JoanCtl.txn("HANGUP"), "joan-ims-hangup").start();
     }
 
@@ -114,15 +119,25 @@ public class JoanCallSession extends ImsCallSessionImplBase {
         watchHangup = true;
         new Thread(() -> {
             try {
-                for (int i = 0; i < 600 && watchHangup; i++) {
-                    Thread.sleep(1000);
+                boolean seenUp = false;
+                for (int i = 0; i < 3000 && watchHangup; i++) {
+                    Thread.sleep(200);
                     if (!watchHangup) {
                         return;
                     }
                     String st = JoanCtl.txn("STATUS");
-                    if (st == null || !st.contains("CALL=1")) {
+                    if (st == null) {
+                        continue;
+                    }
+                    if (st.contains("CALL=1")) {
+                        seenUp = true;
+                        continue;
+                    }
+                    if (seenUp) {
+                        JoanTrace.note("remote hangup STATUS without CALL=1");
                         state = STATE_TERMINATED;
-                        notifyTerminated(ImsReasonInfo.CODE_USER_TERMINATED_BY_REMOTE);
+                        JoanMedia.stop();
+                        notifyTerminated(ImsReasonInfo.CODE_USER_TERMINATED);
                         return;
                     }
                 }
@@ -189,6 +204,7 @@ public class JoanCallSession extends ImsCallSessionImplBase {
     private void failStart(String why) {
         state = STATE_TERMINATED;
         watchHangup = false;
+        JoanMedia.stop();
         Log.w(TAG, "call start failed: " + why);
         ImsCallSessionListener l = listener;
         if (l == null) {

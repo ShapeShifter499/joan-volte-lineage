@@ -54,7 +54,7 @@ public class JoanMmTelFeature extends MmTelFeature {
     @Override
     public ImsCallSessionImplBase createCallSession(ImsCallProfile profile) {
         Log.i(TAG, "createCallSession");
-        return new JoanCallSession(profile);
+        return new JoanCallSession(app, profile);
     }
 
     @Override

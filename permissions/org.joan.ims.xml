@@ -6,5 +6,7 @@
         <permission name="android.permission.READ_PRIVILEGED_PHONE_STATE" />
         <permission name="android.permission.CONNECTIVITY_USE_RESTRICTED_NETWORKS" />
         <permission name="android.permission.BIND_IMS_SERVICE" />
+        <permission name="android.permission.RECORD_AUDIO" />
+        <permission name="android.permission.MODIFY_AUDIO_SETTINGS" />
     </privapp-permissions>
 </permissions>
