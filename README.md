@@ -9,8 +9,10 @@ handset (REGISTER 200, INVITE 180/200 with PCMU audio, SMS both ways) onto a
 stock-shaped Android ROM. The longer-term intent is to offer this upstream so
 LineageOS can ship working VoLTE for joan rather than requiring a side-load.
 
-> **Status: bring-up, not a release.** SIP REGISTER currently gets a 401 from
-> the P-CSCF that is not yet root-caused. See [Current state](#current-state).
+> **Status: registration works; calling does not yet.** The UA reaches
+> `REGISTER 200 OK` against a live carrier IMS core and holds the
+> registration. Call setup is the next milestone. See
+> [Current state](#current-state).
 
 ## How it works
 
@@ -118,36 +120,51 @@ needing the log you cannot read.
 
 ## Current state
 
+**IMS registration works.** On a live carrier core:
+
+```
+reg2 sending 23450 -> 65529 (protected)
+reply arrived on server port socket
+reg2 reply: 200 OK
+REGISTERED expires=600000
+```
+
 Working:
 
-- IMS PDN comes up; `ImsService` binds; the daemon runs Enforcing as `netmgrd`
-- ISIM AKA exchange returns `sw=9000`; RES/CK/IK reach the daemon
-- IPsec SAs install (ESP transport, auth-trunc)
-- REGISTER reaches the P-CSCF and is challenged
+- IMS PDN up, `ImsService` bound, daemon running Enforcing as `netmgrd`
+- ISIM AKA exchange; RES/CK/IK reach the daemon
+- IPsec SAs and outbound policies installed, and actually used
+- **`REGISTER` 200 OK, registration held, re-registration scheduled**
 
-Not working:
+Three things had to be right, and each hid the next:
 
-- **REG2 gets a 401.** Root cause not yet isolated.
-- MT (inbound) calling is unproven; MO calling and dialer wiring are not wired up.
+1. **The protected REGISTER must travel inside the SA.** REG2 was going out
+   5060 to 5060 like the unprotected REG1, so every SA installed was dead
+   code. It now goes port-c to the P-CSCF's port-s, with Via/Contact
+   advertising port-c. This is what the long-standing 401 actually was.
+2. **The P-CSCF answers on the UE's protected *server* port,** not the
+   client port the request left from. Nothing was bound to port-s, so
+   replies had nowhere to land and it looked like the network was silent.
+   The UA now holds port-s and waits on both sockets.
+3. **Inbound policies dropped the decrypted reply** (`XfrmInTmplMismatch`).
+   Linux accepts a decrypted packet when no inbound policy demands
+   otherwise, so only outbound policies are installed.
 
-Known defects, in the order they are worth attacking:
+Two raw-netlink traps worth knowing if you touch `xfrm.c`: a zeroed
+`xfrm_lifetime_cfg` is a hard limit of *zero*, not unlimited, so SAs expire
+on first use (`XfrmOutStateExpired`); and selectors default to prefixlen 0,
+so the addresses are carried but ignored for matching.
 
-1. `cnonce` and `nc` are hardcoded (`"cnonce01"` / `00000001`), so every REG2
-   retry replays an identical pair. A replay-detecting P-CSCF would 401 every
-   attempt after the first — the leading suspect for a 401 that survives
-   daemon restarts.
-2. `integrity-protected=yes` is asserted unconditionally, even when
-   `xfrm_install()` only partially succeeded, in which case REG2 goes out
-   unprotected while claiming otherwise.
-3. **AKAv2-MD5 is advertised but never computed.** The challenge algorithm is
-   echoed into the `Authorization` header, but the digest always uses
-   `password = RES`; `CK`/`IK` are discarded. A host probe confirms an AKAv1
-   and an AKAv2 challenge produce an identical response hash. Not the current
-   401 (this carrier challenges AKAv1) but a hard blocker for other carriers.
-4. A quoted `algorithm="…"` in the challenge is silently discarded and falls
-   back to AKAv1-MD5.
-5. `hex_decode()` returns a partial count on a malformed nibble, so a 32-char
-   RES corrupted at byte 8 is accepted as a valid 64-bit RES.
+Not working yet:
+
+- Calling. Outbound and inbound INVITE, dialer wiring, two-way RTP.
+- Known defects: `cnonce`/`nc` are hardcoded; AKAv2-MD5 is advertised from
+  the challenge but never computed (`CK`/`IK` are discarded), and a quoted
+  `algorithm="..."` is silently discarded -- both matter for carriers that
+  challenge AKAv2; `hex_decode()` returns a partial count on a malformed
+  nibble.
+- The loopback ctl listener is still the only route the IMS app can use
+  (see [Control channel](#control-channel)) and is unauthenticated.
 
 ## Carrier support
 
