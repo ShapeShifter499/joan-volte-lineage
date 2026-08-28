@@ -19,6 +19,17 @@
 static ua_config_t *g_cfg;
 static int g_port_s_fd = -1;
 static int g_port_s_bound = -1;
+
+/* Registration context, captured from the 200 OK. A call has to be routed
+ * through the same P-CSCF path and carry the same security agreement, so
+ * everything the INVITE needs is kept here rather than rebuilt. */
+static struct {
+    char service_route[512];
+    char sec_verify[512];
+    int  port_c;          /* our protected client port */
+    int  pcscf_port_s;    /* where protected requests go */
+    int  valid;
+} g_reg;
 static ua_state_t g_state;
 static char g_err[160];
 
@@ -100,6 +111,36 @@ static int sip_socket_bind(int local_port)
 
 static int sip_sendto(int s, int dport, const char *pkt, size_t len);
 
+/* Wait for a datagram on `s` or `alt`, whichever speaks first. */
+static int sip_wait_recv(int s, int alt, char *rx, size_t rxlen,
+                         int timeout_ms)
+{
+    struct timeval tv;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(s, &rfds);
+    int maxfd = s;
+    if (alt >= 0) {
+        FD_SET(alt, &rfds);
+        if (alt > maxfd)
+            maxfd = alt;
+    }
+    if (select(maxfd + 1, &rfds, NULL, NULL, &tv) <= 0)
+        return -1;
+
+    int from = FD_ISSET(s, &rfds) ? s : alt;
+    ssize_t r = recv(from, rx, rxlen - 1, 0);
+    if (r <= 0)
+        return -1;
+    rx[r] = '\0';
+    klog(LOG_INFO, "reply arrived on %s port socket",
+         from == s ? "client" : "server");
+    return (int)r;
+}
+
 /* Send on `s`, then wait for a reply on EITHER `s` or `alt`.
  *
  * The P-CSCF answers a protected REGISTER on the UE's protected SERVER
@@ -115,31 +156,7 @@ static int sip_send_recv_dual(int s, int alt, int dport,
     if (sip_sendto(s, dport, pkt, len) < 0)
         return -1;
 
-    struct timeval tv;
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-
-    fd_set rfds;
-    FD_ZERO(&rfds);
-    FD_SET(s, &rfds);
-    int maxfd = s;
-    if (alt >= 0) {
-        FD_SET(alt, &rfds);
-        if (alt > maxfd)
-            maxfd = alt;
-    }
-    int rc = select(maxfd + 1, &rfds, NULL, NULL, &tv);
-    if (rc <= 0)
-        return -1;
-
-    int from = FD_ISSET(s, &rfds) ? s : alt;
-    ssize_t r = recv(from, rx, rxlen - 1, 0);
-    if (r <= 0)
-        return -1;
-    rx[r] = '\0';
-    klog(LOG_INFO, "reply arrived on %s port socket",
-         from == s ? "client" : "server");
-    return (int)r;
+    return sip_wait_recv(s, alt, rx, rxlen, timeout_ms);
 }
 
 static int sip_sendto(int s, int dport, const char *pkt, size_t len)
@@ -421,8 +438,18 @@ int ua_register_stage2(const uint8_t *res, size_t res_len,
     klog(LOG_INFO, "reg2 reply: %d %s", resp.status, resp.reason);
     if (resp.status >= 200 && resp.status < 300) {
         g_state = UA_STATE_REGISTERED;
-        klog(LOG_INFO, "REGISTERED expires=%d",
-             resp.expires > 0 ? resp.expires : 600000);
+        memset(&g_reg, 0, sizeof(g_reg));
+        if (resp.have_service_route)
+            snprintf(g_reg.service_route, sizeof(g_reg.service_route),
+                     "%s", resp.service_route);
+        snprintf(g_reg.sec_verify, sizeof(g_reg.sec_verify), "%s",
+                 g_ch.sec_server);
+        g_reg.port_c = (int)ue_sec.port_c;
+        g_reg.pcscf_port_s = (int)pcscf_sec.port_s;
+        g_reg.valid = 1;
+        klog(LOG_INFO, "REGISTERED expires=%d service-route=%s",
+             resp.expires > 0 ? resp.expires : 600000,
+             resp.have_service_route ? "yes" : "none");
         return 0;
     }
     if (resp.status == 401) {
@@ -448,4 +475,112 @@ int ua_register_stage2(const uint8_t *res, size_t res_len,
     snprintf(g_err, sizeof(g_err), "reg2 status %d", resp.status);
     g_state = UA_STATE_ERROR;
     return -29;
+}
+
+
+/* ---- MO call ----------------------------------------------------------- */
+
+#define JOAN_RTP_PORT 40000
+
+static void extract_to_tag(const char *msg, char *dst, size_t n)
+{
+    dst[0] = '\0';
+    const char *t = strcasestr(msg, "\r\nTo:");
+    if (!t)
+        return;
+    const char *eol = strstr(t + 2, "\r\n");
+    const char *tag = strcasestr(t, "tag=");
+    if (!tag || (eol && tag > eol))
+        return;
+    tag += 4;
+    size_t i = 0;
+    while (tag[i] && tag[i] != ';' && tag[i] != '\r' && tag[i] != '>' &&
+           i + 1 < n) {
+        dst[i] = tag[i];
+        i++;
+    }
+    dst[i] = '\0';
+}
+
+int ua_call_invite(const char *dest)
+{
+    if (g_state != UA_STATE_REGISTERED || !g_reg.valid) {
+        fail("call before register", 40);
+        return -40;
+    }
+    if (!dest || !dest[0]) {
+        fail("call no dest", 41);
+        return -41;
+    }
+
+    sip_identity_t id = g_cfg->id;
+    id.local_port = g_reg.port_c;
+    id.pcscf_port = g_reg.pcscf_port_s;
+
+    sip_dialog_t dlg;
+    memset(&dlg, 0, sizeof(dlg));
+    char msg[SIP_MAX_MSG];
+    int n = build_invite(msg, sizeof(msg), &id, dest,
+                         g_reg.service_route, g_reg.sec_verify,
+                         JOAN_RTP_PORT, &dlg);
+    if (n <= 0) {
+        fail("build invite", 42);
+        return -42;
+    }
+    klog(LOG_INFO, "invite built (%d bytes) -> %.40s", n, dest);
+
+    int s = sip_socket_bind(g_reg.port_c);
+    if (s < 0) {
+        fail("invite bind", 43);
+        return -43;
+    }
+    if (sip_sendto(s, g_reg.pcscf_port_s, msg, (size_t)n) < 0) {
+        close(s);
+        fail("invite send", 44);
+        return -44;
+    }
+
+    /* Provisional responses (100/180/183) precede the answer, so keep
+     * reading until a final one arrives or the call setup timer runs out. */
+    char rx[4096];
+    char to_tag[64] = "";
+    int rc = -45;
+    long deadline = now_ms() + 30000;
+    while (now_ms() < deadline) {
+        int remain = (int)(deadline - now_ms());
+        int r = sip_wait_recv(s, g_port_s_fd, rx, sizeof(rx),
+                              remain > 0 ? remain : 1);
+        if (r <= 0)
+            break;
+        sip_response_t resp;
+        if (parse_response(rx, (size_t)r, &resp) != 0)
+            continue;
+        klog(LOG_INFO, "invite reply: %d %s", resp.status, resp.reason);
+        if (resp.status >= 100 && resp.status < 200) {
+            extract_to_tag(rx, to_tag, sizeof(to_tag));
+            continue;          /* ringing / session progress */
+        }
+        if (resp.status >= 200 && resp.status < 300) {
+            extract_to_tag(rx, to_tag, sizeof(to_tag));
+            char ack[SIP_MAX_MSG];
+            int an = build_ack(ack, sizeof(ack), &id, dest,
+                               g_reg.service_route, g_reg.sec_verify,
+                               &dlg, to_tag);
+            if (an > 0 && sip_sendto(s, g_reg.pcscf_port_s, ack,
+                                     (size_t)an) == 0)
+                klog(LOG_INFO, "call answered, ACK sent");
+            else
+                klog(LOG_WARN, "call answered but ACK failed");
+            rc = 0;
+            break;
+        }
+        klog(LOG_ERR, "call rejected %d", resp.status);
+        snprintf(g_err, sizeof(g_err), "invite status %d", resp.status);
+        rc = -46;
+        break;
+    }
+    if (rc == -45)
+        fail("invite no final reply", 45);
+    close(s);
+    return rc;
 }

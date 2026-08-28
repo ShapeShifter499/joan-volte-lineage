@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static void mk_branch(char *dst, size_t n)
 {
@@ -325,4 +326,153 @@ int parse_response(const char *msg, size_t len, sip_response_t *r)
         r->expires = atoi(exp);
     header_value(msg, "Date", r->date_hdr, sizeof(r->date_hdr));
     return 0;
+}
+
+
+/* ---- Call setup -------------------------------------------------------- */
+
+/* SDP offer.
+ *
+ * Codec order is preference order, and AMR-WB is listed first: it is
+ * 16 kHz wideband where PCMU is 8 kHz narrowband, so on a network that
+ * accepts it the call sounds materially better. AMR narrowband follows as
+ * the usual IMS fallback, then PCMU, then DTMF. The pmOS run that proved
+ * this path only ever negotiated PCMU because it offered PCMU first.
+ */
+static int sdp_offer(char *out, size_t outlen, const char *ip, int rtp_port)
+{
+    appender_t a = { out, outlen };
+    app(&a, "v=0\r\n");
+    app(&a, "o=- %ld 1 IN IP6 %s\r\n", (long)time(NULL), ip);
+    app(&a, "s=-\r\n");
+    app(&a, "c=IN IP6 %s\r\n", ip);
+    app(&a, "t=0 0\r\n");
+    app(&a, "m=audio %d RTP/AVP 96 97 0 101\r\n", rtp_port);
+    app(&a, "a=rtpmap:96 AMR-WB/16000/1\r\n");
+    app(&a, "a=fmtp:96 octet-align=0;mode-change-capability=2\r\n");
+    app(&a, "a=rtpmap:97 AMR/8000/1\r\n");
+    app(&a, "a=fmtp:97 octet-align=0\r\n");
+    app(&a, "a=rtpmap:0 PCMU/8000\r\n");
+    app(&a, "a=rtpmap:101 telephone-event/8000\r\n");
+    app(&a, "a=fmtp:101 0-15\r\n");
+    app(&a, "a=ptime:20\r\n");
+    app(&a, "a=maxptime:240\r\n");
+    app(&a, "a=sendrecv\r\n");
+    return (int)(outlen - a.left);
+}
+
+static void invite_contact_user(const char *aor, char *dst, size_t n)
+{
+    const char *cu = aor;
+    if (!strncmp(cu, "sip:", 4)) cu += 4;
+    if (!strncmp(cu, "tel:", 4)) cu += 4;
+    const char *at = strchr(cu, '@');
+    size_t ul = at ? (size_t)(at - cu) : strlen(cu);
+    if (ul >= n) ul = n - 1;
+    memcpy(dst, cu, ul);
+    dst[ul] = '\0';
+}
+
+int build_invite(char *out, size_t outlen,
+                 const sip_identity_t *id,
+                 const char *dest,
+                 const char *route,
+                 const char *sec_verify,
+                 int rtp_port,
+                 sip_dialog_t *dlg)
+{
+    const char *public_id = id->impu[0] ? id->impu : id->impi;
+    char aor[300];
+    if (!strncmp(public_id, "tel:", 4) || !strncmp(public_id, "sip:", 4))
+        snprintf(aor, sizeof(aor), "%s", public_id);
+    else
+        snprintf(aor, sizeof(aor), "sip:%s", public_id);
+
+    char host[80];
+    bracket(id->local_ip, host, sizeof(host));
+
+    mk_branch(dlg->branch, sizeof(dlg->branch));
+    mk_call_id(dlg->call_id, sizeof(dlg->call_id));
+    mk_tag(dlg->from_tag, sizeof(dlg->from_tag));
+    dlg->cseq = 1;
+
+    char sdp[1024];
+    int slen = sdp_offer(sdp, sizeof(sdp), id->local_ip, rtp_port);
+    if (slen <= 0)
+        return -1;
+
+    char contact_user[128];
+    invite_contact_user(aor, contact_user, sizeof(contact_user));
+
+    appender_t a = { out, outlen };
+    app(&a, "INVITE %s SIP/2.0\r\n", dest);
+    app(&a, "Via: SIP/2.0/UDP %s:%d;branch=%s;rport\r\n",
+        host, id->local_port, dlg->branch);
+    app(&a, "Max-Forwards: 70\r\n");
+    if (route && route[0])
+        app(&a, "Route: %s\r\n", route);
+    app(&a, "From: <%s>;tag=%s\r\n", aor, dlg->from_tag);
+    app(&a, "To: <%s>\r\n", dest);
+    app(&a, "Call-ID: %s\r\n", dlg->call_id);
+    app(&a, "CSeq: %d INVITE\r\n", dlg->cseq);
+    app(&a, "Contact: <sip:%s@%s:%d>"
+            ";+g.3gpp.icsi-ref=\"urn%%3Aurn-7%%3A3gpp-service.ims.icsi.mmtel\""
+            ";audio\r\n",
+        contact_user, host, id->local_port);
+    app(&a, "P-Preferred-Identity: <%s>\r\n", aor);
+    app(&a, "P-Access-Network-Info: 3GPP-E-UTRAN-FDD\r\n");
+    app(&a, "Allow: INVITE, ACK, CANCEL, BYE, UPDATE, PRACK, INFO, OPTIONS\r\n");
+    app(&a, "Supported: 100rel, replaces, timer\r\n");
+    app(&a, "Require: sec-agree\r\n");
+    app(&a, "Proxy-Require: sec-agree\r\n");
+    if (sec_verify && sec_verify[0])
+        app(&a, "Security-Verify: %s\r\n", sec_verify);
+    app(&a, "Accept-Contact: *;+g.3gpp.icsi-ref="
+            "\"urn%%3Aurn-7%%3A3gpp-service.ims.icsi.mmtel\"\r\n");
+    app(&a, "Content-Type: application/sdp\r\n");
+    app(&a, "Content-Length: %d\r\n", slen);
+    app(&a, "\r\n");
+    app(&a, "%s", sdp);
+    return (int)(outlen - a.left);
+}
+
+int build_ack(char *out, size_t outlen,
+              const sip_identity_t *id,
+              const char *dest,
+              const char *route,
+              const char *sec_verify,
+              const sip_dialog_t *dlg,
+              const char *to_tag)
+{
+    const char *public_id = id->impu[0] ? id->impu : id->impi;
+    char aor[300];
+    if (!strncmp(public_id, "tel:", 4) || !strncmp(public_id, "sip:", 4))
+        snprintf(aor, sizeof(aor), "%s", public_id);
+    else
+        snprintf(aor, sizeof(aor), "sip:%s", public_id);
+
+    char host[80];
+    bracket(id->local_ip, host, sizeof(host));
+    char branch[40];
+    mk_branch(branch, sizeof(branch));
+
+    appender_t a = { out, outlen };
+    app(&a, "ACK %s SIP/2.0\r\n", dest);
+    app(&a, "Via: SIP/2.0/UDP %s:%d;branch=%s;rport\r\n",
+        host, id->local_port, branch);
+    app(&a, "Max-Forwards: 70\r\n");
+    if (route && route[0])
+        app(&a, "Route: %s\r\n", route);
+    app(&a, "From: <%s>;tag=%s\r\n", aor, dlg->from_tag);
+    if (to_tag && to_tag[0])
+        app(&a, "To: <%s>;tag=%s\r\n", dest, to_tag);
+    else
+        app(&a, "To: <%s>\r\n", dest);
+    app(&a, "Call-ID: %s\r\n", dlg->call_id);
+    app(&a, "CSeq: %d ACK\r\n", dlg->cseq);
+    if (sec_verify && sec_verify[0])
+        app(&a, "Security-Verify: %s\r\n", sec_verify);
+    app(&a, "Content-Length: 0\r\n");
+    app(&a, "\r\n");
+    return (int)(outlen - a.left);
 }

@@ -182,6 +182,18 @@ static void handle_line(int fd, char *line)
         return;
     }
 
+    if (!strcmp(verb, "CALL") && nf == 2) {
+        int rc = ua_call_invite(fields[1]);
+        if (rc == 0) {
+            respond(fd, "OK", "call answered");
+        } else {
+            char e[160];
+            snprintf(e, sizeof(e), "call rc=%d %.100s", rc, ua_errstr());
+            respond(fd, "ERR", e);
+        }
+        return;
+    }
+
     respond(fd, "ERR", "unknown verb or arity");
 }
 

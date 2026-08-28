@@ -78,6 +78,34 @@ int build_register(
 
 int parse_response(const char *msg, size_t len, sip_response_t *r);
 
+/* Dialog identifiers minted by build_invite(), needed for the ACK. */
+typedef struct {
+    char call_id[64];
+    char from_tag[16];
+    char branch[40];
+    int  cseq;
+} sip_dialog_t;
+
+/* MO INVITE with an SDP offer. `route` is the Service-Route learned at
+ * registration (may be empty), `sec_verify` the Security-Server value we
+ * must echo. Returns length or -1. */
+int build_invite(char *out, size_t outlen,
+                 const sip_identity_t *id,
+                 const char *dest,
+                 const char *route,
+                 const char *sec_verify,
+                 int rtp_port,
+                 sip_dialog_t *dlg);
+
+/* ACK for a 2xx, routed to the same target. */
+int build_ack(char *out, size_t outlen,
+              const sip_identity_t *id,
+              const char *dest,
+              const char *route,
+              const char *sec_verify,
+              const sip_dialog_t *dlg,
+              const char *to_tag);
+
 /* Digest response per RFC 3310 (AKAv1-MD5 password=RES, res_len exact). */
 int aka_digest_response_hex(
         const char *username,

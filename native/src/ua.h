@@ -34,6 +34,11 @@ int ua_register_stage1(char *nonce_out, size_t nonce_len);
 /* Stage 2. res is raw AKA RES (8 or 16 bytes; res_len is exact), ck/ik
  * are raw 16-byte values from ISIM AKA.
  * Returns 0 iff final REGISTER got 2xx. */
+/* Place an MO call to `dest` (a sip: or tel: URI) using the registration
+ * context learned from the 200 OK. Returns 0 once the call is answered
+ * and ACKed. */
+int ua_call_invite(const char *dest);
+
 int ua_register_stage2(const uint8_t *res, size_t res_len,
                        const uint8_t *ck, const uint8_t *ik);
 
