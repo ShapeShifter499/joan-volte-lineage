@@ -1,7 +1,6 @@
 package org.joan.ims;
 
 import android.content.Context;
-import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioRecord;
@@ -14,15 +13,25 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 
 /**
- * Bridge 8 kHz PCMU between AudioFlinger and the native RTP UA.
- * CAF leaves media in the modem; we are AP SIP, so Dialer ACTIVE still
- * needs this path for earpiece/mic on a working LOS kernel.
+ * 8 kHz PCMU between AudioFlinger and the native RTP UA.
+ *
+ * IMS calls put Telecom in MODE_IN_CALL, which owns the telephony
+ * audio HAL. CAF never opens AudioRecord because the modem has the
+ * path. We are AP SIP, so we inject on STREAM_VOICE_CALL / MIC
+ * (VOICE_COMMUNICATION races Telecom and threw IllegalStateException).
  */
 final class JoanMedia {
     private static final String TAG = "JoanIms";
     private static final int SAMPLE_HZ = 8000;
     private static final int PTIME_SAMPLES = 160;
     private static final int NATIVE_PORT = 15091;
+
+    private static final int[] SOURCES = {
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            MediaRecorder.AudioSource.CAMCORDER,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+    };
 
     private static volatile boolean sRun;
     private static Thread sThread;
@@ -44,6 +53,11 @@ final class JoanMedia {
         sThread = null;
         if (t != null) {
             t.interrupt();
+            try {
+                t.join(500);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
         }
         JoanTrace.note("media stop");
     }
@@ -53,32 +67,29 @@ final class JoanMedia {
         AudioTrack trk = null;
         DatagramSocket sock = null;
         try {
-            AudioManager am = app.getSystemService(AudioManager.class);
-            if (am != null) {
-                am.setMode(AudioManager.MODE_IN_COMMUNICATION);
-            }
             int minIn = AudioRecord.getMinBufferSize(SAMPLE_HZ,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
             int minOut = AudioTrack.getMinBufferSize(SAMPLE_HZ,
                     AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
-            rec = new AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-                    SAMPLE_HZ, AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT, Math.max(minIn, PTIME_SAMPLES * 4));
-            trk = new AudioTrack.Builder()
-                    .setAudioAttributes(new AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                            .build())
-                    .setAudioFormat(new AudioFormat.Builder()
-                            .setSampleRate(SAMPLE_HZ)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .build())
-                    .setBufferSizeInBytes(Math.max(minOut, PTIME_SAMPLES * 4))
-                    .setTransferMode(AudioTrack.MODE_STREAM)
-                    .build();
+            int inBuf = Math.max(minIn, PTIME_SAMPLES * 8);
+            int outBuf = Math.max(minOut, PTIME_SAMPLES * 8);
+
+            rec = openRecord(inBuf);
+            if (rec == null) {
+                JoanTrace.note("media no AudioRecord");
+                return;
+            }
+            trk = new AudioTrack(AudioManager.STREAM_VOICE_CALL, SAMPLE_HZ,
+                    AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
+                    outBuf, AudioTrack.MODE_STREAM);
+            if (trk.getState() != AudioTrack.STATE_INITIALIZED) {
+                JoanTrace.note("media AudioTrack uninitialized");
+                return;
+            }
             rec.startRecording();
             trk.play();
+            JoanTrace.note("media rolling src=" + rec.getAudioSource());
+
             sock = new DatagramSocket();
             sock.setSoTimeout(20);
             InetAddress loop = InetAddress.getByName("127.0.0.1");
@@ -90,10 +101,11 @@ final class JoanMedia {
             while (sRun) {
                 int n = rec.read(pcm, 0, PTIME_SAMPLES);
                 if (n > 0) {
-                    for (int i = 0; i < n && i < PTIME_SAMPLES; i++) {
+                    int m = Math.min(n, PTIME_SAMPLES);
+                    for (int i = 0; i < m; i++) {
                         ulaw[i] = linearToUlaw(pcm[i]);
                     }
-                    out.setLength(Math.min(n, PTIME_SAMPLES));
+                    out.setLength(m);
                     sock.send(out);
                 }
                 try {
@@ -111,23 +123,39 @@ final class JoanMedia {
                 }
             }
         } catch (Throwable t) {
-            Log.w(TAG, "media loop " + t.getClass().getSimpleName() + ":"
-                    + String.valueOf(t.getMessage()));
-            JoanTrace.note("media fail " + t.getClass().getSimpleName());
+            String msg = t.getMessage();
+            JoanTrace.note("media fail " + t.getClass().getSimpleName()
+                    + (msg == null ? "" : (":" + msg)));
+            Log.w(TAG, "media loop", t);
         } finally {
             try { if (rec != null) rec.release(); } catch (Throwable ignored) {}
             try { if (trk != null) trk.release(); } catch (Throwable ignored) {}
             try { if (sock != null) sock.close(); } catch (Throwable ignored) {}
-            try {
-                AudioManager am = app.getSystemService(AudioManager.class);
-                if (am != null) {
-                    am.setMode(AudioManager.MODE_NORMAL);
-                }
-            } catch (Throwable ignored) {}
         }
     }
 
-    /* ITU-T G.711 µ-law, same as native/src/rtp.c */
+    private static AudioRecord openRecord(int inBuf) {
+        for (int src : SOURCES) {
+            AudioRecord rec = null;
+            try {
+                rec = new AudioRecord(src, SAMPLE_HZ, AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT, inBuf);
+                if (rec.getState() == AudioRecord.STATE_INITIALIZED) {
+                    JoanTrace.note("media record ok src=" + src);
+                    return rec;
+                }
+                JoanTrace.note("media record uninit src=" + src);
+            } catch (Throwable t) {
+                JoanTrace.note("media record src=" + src + " "
+                        + t.getClass().getSimpleName());
+            }
+            if (rec != null) {
+                try { rec.release(); } catch (Throwable ignored) {}
+            }
+        }
+        return null;
+    }
+
     private static byte linearToUlaw(short pcm) {
         final int BIAS = 0x84;
         final int CLIP = 32635;

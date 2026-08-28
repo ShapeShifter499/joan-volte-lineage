@@ -79,8 +79,8 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             String resp = JoanCtl.txn("CALL " + uri);
             if (resp != null && resp.startsWith("OK")) {
                 state = STATE_ESTABLISHED;
-                notifyStarted(used);
                 JoanMedia.start(this.app);
+                notifyStarted(used);
                 watchRemoteHangup();
             } else {
                 failStart(resp == null ? "ctl failed" : "call failed");
