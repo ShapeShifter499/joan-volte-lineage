@@ -46,14 +46,9 @@ static uint8_t linear_to_ulaw(int16_t pcm)
     return (uint8_t)(~(sign | (exp << 4) | mantissa));
 }
 
-/* ~440 Hz square wave at 8 kHz: 9 samples per half-period. Audible on
- * a voicemail without pulling libm into the static binary. */
-static uint8_t tone_ulaw(void)
-{
-    int half = (int)((g_phase / 9) & 1);
-    g_phase++;
-    return linear_to_ulaw(half ? 8000 : -8000);
-}
+/* CAF/AOSP ImsCallSession does not inject a test tone. In-call audio
+ * is the HAL after STARTED. A 440 Hz square wave made the far end hang
+ * up while Dialer was still DIALING. Send µ-law idle instead. */
 
 static int rtp_bind(const char *local_ip, const char *iface, int port)
 {
@@ -195,7 +190,7 @@ static void rtp_send_one(void)
     pkt[10] = (unsigned char)(g_ssrc >> 8);
     pkt[11] = (unsigned char)g_ssrc;
     for (int i = 0; i < PCMU_SAMPLES; i++)
-        pkt[RTP_HDR + i] = tone_ulaw();
+        pkt[RTP_HDR + i] = linear_to_ulaw(0);
     ssize_t w = sendto(g_fd, pkt, sizeof(pkt), 0,
                        (struct sockaddr *)&g_dst, g_dlen);
     if (w == (ssize_t)sizeof(pkt)) {

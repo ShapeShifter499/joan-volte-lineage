@@ -8,8 +8,15 @@ import android.telephony.ims.stub.ImsCallSessionImplBase;
 import android.util.Log;
 
 /**
- * One IMS call session. MO: Dialer calls start() which issues CALL on ctl.
- * MT still auto-answers in the native UA until a reverse event channel exists.
+ * One IMS call session. Callback sequence matches CAF
+ * {@code org.codeaurora.ims.ImsCallSessionImpl}:
+ *
+ *   DIALING  -> callSessionProgressing(empty ImsStreamMediaProfile)
+ *   ACTIVE   -> callSessionStarted(profile)
+ *   END      -> callSessionTerminated
+ *
+ * Audio is not injected here. CAF leaves media to the modem; AOSP
+ * ImsService docs leave in-call audio to the HAL after STARTED.
  */
 public class JoanCallSession extends ImsCallSessionImplBase {
     private static final String TAG = "JoanIms";
@@ -17,6 +24,7 @@ public class JoanCallSession extends ImsCallSessionImplBase {
     private volatile ImsCallSessionListener listener;
     private volatile int state = STATE_IDLE;
     private final String callId;
+    private volatile boolean watchHangup;
 
     JoanCallSession(ImsCallProfile profile) {
         this.profile = profile;
@@ -25,7 +33,9 @@ public class JoanCallSession extends ImsCallSessionImplBase {
 
     @Override
     public void setListener(ImsCallSessionListener l) {
+        super.setListener(l);
         listener = l;
+        Log.i(TAG, "setListener " + (l == null ? "null" : "ok"));
     }
 
     @Override
@@ -47,19 +57,15 @@ public class JoanCallSession extends ImsCallSessionImplBase {
     public void start(String callee, ImsCallProfile p) {
         Log.i(TAG, "call session start");
         state = STATE_ESTABLISHING;
-        ImsCallSessionListener l = listener;
-        if (l != null) {
-            try {
-                l.callSessionInitiating(p != null ? p : profile);
-            } catch (Throwable t) {
-                Log.w(TAG, "initiating notify " + t.getClass().getSimpleName());
-            }
-        }
-        final String uri;
+        ImsCallProfile used = p != null ? p : profile;
+        notifyInitiating(used);
+        /* CAF fires Progressing as soon as MO is DIALING, before 200. */
+        notifyProgressing();
         if (callee == null || callee.isEmpty()) {
             failStart("empty callee");
             return;
         }
+        final String uri;
         if (callee.startsWith("sip:") || callee.startsWith("tel:")) {
             uri = callee;
         } else {
@@ -67,17 +73,10 @@ public class JoanCallSession extends ImsCallSessionImplBase {
         }
         new Thread(() -> {
             String resp = JoanCtl.txn("CALL " + uri);
-            ImsCallSessionListener cb = listener;
             if (resp != null && resp.startsWith("OK")) {
                 state = STATE_ESTABLISHED;
-                if (cb != null) {
-                    try {
-                        cb.callSessionStarted(p != null ? p : profile);
-                    } catch (Throwable t) {
-                        Log.w(TAG, "started notify "
-                                + t.getClass().getSimpleName());
-                    }
-                }
+                notifyStarted(used);
+                watchRemoteHangup();
             } else {
                 failStart(resp == null ? "ctl failed" : "call failed");
             }
@@ -86,42 +85,116 @@ public class JoanCallSession extends ImsCallSessionImplBase {
 
     @Override
     public void accept(int callType, ImsStreamMediaProfile media) {
-        Log.i(TAG, "call session accept (native auto-answers MT)");
+        Log.i(TAG, "call session accept");
         state = STATE_ESTABLISHED;
+        notifyStarted(profile);
     }
 
     @Override
     public void reject(int reason) {
-        JoanCtl.txn("HANGUP");
+        hangupAsync();
         state = STATE_TERMINATED;
+        notifyTerminated(reason);
     }
 
     @Override
     public void terminate(int reason) {
-        JoanCtl.txn("HANGUP");
+        hangupAsync();
         state = STATE_TERMINATED;
-        ImsCallSessionListener l = listener;
-        if (l != null) {
+        notifyTerminated(reason);
+    }
+
+    private void hangupAsync() {
+        watchHangup = false;
+        new Thread(() -> JoanCtl.txn("HANGUP"), "joan-ims-hangup").start();
+    }
+
+    private void watchRemoteHangup() {
+        watchHangup = true;
+        new Thread(() -> {
             try {
-                l.callSessionTerminated(new ImsReasonInfo(
-                        ImsReasonInfo.CODE_USER_TERMINATED, reason, "hangup"));
-            } catch (Throwable t) {
-                Log.w(TAG, "term notify " + t.getClass().getSimpleName());
+                for (int i = 0; i < 600 && watchHangup; i++) {
+                    Thread.sleep(1000);
+                    if (!watchHangup) {
+                        return;
+                    }
+                    String st = JoanCtl.txn("STATUS");
+                    if (st == null || !st.contains("CALL=1")) {
+                        state = STATE_TERMINATED;
+                        notifyTerminated(ImsReasonInfo.CODE_USER_TERMINATED_BY_REMOTE);
+                        return;
+                    }
+                }
+            } catch (InterruptedException ignored) {
+                // stop watching
             }
+        }, "joan-ims-watch").start();
+    }
+
+    private void notifyInitiating(ImsCallProfile p) {
+        ImsCallSessionListener l = listener;
+        if (l == null) {
+            return;
+        }
+        try {
+            l.callSessionInitiating(p);
+        } catch (Throwable t) {
+            Log.w(TAG, "initiating notify " + t.getClass().getSimpleName());
+        }
+    }
+
+    private void notifyProgressing() {
+        ImsCallSessionListener l = listener;
+        if (l == null) {
+            Log.w(TAG, "progressing skipped: no listener");
+            return;
+        }
+        try {
+            l.callSessionProgressing(new ImsStreamMediaProfile());
+        } catch (Throwable t) {
+            Log.w(TAG, "progressing notify " + t.getClass().getSimpleName());
+        }
+    }
+
+    private void notifyStarted(ImsCallProfile p) {
+        ImsCallSessionListener l = listener;
+        if (l == null) {
+            Log.w(TAG, "started skipped: no listener");
+            return;
+        }
+        try {
+            l.callSessionStarted(p);
+        } catch (Throwable t) {
+            Log.w(TAG, "started notify " + t.getClass().getSimpleName());
+        }
+    }
+
+    private void notifyTerminated(int reason) {
+        watchHangup = false;
+        ImsCallSessionListener l = listener;
+        if (l == null) {
+            return;
+        }
+        try {
+            l.callSessionTerminated(new ImsReasonInfo(reason, 0, "hangup"));
+        } catch (Throwable t) {
+            Log.w(TAG, "term notify " + t.getClass().getSimpleName());
         }
     }
 
     private void failStart(String why) {
         state = STATE_TERMINATED;
+        watchHangup = false;
         Log.w(TAG, "call start failed: " + why);
         ImsCallSessionListener l = listener;
-        if (l != null) {
-            try {
-                l.callSessionStartFailed(new ImsReasonInfo(
-                        ImsReasonInfo.CODE_UNSPECIFIED, -1, why));
-            } catch (Throwable t) {
-                Log.w(TAG, "fail notify " + t.getClass().getSimpleName());
-            }
+        if (l == null) {
+            return;
+        }
+        try {
+            l.callSessionStartFailed(new ImsReasonInfo(
+                    ImsReasonInfo.CODE_UNSPECIFIED, -1, why));
+        } catch (Throwable t) {
+            Log.w(TAG, "fail notify " + t.getClass().getSimpleName());
         }
     }
 }

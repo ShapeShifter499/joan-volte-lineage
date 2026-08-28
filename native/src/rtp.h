@@ -21,7 +21,8 @@ int rtp_active(void);
 /* Milliseconds until the next 20 ms frame, or -1 if idle. */
 int rtp_poll_ms(void);
 
-/* Send due frames; drain inbound RTP (counted, not rendered). */
+/* Send due frames (µ-law silence). Drain inbound RTP (counted, not
+ * rendered — in-call audio is Dialer/AudioFlinger after STARTED). */
 void rtp_tick(void);
 
 /* fd to include in select(), or -1. */

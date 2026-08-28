@@ -19,6 +19,8 @@ public class ImsCallSessionImplBase {
 
     public void setListener(ImsCallSessionListener listener) {}
 
+    public void setDefaultExecutor(java.util.concurrent.Executor executor) {}
+
     public String getCallId() { return null; }
 
     public ImsCallProfile getCallProfile() { return null; }

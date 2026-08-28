@@ -86,8 +86,9 @@ static void handle_line(int fd, char *line)
         char st[CTL_MAX_LINE];
         char sink[160];
         snprintf(st, sizeof(st),
-                 "STATE=%d PCSCF=%.60s ERROR=%.100s LOG=%.120s",
+                 "STATE=%d CALL=%d PCSCF=%.60s ERROR=%.100s LOG=%.120s",
                  (int)ua_state(),
+                 ua_call_is_active(),
                  g_cfg->id.pcscf[0] ? g_cfg->id.pcscf : "-",
                  ua_errstr(),
                  klog_sink_status(sink, sizeof(sink)));

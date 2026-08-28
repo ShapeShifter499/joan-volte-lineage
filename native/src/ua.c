@@ -888,6 +888,11 @@ int ua_call_invite(const char *dest)
 }
 
 
+int ua_call_is_active(void)
+{
+    return g_call.active ? 1 : 0;
+}
+
 int ua_call_hangup(void)
 {
     if (!g_call.active) {

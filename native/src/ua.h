@@ -43,6 +43,7 @@ int ua_call_invite(const char *dest);
 /* End the call established by ua_call_invite(). Returns 0 if a BYE was
  * sent, -1 if no call is up. */
 int ua_call_hangup(void);
+int ua_call_is_active(void);
 
 /* The socket inbound requests arrive on (the protected server port), or -1
  * if we are not registered. The ctl loop selects on it. */
