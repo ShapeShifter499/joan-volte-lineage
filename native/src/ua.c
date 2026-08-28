@@ -17,6 +17,7 @@
 #include "xfrm.h"
 
 static ua_config_t *g_cfg;
+static int g_port_s_fd = -1;
 static ua_state_t g_state;
 static char g_err[160];
 
@@ -304,6 +305,23 @@ int ua_register_stage2(const uint8_t *res, size_t res_len,
                           &ue_sec, &pcscf_sec, ck, ik, &xs);
     if (xr != 0)
         klog(LOG_WARN, "xfrm install partial rc=%d (continuing)", xr);
+
+    /* RFC 3329 / TS 33.203: the UE holds BOTH protected ports open --
+     * port-c to send from, port-s to receive requests on. We only ever
+     * bound port-c, so the UE was never reachable on the server port the
+     * Security-Client advertised. Hold it for the life of the process. */
+    if (g_port_s_fd < 0) {
+        g_port_s_fd = sip_socket_bind((int)ue_sec.port_s);
+        if (g_port_s_fd < 0)
+            klog(LOG_WARN, "could not hold protected server port %u",
+                 ue_sec.port_s);
+        else
+            klog(LOG_INFO, "holding protected server port %u", ue_sec.port_s);
+    }
+
+    /* Give the P-CSCF a moment to install its own SAs before the first
+     * protected packet arrives. */
+    usleep(300 * 1000);
 
     /* Protected REGISTER.
      *
