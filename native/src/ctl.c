@@ -12,7 +12,10 @@
 #define _GNU_SOURCE
 #include "ctl.h"
 
+#include <arpa/inet.h>
 #include <errno.h>
+#include <netinet/in.h>
+#include <sys/select.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -217,16 +220,34 @@ static int listen_unix_abstract(void)
  * redirect where SIP is sent, so the peer must be identified before its
  * line is executed.
  *
- * An earlier revision added a 127.0.0.1 listener, which any app holding
- * INTERNET could reach. Authenticating that peer required resolving its
- * uid from /proc/net/tcp, and that file carries the proc_net_tcp_udp
- * label: opening it from domain netmgrd returns EACCES (measured on
- * joan). An unauthenticatable control channel that injects key material
- * is not worth keeping, so the TCP listener is gone.
+ * There are two transports, and the split is forced by SELinux:
  *
- * The unix socket does not have that problem: SO_PEERCRED reports the
- * peer's uid from the kernel with no filesystem access at all.
+ *   unix (@joan_ims_ctl)  Authenticated: SO_PEERCRED reports the peer uid
+ *                         from the kernel with no filesystem access. This
+ *                         is the design we want. It is currently NOT
+ *                         reachable from the IMS app -- connecting from
+ *                         priv_app to this daemon's netmgrd domain needs
+ *                         an allow for unix_stream_socket connectto, and
+ *                         joan cannot load a policy append (see
+ *                         root/system/etc/init/joan-ims.rc). Measured: the
+ *                         app gets EACCES on connect.
+ *
+ *   tcp (127.0.0.1)       UNAUTHENTICATED, reachable by any app holding
+ *                         INTERNET. TCP has no connectto check, which is
+ *                         the only reason the app can reach us at all.
+ *                         Identifying the peer would mean reading
+ *                         /proc/net/tcp, which is EACCES from netmgrd
+ *                         (proc_net_tcp_udp). Measured, not assumed.
+ *
+ * The loopback listener is therefore BRING-UP ONLY, kept because it is
+ * presently the only working path. It must not ship enabled: an in-ROM
+ * install -- the upstream target -- can carry the sepolicy that makes the
+ * unix socket reachable, at which point JOAN_IMS_BRINGUP_TCP_CTL is
+ * compiled out and only the authenticated transport remains.
  */
+#ifndef JOAN_IMS_BRINGUP_TCP_CTL
+#define JOAN_IMS_BRINGUP_TCP_CTL 1
+#endif
 #define CTL_ALLOWUID_PATH "/data/vendor/netmgr/joan-ims.allowuid"
 
 /* Allowlist is uid 0 plus whatever CTL_ALLOWUID_PATH lists, one uid per
@@ -272,6 +293,38 @@ static int ctl_authenticate_unix(int c)
     return 0;
 }
 
+#if JOAN_IMS_BRINGUP_TCP_CTL
+static int listen_tcp_loopback(void)
+{
+    int ls = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (ls < 0) {
+        klog(LOG_ERR, "ctl tcp socket failed errno=%d", errno);
+        return -1;
+    }
+    int one = 1;
+    setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(CTL_TCP_PORT);
+    sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(ls, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+        klog(LOG_ERR, "ctl tcp bind 127.0.0.1:%d failed errno=%d",
+             CTL_TCP_PORT, errno);
+        close(ls);
+        return -1;
+    }
+    if (listen(ls, CTL_BACKLOG) < 0) {
+        klog(LOG_ERR, "ctl tcp listen failed errno=%d", errno);
+        close(ls);
+        return -1;
+    }
+    klog(LOG_WARN, "ctl listening tcp 127.0.0.1:%d "
+                   "(BRING-UP ONLY, peer NOT authenticated)", CTL_TCP_PORT);
+    return ls;
+}
+#endif
+
 static void handle_client(int c)
 {
     char buf[CTL_MAX_LINE + 1];
@@ -288,22 +341,46 @@ static void handle_client(int c)
 
 int ctl_serve(void)
 {
-    int ls = listen_unix_abstract();
-    if (ls < 0)
+    int unix_ls = listen_unix_abstract();
+    int tcp_ls = -1;
+#if JOAN_IMS_BRINGUP_TCP_CTL
+    tcp_ls = listen_tcp_loopback();
+#endif
+    if (unix_ls < 0 && tcp_ls < 0)
         return -1;
 
     for (;;) {
-        int c = accept4(ls, NULL, NULL, SOCK_CLOEXEC);
-        if (c < 0) {
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        int maxfd = -1;
+        if (unix_ls >= 0) {
+            FD_SET(unix_ls, &rfds);
+            if (unix_ls > maxfd) maxfd = unix_ls;
+        }
+        if (tcp_ls >= 0) {
+            FD_SET(tcp_ls, &rfds);
+            if (tcp_ls > maxfd) maxfd = tcp_ls;
+        }
+        if (select(maxfd + 1, &rfds, NULL, NULL, NULL) < 0) {
             if (errno == EINTR)
                 continue;
             sleep(1);
             continue;
         }
-        if (ctl_authenticate_unix(c) == 0)
-            handle_client(c);
-        else
-            close(c);
+        if (unix_ls >= 0 && FD_ISSET(unix_ls, &rfds)) {
+            int c = accept4(unix_ls, NULL, NULL, SOCK_CLOEXEC);
+            if (c >= 0) {
+                if (ctl_authenticate_unix(c) == 0)
+                    handle_client(c);
+                else
+                    close(c);
+            }
+        }
+        if (tcp_ls >= 0 && FD_ISSET(tcp_ls, &rfds)) {
+            int c = accept4(tcp_ls, NULL, NULL, SOCK_CLOEXEC);
+            if (c >= 0)
+                handle_client(c);   /* unauthenticated; see note above */
+        }
     }
     return 0;
 }

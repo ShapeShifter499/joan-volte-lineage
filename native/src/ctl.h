@@ -7,6 +7,7 @@
 #include "config.h"
 
 #define CTL_SOCK_ABSTRACT_NAME "joan_ims_ctl"
+#define CTL_TCP_PORT 15090
 #define CTL_BACKLOG 2
 #define CTL_MAX_LINE 2048
 

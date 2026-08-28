@@ -3,6 +3,9 @@
     package="org.joan.ims"
     android:versionCode="2"
     android:versionName="0.2">
+    <!-- pm install rejects an APK with no uses-sdk ("found 0");
+         the zip sideloads into priv-app, which does not check. -->
+    <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="34" />
     <uses-permission android:name="android.permission.BIND_IMS_SERVICE" />
     <uses-permission android:name="android.permission.MODIFY_PHONE_STATE" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
