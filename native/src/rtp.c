@@ -80,10 +80,18 @@ static void media_drain_uplink(void)
 
 static void media_push_downlink(const unsigned char *ulaw, int n)
 {
-    if (g_media_fd < 0 || !g_have_media_peer || n <= 0)
+    if (g_media_fd < 0 || n <= 0)
         return;
-    sendto(g_media_fd, ulaw, (size_t)n, 0,
-           (const struct sockaddr *)&g_media_peer, sizeof(g_media_peer));
+    if (!g_have_media_peer) {
+        if ((g_recv % 50) == 1)
+            klog(LOG_WARN, "rtp dl no java peer yet recv=%u", g_recv);
+        return;
+    }
+    ssize_t w = sendto(g_media_fd, ulaw, (size_t)n, 0,
+                       (const struct sockaddr *)&g_media_peer,
+                       sizeof(g_media_peer));
+    if (w < 0 && (g_recv < 5 || (g_recv % 50) == 0))
+        klog(LOG_WARN, "rtp dl sendto errno=%d recv=%u", errno, g_recv);
 }
 
 /* ITU-T G.711 µ-law. */
@@ -285,8 +293,13 @@ static void rtp_drain(void)
         if (r <= 0)
             break;
         g_recv++;
-        if (r > RTP_HDR)
-            media_push_downlink(buf + RTP_HDR, (int)r - RTP_HDR);
+        int hdr = 12 + ((buf[0] & 0x0f) * 4);
+        if ((buf[0] & 0x10) && r >= hdr + 4) {
+            int ext = (buf[hdr + 2] << 8) | buf[hdr + 3];
+            hdr += 4 + ext * 4;
+        }
+        if (hdr < r)
+            media_push_downlink(buf + hdr, (int)r - hdr);
     }
 }
 

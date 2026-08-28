@@ -1,6 +1,8 @@
 package org.joan.ims;
 
 import android.content.Context;
+import android.media.AudioAttributes;
+import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioRecord;
@@ -79,14 +81,27 @@ final class JoanMedia {
                 JoanTrace.note("media no AudioRecord");
                 return;
             }
-            trk = new AudioTrack(AudioManager.STREAM_VOICE_CALL, SAMPLE_HZ,
-                    AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                    outBuf, AudioTrack.MODE_STREAM);
-            if (trk.getState() != AudioTrack.STATE_INITIALIZED) {
-                JoanTrace.note("media AudioTrack uninitialized");
+            rec.startRecording();
+
+            AudioManager am = app.getSystemService(AudioManager.class);
+            if (am != null) {
+                try {
+                    am.setMode(AudioManager.MODE_IN_COMMUNICATION);
+                    am.setSpeakerphoneOn(false);
+                    int max = am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL);
+                    if (max > 0) {
+                        am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, max, 0);
+                    }
+                } catch (Throwable t) {
+                    JoanTrace.note("media mode " + t.getClass().getSimpleName());
+                }
+            }
+            trk = openTrack(app, outBuf);
+            if (trk == null) {
+                JoanTrace.note("media no AudioTrack");
                 return;
             }
-            rec.startRecording();
+            trk.setVolume(1.0f);
             trk.play();
             JoanTrace.note("media rolling src=" + rec.getAudioSource());
 
@@ -98,6 +113,7 @@ final class JoanMedia {
             byte[] down = new byte[512];
             DatagramPacket out = new DatagramPacket(ulaw, ulaw.length, loop, NATIVE_PORT);
             DatagramPacket in = new DatagramPacket(down, down.length);
+            int dl = 0;
             while (sRun) {
                 int n = rec.read(pcm, 0, PTIME_SAMPLES);
                 if (n > 0) {
@@ -118,6 +134,10 @@ final class JoanMedia {
                         pcm[i] = ulawToLinear(down[i]);
                     }
                     trk.write(pcm, 0, m);
+                    dl++;
+                    if (dl == 1 || (dl % 50) == 0) {
+                        JoanTrace.note("media dl frames=" + dl);
+                    }
                 } catch (java.net.SocketTimeoutException ignored) {
                     // no downlink this ptime
                 }
@@ -154,6 +174,55 @@ final class JoanMedia {
             }
         }
         return null;
+    }
+
+    private static AudioTrack openTrack(Context app, int outBuf) {
+        AudioTrack trk = null;
+        try {
+            trk = new AudioTrack.Builder()
+                    .setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build())
+                    .setAudioFormat(new AudioFormat.Builder()
+                            .setSampleRate(SAMPLE_HZ)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .build())
+                    .setBufferSizeInBytes(outBuf)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build();
+        } catch (Throwable t) {
+            JoanTrace.note("media track builder " + t.getClass().getSimpleName());
+        }
+        if (trk == null || trk.getState() != AudioTrack.STATE_INITIALIZED) {
+            if (trk != null) {
+                try { trk.release(); } catch (Throwable ignored) {}
+            }
+            trk = new AudioTrack(AudioManager.STREAM_VOICE_CALL, SAMPLE_HZ,
+                    AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
+                    outBuf, AudioTrack.MODE_STREAM);
+        }
+        if (trk.getState() != AudioTrack.STATE_INITIALIZED) {
+            try { trk.release(); } catch (Throwable ignored) {}
+            return null;
+        }
+        try {
+            AudioManager am = app.getSystemService(AudioManager.class);
+            if (am != null) {
+                for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+                    if (d.getType() == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE) {
+                        am.setCommunicationDevice(d);
+                        trk.setPreferredDevice(d);
+                        JoanTrace.note("media earpiece device");
+                        break;
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            JoanTrace.note("media earpiece " + t.getClass().getSimpleName());
+        }
+        return trk;
     }
 
     private static byte linearToUlaw(short pcm) {
