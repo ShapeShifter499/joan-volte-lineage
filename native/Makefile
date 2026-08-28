@@ -4,7 +4,7 @@ CFLAGS ?= -O2
 AARCH64_GCC := aarch64-linux-gnu-gcc
 
 SRC_COMMON := src/util.c src/md5.c src/secagree.c src/sip.c \
-              src/config.c src/xfrm.c src/ctl.c src/ua.c
+              src/config.c src/xfrm.c src/ctl.c src/ua.c src/rtp.c
 SRC_MAIN := src/main.c
 TEST_SRC := tests/test_sip_units.c
 

@@ -68,6 +68,10 @@ if [ -f "$TMP/etc/permissions/org.joan.ims.xml" ]; then
   copy_file "$TMP/etc/permissions/org.joan.ims.xml" \
     /system/etc/permissions/org.joan.ims.xml 644 u:object_r:system_file:s0
 fi
+if [ -f "$TMP/etc/permissions/android.hardware.telephony.ims.xml" ]; then
+  copy_file "$TMP/etc/permissions/android.hardware.telephony.ims.xml" \
+    /system/etc/permissions/android.hardware.telephony.ims.xml 644 u:object_r:system_file:s0
+fi
 
 # Best-effort removal of the legacy /vendor install (would double-start
 # the daemon otherwise). Vendor mount in recovery is flaky on dynamic

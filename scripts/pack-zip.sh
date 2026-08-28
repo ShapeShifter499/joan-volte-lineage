@@ -29,14 +29,18 @@ rm -rf ims-service/build/obj ims-service/build/dex
 OBJ=ims-service/build/obj
 DEX=ims-service/build/dex
 mkdir -p "$OBJ" "$DEX"
-javac -classpath "$SDK/platforms/android-36/android.jar:$ROOT/ims-service/stubs" \
-    -d "$OBJ" $(find ims-service/src -name '*.java')
-if [ "$(find "$OBJ" -name '*.class' | wc -l)" -eq 0 ]; then
-    echo "javac produced no classes"; exit 1;
+# Stubs are compiled as SOURCE so SystemApi shapes resolve, then dropped
+# from dex so they never ship (the device framework provides the real
+# classes). Compiling only src/ against android.jar fails: ImsService is
+# hidden from the public SDK.
+javac -classpath "$SDK/platforms/android-36/android.jar" \
+    -d "$OBJ" $(find ims-service/stubs ims-service/src -name '*.java')
+if [ "$(find "$OBJ/org" -name '*.class' | wc -l)" -eq 0 ]; then
+    echo "javac produced no org.joan.ims classes"; exit 1;
 fi
 rm -f "$DEX"/*.dex
 "$BT/d8" --release --lib "$SDK/platforms/android-36/android.jar" \
-    --output "$DEX" $(find "$OBJ" -name '*.class')
+    --output "$DEX" $(find "$OBJ/org" -name '*.class')
 
 APKDIR=ims-service/build/apk
 mkdir -p "$APKDIR"
@@ -103,6 +107,9 @@ files = {
     'etc/permissions/org.joan.ims.xml': os.path.join(root,
         'permissions/org.joan.ims.xml') if os.path.exists(
             os.path.join(root, 'permissions/org.joan.ims.xml')) else None,
+    'etc/permissions/android.hardware.telephony.ims.xml': os.path.join(root,
+        'permissions/android.hardware.telephony.ims.xml') if os.path.exists(
+            os.path.join(root, 'permissions/android.hardware.telephony.ims.xml')) else None,
 }
 os.makedirs(os.path.dirname(out), exist_ok=True)
 with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:

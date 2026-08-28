@@ -346,11 +346,10 @@ int parse_response(const char *msg, size_t len, sip_response_t *r)
 
 /* SDP offer.
  *
- * Codec order is preference order, and AMR-WB is listed first: it is
- * 16 kHz wideband where PCMU is 8 kHz narrowband, so on a network that
- * accepts it the call sounds materially better. AMR narrowband follows as
- * the usual IMS fallback, then PCMU, then DTMF. The pmOS run that proved
- * this path only ever negotiated PCMU because it offered PCMU first.
+ * Codec order is preference order. PCMU is listed first because it is the
+ * only codec we can actually send (rtp.c). AMR-WB first made the core pick
+ * a codec with no encoder here, so every "working" call was silent. The
+ * pmOS run that proved this path offered PCMU first and negotiated it.
  */
 static int sdp_offer(char *out, size_t outlen, const char *ip, int rtp_port)
 {
@@ -360,12 +359,12 @@ static int sdp_offer(char *out, size_t outlen, const char *ip, int rtp_port)
     app(&a, "s=-\r\n");
     app(&a, "c=IN IP6 %s\r\n", ip);
     app(&a, "t=0 0\r\n");
-    app(&a, "m=audio %d RTP/AVP 96 97 0 101\r\n", rtp_port);
+    app(&a, "m=audio %d RTP/AVP 0 96 97 101\r\n", rtp_port);
+    app(&a, "a=rtpmap:0 PCMU/8000\r\n");
     app(&a, "a=rtpmap:96 AMR-WB/16000/1\r\n");
     app(&a, "a=fmtp:96 octet-align=0;mode-change-capability=2\r\n");
     app(&a, "a=rtpmap:97 AMR/8000/1\r\n");
     app(&a, "a=fmtp:97 octet-align=0\r\n");
-    app(&a, "a=rtpmap:0 PCMU/8000\r\n");
     app(&a, "a=rtpmap:101 telephone-event/8000\r\n");
     app(&a, "a=fmtp:101 0-15\r\n");
     app(&a, "a=ptime:20\r\n");
@@ -691,38 +690,129 @@ int build_response(char *out, size_t outlen,
 int sdp_answer(char *out, size_t outlen, const char *ip, int rtp_port,
                const char *offer)
 {
-    /* Answer with one codec. Prefer AMR-WB when the offer carries it --
-     * 16 kHz against PCMU's 8 kHz -- and fall back to PCMU, which every
-     * IMS core offers. */
-    int pt = 0;
-    const char *rtpmap = "a=rtpmap:0 PCMU/8000\r\n";
-    const char *wb = offer ? strcasestr(offer, "AMR-WB/16000") : NULL;
-    if (wb) {
-        const char *line = wb;
-        while (line > offer && *line != ':') line--;
-        int cand = atoi(line + 1);
-        if (cand > 0 && cand < 128) {
-            pt = cand;
-            rtpmap = NULL;
-        }
+    /* Answer PCMU whenever the offer allows it. We have no AMR encoder;
+     * answering AMR-WB would complete signalling and still be silent. */
+    int offer_has_pcmu = 1;
+    if (offer && offer[0]) {
+        sdp_media_t m;
+        memset(&m, 0, sizeof(m));
+        if (sdp_parse_media(offer, &m) == 0)
+            offer_has_pcmu = m.have_pcmu;
+        else
+            offer_has_pcmu = (strcasestr(offer, "PCMU") != NULL);
     }
+    if (!offer_has_pcmu)
+        klog(LOG_WARN, "sdp answer: offer has no PCMU, answering PT 0 anyway");
     appender_t a = { out, outlen };
     app(&a, "v=0\r\n");
     app(&a, "o=- %ld 1 IN IP6 %s\r\n", (long)time(NULL), ip);
     app(&a, "s=-\r\n");
     app(&a, "c=IN IP6 %s\r\n", ip);
     app(&a, "t=0 0\r\n");
-    app(&a, "m=audio %d RTP/AVP %d\r\n", rtp_port, pt);
-    if (rtpmap)
-        app(&a, "%s", rtpmap);
-    else
-        app(&a, "a=rtpmap:%d AMR-WB/16000/1\r\n"
-                "a=fmtp:%d octet-align=0\r\n", pt, pt);
+    app(&a, "m=audio %d RTP/AVP 0\r\n", rtp_port);
+    app(&a, "a=rtpmap:0 PCMU/8000\r\n");
     app(&a, "a=ptime:20\r\n");
     app(&a, "a=sendrecv\r\n");
     return (int)(outlen - a.left);
 }
 
+int sdp_parse_media(const char *msg, sdp_media_t *out)
+{
+    if (!msg || !out)
+        return -1;
+    memset(out, 0, sizeof(*out));
+    out->port = -1;
+    out->pt = -1;
+    const char *sdp = strstr(msg, "\r\n\r\n");
+    if (sdp)
+        sdp += 4;
+    else
+        sdp = msg;
+    const char *p = sdp;
+    while (*p) {
+        const char *eol = strstr(p, "\r\n");
+        size_t n = eol ? (size_t)(eol - p) : strlen(p);
+        if (n >= 9 && !strncmp(p, "c=IN IP6 ", 9)) {
+            size_t l = n - 9;
+            if (l >= sizeof(out->ip))
+                l = sizeof(out->ip) - 1;
+            memcpy(out->ip, p + 9, l);
+            out->ip[l] = '\0';
+        } else if (n >= 9 && !strncmp(p, "c=IN IP4 ", 9)) {
+            size_t l = n - 9;
+            if (l >= sizeof(out->ip))
+                l = sizeof(out->ip) - 1;
+            memcpy(out->ip, p + 9, l);
+            out->ip[l] = '\0';
+        } else if (n >= 8 && !strncmp(p, "m=audio ", 8)) {
+            out->port = atoi(p + 8);
+            const char *q = p + 8;
+            while (*q && *q != ' ' && *q != '\r')
+                q++;
+            while (*q == ' ')
+                q++;
+            while (*q && *q != ' ' && *q != '\r')
+                q++;
+            while (*q == ' ')
+                q++;
+            if (*q >= '0' && *q <= '9')
+                out->pt = atoi(q);
+            if (out->pt == 0)
+                out->have_pcmu = 1;
+            const char *r = q;
+            while (r < p + n) {
+                if (*r == ' ' && r[1] == '0' &&
+                    (r[2] == ' ' || r[2] == '\r' || r[2] == '\0')) {
+                    out->have_pcmu = 1;
+                    if (out->pt < 0)
+                        out->pt = 0;
+                }
+                r++;
+            }
+        } else if (n > 9 && !strncmp(p, "a=rtpmap:", 9) &&
+                   strcasestr(p, "PCMU")) {
+            out->have_pcmu = 1;
+            int rpt = atoi(p + 9);
+            if (out->pt < 0 && rpt >= 0)
+                out->pt = rpt;
+        }
+        if (!eol)
+            break;
+        p = eol + 2;
+    }
+    if (out->have_pcmu && out->pt < 0)
+        out->pt = 0;
+    if (out->ip[0] && out->port > 0)
+        return 0;
+    return -1;
+}
+
+int sip_extract_one(char *buf, size_t *buflen, char *out, size_t outmax)
+{
+    if (!buf || !buflen || !out || outmax < 2)
+        return -1;
+    char *eoh = strstr(buf, "\r\n\r\n");
+    if (!eoh)
+        return 0;
+    size_t hlen = (size_t)(eoh + 4 - buf);
+    int cl = 0;
+    const char *clh = strcasestr(buf, "\r\nContent-Length:");
+    if (clh && clh < eoh)
+        cl = atoi(clh + 17);
+    if (cl < 0)
+        cl = 0;
+    size_t need = hlen + (size_t)cl;
+    if (*buflen < need)
+        return 0;
+    if (need >= outmax)
+        return -1;
+    memcpy(out, buf, need);
+    out[need] = '\0';
+    memmove(buf, buf + need, *buflen - need);
+    *buflen -= need;
+    buf[*buflen] = '\0';
+    return 1;
+}
 
 void mk_tag_public(char *dst, size_t n)
 {

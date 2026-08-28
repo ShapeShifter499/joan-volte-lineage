@@ -11,6 +11,7 @@
 #define JOAN_IMS_UA_H
 
 #include <stdint.h>
+#include <sys/select.h>
 
 #include "config.h"
 
@@ -46,6 +47,14 @@ int ua_call_hangup(void);
 /* The socket inbound requests arrive on (the protected server port), or -1
  * if we are not registered. The ctl loop selects on it. */
 int ua_inbound_fd(void);
+
+/* Add UA SIP/RTP fds to rfds. Returns the new maxfd. */
+int ua_select_prep(fd_set *rfds, int maxfd);
+void ua_select_handle(fd_set *rfds);
+
+/* RTP pacing for the ctl loop. -1 if no media session. */
+int ua_media_poll_ms(void);
+void ua_media_tick(void);
 
 /* Read and act on one inbound SIP request. */
 void ua_handle_inbound(void);

@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <sys/select.h>
+#include <sys/time.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -378,22 +379,23 @@ int ctl_serve(void)
             FD_SET(tcp_ls, &rfds);
             if (tcp_ls > maxfd) maxfd = tcp_ls;
         }
-        /* Inbound SIP arrives on the protected server port. Watch it here
-         * so the daemon can answer an INVITE while idle, rather than only
-         * while it happens to be inside a call setup. */
-        int sip_fd = ua_inbound_fd();
-        if (sip_fd >= 0) {
-            FD_SET(sip_fd, &rfds);
-            if (sip_fd > maxfd) maxfd = sip_fd;
+        /* SIP (UDP+TCP on both protected ports) and RTP. */
+        maxfd = ua_select_prep(&rfds, maxfd);
+        struct timeval tv, *ptv = NULL;
+        int wait_ms = ua_media_poll_ms();
+        if (wait_ms >= 0) {
+            tv.tv_sec = wait_ms / 1000;
+            tv.tv_usec = (wait_ms % 1000) * 1000;
+            ptv = &tv;
         }
-        if (select(maxfd + 1, &rfds, NULL, NULL, NULL) < 0) {
+        if (select(maxfd + 1, &rfds, NULL, NULL, ptv) < 0) {
             if (errno == EINTR)
                 continue;
             sleep(1);
             continue;
         }
-        if (sip_fd >= 0 && FD_ISSET(sip_fd, &rfds))
-            ua_handle_inbound();
+        ua_select_handle(&rfds);
+        ua_media_tick();
         if (unix_ls >= 0 && FD_ISSET(unix_ls, &rfds)) {
             int c = accept4(unix_ls, NULL, NULL, SOCK_CLOEXEC);
             if (c >= 0) {

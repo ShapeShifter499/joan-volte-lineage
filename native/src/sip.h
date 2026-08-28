@@ -103,9 +103,26 @@ int build_response(char *out, size_t outlen,
                    const char *to_tag,
                    const char *sdp);
 
-/* SDP answer accepting one codec from an offer. */
+/* SDP answer accepting one codec from an offer. Prefers PCMU: that is
+ * the only codec we can send today (see rtp.c). */
 int sdp_answer(char *out, size_t outlen, const char *ip, int rtp_port,
                const char *offer);
+
+typedef struct {
+    char ip[64];
+    int port;
+    int pt;          /* first payload type on m=audio */
+    int have_pcmu;   /* 1 if PT 0 or an rtpmap names PCMU */
+} sdp_media_t;
+
+/* Parse c=/m=audio from a SIP message (headers + body) or a bare SDP
+ * body. Returns 0 if an audio m-line with a destination was found. */
+int sdp_parse_media(const char *msg, sdp_media_t *out);
+
+/* Pull one Content-Length-framed SIP message out of a TCP buffer.
+ * Returns 1 and copies into out if complete, 0 if more data is needed,
+ * -1 on overflow or a malformed length. Consumes the message from buf. */
+int sip_extract_one(char *buf, size_t *buflen, char *out, size_t outmax);
 
 /* Dialog identifiers minted by build_invite(), needed for the ACK. */
 typedef struct {

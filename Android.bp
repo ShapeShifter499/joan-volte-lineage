@@ -1,0 +1,60 @@
+// Build the IMS user agent in-tree instead of shipping a prebuilt blob.
+//
+// The sideload zip carries a static aarch64 binary because a recovery zip
+// has no other option. A ROM build should not: a reviewer needs to build
+// this from source, and the checked-in binary exists only for the
+// out-of-tree path.
+
+cc_binary {
+    name: "joan-ims-ua",
+    init_rc: ["root/system/etc/init/joan-ims.rc"],
+
+    srcs: [
+        "native/src/main.c",
+        "native/src/ua.c",
+        "native/src/sip.c",
+        "native/src/ctl.c",
+        "native/src/xfrm.c",
+        "native/src/config.c",
+        "native/src/secagree.c",
+        "native/src/md5.c",
+        "native/src/util.c",
+        "native/src/rtp.c",
+    ],
+    local_include_dirs: ["native/src"],
+
+    cflags: [
+        "-Wall",
+        "-Werror",
+        // Compiles out the unauthenticated loopback control listener. It
+        // exists only because a sideloaded install cannot ship the
+        // sepolicy that makes the authenticated unix socket reachable
+        // from the app. A ROM build ships that policy, so this must be 0.
+        "-DJOAN_IMS_BRINGUP_TCP_CTL=0",
+    ],
+
+    // Static in the zip only because recovery has no runtime linker to
+    // rely on. In-tree, link normally.
+    shared_libs: ["liblog"],
+}
+
+android_app {
+    name: "JoanIms",
+    srcs: ["ims-service/src/**/*.java"],
+    manifest: "ims-service/AndroidManifest.xml",
+
+    // Needs BIND_IMS_SERVICE and the privileged phone-state permissions,
+    // so it must be privileged and platform-signed.
+    privileged: true,
+    certificate: "platform",
+    platform_apis: true,
+
+    required: ["privapp-permissions-org.joan.ims.xml"],
+}
+
+prebuilt_etc {
+    name: "privapp-permissions-org.joan.ims.xml",
+    sub_dir: "permissions",
+    src: "permissions/org.joan.ims.xml",
+    filename_from_src: true,
+}

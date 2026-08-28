@@ -9,10 +9,10 @@ handset (REGISTER 200, INVITE 180/200 with PCMU audio, SMS both ways) onto a
 stock-shaped Android ROM. The longer-term intent is to offer this upstream so
 LineageOS can ship working VoLTE for joan rather than requiring a side-load.
 
-> **Status: registration works; calling does not yet.** The UA reaches
-> `REGISTER 200 OK` against a live carrier IMS core and holds the
-> registration. Call setup is the next milestone. See
-> [Current state](#current-state).
+> **Status: REGISTER 200, MO signalling, and MO PCMU audio work on
+> LineageOS 22.2.** A live answered call carried a 440 Hz µ-law tone that
+> the far end heard. Inbound (MT) INVITE is implemented (UDP+TCP on both
+> protected ports) but not yet observed. See [Current state](#current-state).
 
 ## How it works
 
@@ -167,16 +167,36 @@ Two raw-netlink traps worth knowing if you touch `xfrm.c`: a zeroed
 on first use (`XfrmOutStateExpired`); and selectors default to prefixlen 0,
 so the addresses are carried but ignored for matching.
 
-Not working yet:
+Working beyond registration:
 
-- Calling. Outbound and inbound INVITE, dialer wiring, two-way RTP.
-- Known defects: `cnonce`/`nc` are hardcoded; AKAv2-MD5 is advertised from
-  the challenge but never computed (`CK`/`IK` are discarded), and a quoted
+- MO INVITE → 100 → 180 → 200 → ACK on a live answered call, with PCMU
+  RTP in both directions (tone heard at the far end). Earpiece/mic on
+  the handset is still the separate q6voice lane.
+- Protected client **and** server ports held for the registration
+  lifetime, UDP and TCP. pmOS measured inbound probes as TCP-in-ESP;
+  UDP-only was the leading reason an MT INVITE never reached the daemon.
+- `MmTelFeature.createCallSession` / `shouldProcessCall` so Dialer can
+  place an IMS MO call through ctl `CALL`. MT still auto-answers in the
+  daemon; ringing the Dialer needs a reverse event channel.
+
+Not yet verified on device:
+
+- Inbound (MT) INVITE after holding port-c and listening for TCP.
+- Dialer MO through `ImsCallSession` (APK is persistent; needs a reboot).
+- Clean BYE: one hangup after the answered call returned 481 (dialog
+  may already have been torn down by the far end).
+
+Known defects:
+
+- `cnonce`/`nc` are hardcoded; AKAv2-MD5 is advertised from the challenge
+  but never computed (`CK`/`IK` are discarded), and a quoted
   `algorithm="..."` is silently discarded -- both matter for carriers that
   challenge AKAv2; `hex_decode()` returns a partial count on a malformed
   nibble.
 - The loopback ctl listener is still the only route the IMS app can use
-  (see [Control channel](#control-channel)) and is unauthenticated.
+  on a sideloaded zip (see [Control channel](#control-channel)) and is
+  unauthenticated. An in-tree Lineage build compiles it out; see
+  `upstream/README.md` and `joan-ims.mk`.
 
 ## Carrier support
 

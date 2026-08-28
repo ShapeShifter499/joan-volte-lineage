@@ -3,6 +3,10 @@
  * NOT packed into the APK. */
 package android.telephony.ims.feature;
 
+import android.os.Bundle;
+import android.telephony.ims.ImsCallProfile;
+import android.telephony.ims.stub.ImsCallSessionImplBase;
+
 public abstract class MmTelFeature extends ImsFeature {
     public static class MmTelCapabilities {
         public static final int CAPABILITY_TYPE_VOICE = 1 << 0;
@@ -35,6 +39,24 @@ public abstract class MmTelFeature extends ImsFeature {
             MmTelCapabilities c) {
         // no-op in compile stub
     }
+
+
+    public static final int PROCESS_CALL_IMS = 0;
+    public static final int PROCESS_CALL_CSFB = 1;
+
+    public ImsCallProfile createCallProfile(int callSessionType, int callType) {
+        return null;
+    }
+
+    public ImsCallSessionImplBase createCallSession(ImsCallProfile profile) {
+        return null;
+    }
+
+    public int shouldProcessCall(String[] numbers) {
+        return PROCESS_CALL_CSFB;
+    }
+
+    public final void notifyIncomingCall(ImsCallSessionImplBase c, Bundle extras) {}
 
     public MmTelFeature() {}
 }

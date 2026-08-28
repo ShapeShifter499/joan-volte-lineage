@@ -232,6 +232,66 @@ static void test_response_parse(void)
     CHECK(rr.expires == -1, "parse absent expires");
 }
 
+static void test_sdp_and_tcp_frame(void)
+{
+    static const char sdp[] =
+        "INVITE sip:user@ims.example.net SIP/2.0\r\n"
+        "Content-Type: application/sdp\r\n"
+        "Content-Length: 120\r\n"
+        "\r\n"
+        "v=0\r\n"
+        "o=- 1 1 IN IP6 2001:db8::1\r\n"
+        "s=-\r\n"
+        "c=IN IP6 2001:db8::9\r\n"
+        "t=0 0\r\n"
+        "m=audio 40000 RTP/AVP 0 96 101\r\n"
+        "a=rtpmap:0 PCMU/8000\r\n";
+    sdp_media_t m;
+    CHECK(sdp_parse_media(sdp, &m) == 0, "sdp parse finds c/m");
+    CHECK(!strcmp(m.ip, "2001:db8::9"), "sdp parse IP6");
+    CHECK(m.port == 40000, "sdp parse port");
+    CHECK(m.have_pcmu == 1, "sdp parse PCMU");
+    CHECK(m.pt == 0, "sdp parse pt 0");
+
+    char ans[512];
+    int n = sdp_answer(ans, sizeof(ans), "2001:db8::2", 40000, sdp);
+    CHECK(n > 40, "sdp answer size");
+    CHECK(strstr(ans, "RTP/AVP 0") != NULL, "sdp answer PCMU");
+    CHECK(strstr(ans, "AMR-WB") == NULL, "sdp answer not AMR");
+
+    sip_identity_t id;
+    memset(&id, 0, sizeof(id));
+    snprintf(id.impi, sizeof(id.impi), "%s", "user@ims.example.net");
+    snprintf(id.impu, sizeof(id.impu), "%s", "sip:user@ims.example.net");
+    snprintf(id.realm, sizeof(id.realm), "%s", "ims.example.net");
+    snprintf(id.local_ip, sizeof(id.local_ip), "%s", "2001:db8::2");
+    id.local_port = 15000;
+    id.contact_port = 16000;
+    snprintf(id.pcscf, sizeof(id.pcscf), "%s", "2001:db8::1");
+    id.pcscf_port = 5060;
+    snprintf(id.imei, sizeof(id.imei), "%s", "123456789012345");
+    id.have_id = 1;
+    sip_txn_t txn;
+    sec_params_t mine = { .spi_c = 1, .spi_s = 2, .port_c = 15000, .port_s = 16000 };
+    txn_new(&txn, &id, mine);
+    char msg[SIP_MAX_MSG];
+    build_register(msg, sizeof(msg), &id, &txn, 1, NULL, NULL, 0, NULL, NULL);
+    CHECK(strstr(msg, ":16000>") != NULL, "REGISTER Contact uses contact_port");
+    CHECK(strstr(msg, "Via: SIP/2.0/UDP [2001:db8::2]:15000") != NULL,
+          "REGISTER Via uses local_port");
+
+    char buf[256];
+    const char *wire =
+        "OPTIONS sip:x SIP/2.0\r\nContent-Length: 0\r\n\r\nINVITE";
+    size_t bl = strlen(wire);
+    memcpy(buf, wire, bl);
+    buf[bl] = '\0';
+    char out[256];
+    CHECK(sip_extract_one(buf, &bl, out, sizeof(out)) == 1, "tcp extract one");
+    CHECK(strstr(out, "OPTIONS") == out, "tcp extract OPTIONS");
+    CHECK(bl == 6 && !memcmp(buf, "INVITE", 6), "tcp extract remainder");
+}
+
 int main(void)
 {
     test_md5();
@@ -240,6 +300,7 @@ int main(void)
     test_sec_agree();
     test_build_first();
     test_response_parse();
+    test_sdp_and_tcp_frame();
     if (g_fail) {
         printf("\n%d TEST(S) FAILED\n", g_fail);
         return 1;
