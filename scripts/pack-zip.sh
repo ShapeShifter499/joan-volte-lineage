@@ -81,6 +81,7 @@ PYEOF
 echo "== 4. assemble recovery zip"
 INSTALLED_SIZE=$(stat -c%s ims-service/build/joan-ims.apk)
 [ "$INSTALLED_SIZE" -gt 5000 ] || { echo "apk too small"; exit 1; }
+mkdir -p root/system/bin
 cp native/build/joan-ims-aarch64 root/system/bin/joan-ims
 mkdir -p out
 python3 - "$ROOT" <<'PYEOF2'

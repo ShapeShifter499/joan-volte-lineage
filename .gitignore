@@ -3,3 +3,6 @@ out/
 native/build/
 ims-service/build/
 *.apk.orig
+
+# Build artifact: pack-zip.sh regenerates this from native/build/
+root/system/bin/joan-ims
