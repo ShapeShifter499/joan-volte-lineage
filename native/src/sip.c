@@ -338,6 +338,12 @@ int parse_response(const char *msg, size_t len, sip_response_t *r)
     if (header_value(msg, "Expires", exp, sizeof(exp)) >= 0)
         r->expires = atoi(exp);
     header_value(msg, "Date", r->date_hdr, sizeof(r->date_hdr));
+    char rs[32];
+    r->rseq = 0;
+    if (header_value(msg, "RSeq", rs, sizeof(rs)) >= 0)
+        r->rseq = atoi(rs);
+    r->require[0] = '\0';
+    header_value(msg, "Require", r->require, sizeof(r->require));
     return 0;
 }
 
@@ -442,7 +448,7 @@ int build_invite(char *out, size_t outlen,
     app(&a, "P-Preferred-Identity: <%s>\r\n", aor);
     app(&a, "P-Access-Network-Info: 3GPP-E-UTRAN-FDD\r\n");
     app(&a, "Allow: INVITE, ACK, CANCEL, BYE, UPDATE, PRACK, INFO, OPTIONS\r\n");
-    app(&a, "Supported: 100rel, replaces, timer\r\n");
+    app(&a, "Supported: replaces, timer\r\n");
     app(&a, "Require: sec-agree\r\n");
     app(&a, "Proxy-Require: sec-agree\r\n");
     if (sec_verify && sec_verify[0])
@@ -491,6 +497,50 @@ int build_ack(char *out, size_t outlen,
         app(&a, "To: <%s>\r\n", to_uri);
     app(&a, "Call-ID: %s\r\n", dlg->call_id);
     app(&a, "CSeq: %d ACK\r\n", dlg->cseq);
+    if (sec_verify && sec_verify[0])
+        app(&a, "Security-Verify: %s\r\n", sec_verify);
+    app(&a, "Content-Length: 0\r\n");
+    app(&a, "\r\n");
+    return (int)(outlen - a.left);
+}
+
+int build_prack(char *out, size_t outlen,
+                const sip_identity_t *id,
+                const char *target,
+                const char *to_uri,
+                const char *route,
+                const char *sec_verify,
+                const sip_dialog_t *dlg,
+                const char *to_tag,
+                int rseq)
+{
+    const char *public_id = id->impu[0] ? id->impu : id->impi;
+    char aor[300];
+    if (!strncmp(public_id, "tel:", 4) || !strncmp(public_id, "sip:", 4))
+        snprintf(aor, sizeof(aor), "%s", public_id);
+    else
+        snprintf(aor, sizeof(aor), "sip:%s", public_id);
+
+    char host[80];
+    bracket(id->local_ip, host, sizeof(host));
+    char branch[40];
+    mk_branch(branch, sizeof(branch));
+
+    appender_t a = { out, outlen };
+    app(&a, "PRACK %s SIP/2.0\r\n", target);
+    app(&a, "Via: SIP/2.0/UDP %s:%d;branch=%s;rport\r\n",
+        host, id->local_port, branch);
+    app(&a, "Max-Forwards: 70\r\n");
+    if (route && route[0])
+        app(&a, "Route: %s\r\n", route);
+    app(&a, "From: <%s>;tag=%s\r\n", aor, dlg->from_tag);
+    if (to_tag && to_tag[0])
+        app(&a, "To: <%s>;tag=%s\r\n", to_uri, to_tag);
+    else
+        app(&a, "To: <%s>\r\n", to_uri);
+    app(&a, "Call-ID: %s\r\n", dlg->call_id);
+    app(&a, "CSeq: %d PRACK\r\n", dlg->cseq + 1);
+    app(&a, "RAck: %d %d INVITE\r\n", rseq, dlg->cseq);
     if (sec_verify && sec_verify[0])
         app(&a, "Security-Verify: %s\r\n", sec_verify);
     app(&a, "Content-Length: 0\r\n");

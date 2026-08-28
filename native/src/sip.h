@@ -69,6 +69,8 @@ typedef struct {
     int have_p_associated_uri;
     int expires;                      /* -1 if absent */
     char date_hdr[64];
+    int rseq;                         /* RFC 3262; 0 if absent */
+    char require[128];
 } sip_response_t;
 
 void txn_new(sip_txn_t *t, const sip_identity_t *id, sec_params_t mine);
@@ -168,12 +170,23 @@ int build_bye(char *out, size_t outlen,
 /* ACK for a 2xx, routed to the same target. */
 int build_ack(char *out, size_t outlen,
               const sip_identity_t *id,
-              const char *target,     /* Request-URI: remote target */
-              const char *to_uri,     /* To header: the URI we dialled */
+              const char *target,
+              const char *to_uri,
               const char *route,
               const char *sec_verify,
               const sip_dialog_t *dlg,
               const char *to_tag);
+
+/* RFC 3262 PRACK for a reliable 1xx (RSeq). CSeq is dlg->cseq+1. */
+int build_prack(char *out, size_t outlen,
+                const sip_identity_t *id,
+                const char *target,
+                const char *to_uri,
+                const char *route,
+                const char *sec_verify,
+                const sip_dialog_t *dlg,
+                const char *to_tag,
+                int rseq);
 
 /* Digest response per RFC 3310 (AKAv1-MD5 password=RES, res_len exact). */
 int aka_digest_response_hex(

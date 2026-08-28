@@ -98,6 +98,14 @@ static void fail(const char *what, int rc)
     g_state = UA_STATE_ERROR;
 }
 
+/* Call-setup failures must not drop REGISTER. A 30s INVITE timeout
+ * used fail() and the next Dialer tap got "call before register". */
+static void fail_call(const char *what, int rc)
+{
+    snprintf(g_err, sizeof(g_err), "%.60s rc=%d", what, rc);
+    klog(LOG_ERR, "%s", g_err);
+}
+
 static int sip_socket_bind(int local_port)
 {
     int fam = strchr(g_cfg->id.local_ip, ':') ? AF_INET6 : AF_INET;
@@ -762,14 +770,14 @@ int ua_call_invite(const char *dest)
         return -40;
     }
     if (!dest || !dest[0]) {
-        fail("call no dest", 41);
+        fail_call("call no dest", 41);
         return -41;
     }
 
     /* Refuse to dial without a public identity rather than fall back to
      * the IMPI and leak the IMSI as caller ID. */
     if (!g_reg.public_id[0]) {
-        fail("no public identity (IMPU); refusing to dial", 47);
+        fail_call("no public identity (IMPU); refusing to dial", 47);
         return -47;
     }
 
@@ -787,18 +795,18 @@ int ua_call_invite(const char *dest)
                          g_reg.service_route, g_reg.sec_verify,
                          JOAN_RTP_PORT, &dlg);
     if (n <= 0) {
-        fail("build invite", 42);
+        fail_call("build invite", 42);
         return -42;
     }
     klog(LOG_INFO, "invite built (%d bytes)", n);
 
     int s = g_port_c_fd;
     if (s < 0) {
-        fail("invite bind", 43);
+        fail_call("invite bind", 43);
         return -43;
     }
     if (sip_sendto(s, g_reg.pcscf_port_s, msg, (size_t)n) < 0) {
-        fail("invite send", 44);
+        fail_call("invite send", 44);
         return -44;
     }
 
@@ -820,7 +828,22 @@ int ua_call_invite(const char *dest)
         klog(LOG_INFO, "invite reply: %d %s", resp.status, resp.reason);
         if (resp.status >= 100 && resp.status < 200) {
             extract_to_tag(rx, to_tag, sizeof(to_tag));
-            continue;          /* ringing / session progress */
+            /* RFC 3262: a reliable 1xx (RSeq / 100rel) needs PRACK or
+             * the UAS never sends 200. We saw 183 Session Progress
+             * retransmits until CANCEL; GV never rang. */
+            if (resp.rseq > 0) {
+                const char *tgt = dest;
+                char prack[SIP_MAX_MSG];
+                int pn = build_prack(prack, sizeof(prack), &id, tgt, dest,
+                                     g_reg.service_route, g_reg.sec_verify,
+                                     &dlg, to_tag, resp.rseq);
+                if (pn > 0 && sip_sendto(s, g_reg.pcscf_port_s, prack,
+                                         (size_t)pn) == 0)
+                    klog(LOG_INFO, "PRACK sent for 1xx rseq=%d", resp.rseq);
+                else
+                    klog(LOG_WARN, "PRACK failed rseq=%d", resp.rseq);
+            }
+            continue;
         }
         if (resp.status >= 200 && resp.status < 300) {
             extract_to_tag(rx, to_tag, sizeof(to_tag));
@@ -882,7 +905,7 @@ int ua_call_invite(const char *dest)
             klog(LOG_INFO, "setup timed out, CANCEL sent");
         else
             klog(LOG_WARN, "setup timed out, CANCEL failed");
-        fail("invite no final reply", 45);
+        fail_call("invite no final reply", 45);
     }
     return rc;
 }
