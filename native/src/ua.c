@@ -284,6 +284,20 @@ int ua_register_stage2(const uint8_t *res, size_t res_len,
         }
     }
 
+    /* Carrier-level security-agreement parameters only: algorithm names,
+     * SPIs and ports. No identity, no key material. Needed because a
+     * mis-parsed Security-Server means we encrypt with the wrong SPI and
+     * the P-CSCF drops the packet without answering. */
+    klog(LOG_INFO, "sec-agree ue: alg=%s ealg=%s spi-c=%u spi-s=%u "
+                   "port-c=%u port-s=%u",
+         ue_sec.alg, ue_sec.ealg, ue_sec.spi_c, ue_sec.spi_s,
+         ue_sec.port_c, ue_sec.port_s);
+    klog(LOG_INFO, "sec-agree pcscf: alg=%s ealg=%s spi-c=%u spi-s=%u "
+                   "port-c=%u port-s=%u",
+         pcscf_sec.alg, pcscf_sec.ealg, pcscf_sec.spi_c, pcscf_sec.spi_s,
+         pcscf_sec.port_c, pcscf_sec.port_s);
+    klog(LOG_INFO, "sec-server raw: %.200s", g_ch.sec_server);
+
     /* Kernel IPsec: SA+policy set from CK/IK (UDP+TCP selectors). */
     xfrm_status_t xs;
     int xr = xfrm_install(g_cfg->id.local_ip, g_cfg->id.pcscf,
