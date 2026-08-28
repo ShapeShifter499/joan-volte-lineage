@@ -748,6 +748,19 @@ void ua_handle_inbound(void)
         return;
     rx[r] = '\0';
 
+    /* Log every datagram. Returning silently on anything that is not a
+     * request made the inbound path invisible: the SA counted ten packets
+     * while the log stayed empty, so there was no way to tell "nothing
+     * arrived" from "something arrived and we ignored it". */
+    char first[80];
+    size_t fl = 0;
+    while (fl + 1 < sizeof(first) && rx[fl] && rx[fl] != '\r' && rx[fl] != '\n') {
+        first[fl] = rx[fl];
+        fl++;
+    }
+    first[fl] = '\0';
+    klog(LOG_INFO, "inbound datagram (%zd B): %s", r, first);
+
     char method[16];
     if (sip_request_method(rx, method, sizeof(method)) != 0)
         return;                         /* a response; call paths read those */
