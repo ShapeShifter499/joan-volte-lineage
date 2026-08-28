@@ -9,10 +9,11 @@ handset (REGISTER 200, INVITE 180/200 with PCMU audio, SMS both ways) onto a
 stock-shaped Android ROM. The longer-term intent is to offer this upstream so
 LineageOS can ship working VoLTE for joan rather than requiring a side-load.
 
-> **Status: REGISTER 200, MO signalling, and MO PCMU audio work on
-> LineageOS 22.2.** A live answered call carried a 440 Hz µ-law tone that
-> the far end heard. Inbound (MT) INVITE is implemented (UDP+TCP on both
-> protected ports) but not yet observed. See [Current state](#current-state).
+> **Status: REGISTER 200, MO and MT PCMU audio work on LineageOS 22.2.**
+> Live answered calls both ways carried a 440 Hz µ-law tone the far end
+> heard. MT INVITE arrived over TCP on the protected server port.
+> Dialer wiring is not yet the path those calls used. See
+> [Current state](#current-state).
 
 ## How it works
 
@@ -173,18 +174,19 @@ Working beyond registration:
   RTP in both directions (tone heard at the far end). Earpiece/mic on
   the handset is still the separate q6voice lane.
 - Protected client **and** server ports held for the registration
-  lifetime, UDP and TCP. pmOS measured inbound probes as TCP-in-ESP;
-  UDP-only was the leading reason an MT INVITE never reached the daemon.
+  lifetime, UDP and TCP. An inbound INVITE arrived over **TCP** on
+  port-s (the pmOS bring-up had already seen TCP-in-ESP probes).
 - `MmTelFeature.createCallSession` / `shouldProcessCall` so Dialer can
   place an IMS MO call through ctl `CALL`. MT still auto-answers in the
-  daemon; ringing the Dialer needs a reverse event channel.
+  daemon; ringing the Dialer needs a reverse event channel and a reboot
+  to load the new APK (`android:persistent`).
 
 Not yet verified on device:
 
-- Inbound (MT) INVITE after holding port-c and listening for TCP.
-- Dialer MO through `ImsCallSession` (APK is persistent; needs a reboot).
-- Clean BYE: one hangup after the answered call returned 481 (dialog
-  may already have been torn down by the far end).
+- Dialer MO/MT through `ImsCallSession` (APK is persistent; needs a reboot).
+- Handset earpiece/mic on the IMS session (q6voice lane, separate).
+- Clean MO BYE: one hangup after the first answered call returned 481.
+  The later MT hangup was a normal inbound BYE.
 
 Known defects:
 
@@ -204,9 +206,9 @@ The goal is carrier-neutral. The daemon has no compiled-in realm: it takes
 the realm from the SIM (ISIM domain / IMPI suffix) and the P-CSCF address
 from PCO, both supplied over the ctl channel.
 
-It has so far only been *exercised* against one carrier, and defects 3 and 4
-above are the known gaps between "no hardcoded carrier" and "actually works
-on another carrier".
+It has so far only been *exercised* against one carrier. The AKAv2 and
+quoted-algorithm defects above are the known gaps between "no hardcoded
+carrier" and "actually works on another carrier".
 
 ## Credits
 

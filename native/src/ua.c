@@ -9,6 +9,7 @@
 #include <net/if.h>
 #include <netinet/in.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -789,7 +790,7 @@ int ua_call_invite(const char *dest)
         fail("build invite", 42);
         return -42;
     }
-    klog(LOG_INFO, "invite built (%d bytes) -> %.40s", n, dest);
+    klog(LOG_INFO, "invite built (%d bytes)", n);
 
     int s = g_port_c_fd;
     if (s < 0) {
@@ -959,18 +960,16 @@ static void inbound_send(const char *pkt, size_t len)
 
 static void handle_sip_request(char *rx, size_t r)
 {
-    char first[80];
-    size_t fl = 0;
-    while (fl + 1 < sizeof(first) && rx[fl] && rx[fl] != '\r' && rx[fl] != '\n') {
-        first[fl] = rx[fl];
-        fl++;
-    }
-    first[fl] = '\0';
-    klog(LOG_INFO, "inbound datagram (%zu B): %s", r, first);
-
+    /* Never log the request line: it carries the public identity. */
     char method[16];
-    if (sip_request_method(rx, method, sizeof(method)) != 0)
+    if (sip_request_method(rx, method, sizeof(method)) != 0) {
+        int code = 0;
+        if (!strncmp(rx, "SIP/2.0", 7))
+            code = atoi(rx + 8);
+        klog(LOG_INFO, "inbound datagram (%zu B): response %d", r, code);
         return;
+    }
+    klog(LOG_INFO, "inbound datagram (%zu B): %s", r, method);
 
     sip_identity_t id = g_cfg->id;
     id.local_port = g_reg.port_c;
