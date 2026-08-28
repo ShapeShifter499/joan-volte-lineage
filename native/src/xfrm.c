@@ -180,6 +180,19 @@ static int sa_add_once(
         return -EINVAL;
     su->id.proto = IPPROTO_ESP;
     su->id.spi = (uint32_t)htonl(spi);
+    /* Lifetimes MUST be set explicitly.
+     *
+     * This message is memset to zero, and a zeroed xfrm_lifetime_cfg does
+     * not mean "unlimited" -- it means a hard limit of zero bytes and zero
+     * packets, so the SA is expired the instant anything traverses it. The
+     * SA installs cleanly and then the first sendto() through it fails with
+     * EINVAL while /proc/net/xfrm_stat increments XfrmOutStateExpired.
+     * `ip xfrm state add`, which the pmOS implementation used, fills these
+     * with XFRM_INF for us, which is why this never surfaced there. */
+    su->lft.soft_byte_limit = XFRM_INF;
+    su->lft.hard_byte_limit = XFRM_INF;
+    su->lft.soft_packet_limit = XFRM_INF;
+    su->lft.hard_packet_limit = XFRM_INF;
     su->family = (uint16_t)fam;
     su->mode = XFRM_MODE_TRANSPORT;
     su->replay_window = 0;
@@ -261,6 +274,12 @@ static int pol_add_once(
     pi->sel.dport_mask = 0xffff;
     pi->sel.family = (uint16_t)fam;
     pi->sel.proto = proto;
+    /* Without an explicit prefix length these default to 0, and `ip xfrm
+     * policy` shows the selectors as .../0: the addresses are carried but
+     * ignored, so a policy installed for one IMS PDN address keeps
+     * matching after the address changes. Pin them to a single host. */
+    pi->sel.prefixlen_s = (fam == AF_INET6) ? 128 : 32;
+    pi->sel.prefixlen_d = (fam == AF_INET6) ? 128 : 32;
     pi->dir = dir;
     pi->action = XFRM_POLICY_ALLOW;
     pi->priority = 0;
@@ -280,6 +299,29 @@ static int pol_add_once(
     return nl_call(n);
 }
 
+/* Flush all SAs and policies. Mirrors `ip xfrm state flush` plus
+ * `ip xfrm policy flush`. */
+static void xfrm_flush_all(void)
+{
+    char buf[256];
+
+    memset(buf, 0, sizeof(buf));
+    struct nlmsghdr *n = (struct nlmsghdr *)buf;
+    n->nlmsg_type = XFRM_MSG_FLUSHSA;
+    n->nlmsg_len = NLMSG_LENGTH(sizeof(struct xfrm_usersa_flush));
+    struct xfrm_usersa_flush *fs = (struct xfrm_usersa_flush *)NLMSG_DATA(n);
+    fs->proto = 255;   /* IPSEC_PROTO_ANY; not in all uapi headers */
+    if (nl_call(n) < 0)
+        klog(LOG_WARN, "xfrm state flush failed errno=%d", errno);
+
+    memset(buf, 0, sizeof(buf));
+    n = (struct nlmsghdr *)buf;
+    n->nlmsg_type = XFRM_MSG_FLUSHPOLICY;
+    n->nlmsg_len = NLMSG_LENGTH(0);
+    if (nl_call(n) < 0)
+        klog(LOG_WARN, "xfrm policy flush failed errno=%d", errno);
+}
+
 int xfrm_install(
         const char *ue,
         const char *pcscf,
@@ -295,6 +337,20 @@ int xfrm_install(
         klog(LOG_ERR, "xfrm netlink socket failed errno=%d", errno);
         return -1;
     }
+
+    /* Clear anything a previous registration left behind.
+     *
+     * Each attempt installs 4 SAs and 8 policies. Nothing removed them, so
+     * they accumulated across every cycle -- 29 SAs and 64 policies were
+     * measured on device -- including entries naming IMS PDN addresses the
+     * handset no longer holds. Combined with the /0 selectors above, a
+     * stale policy still matched the live flow and resolved a template to
+     * an SA that no longer existed, and sendto() returned EINVAL.
+     *
+     * The proven pmOS implementation flushes state and policy before
+     * installing (joan_ims_live.py:350-351); do the same. This daemon is
+     * the only xfrm user on the device. */
+    xfrm_flush_all();
 
     alg_key_t auth, enc;
     pick_algos(pcscf_sec, &auth, &enc, ck, ik);

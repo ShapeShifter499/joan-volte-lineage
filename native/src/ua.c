@@ -46,7 +46,7 @@ static void fail(const char *what, int rc)
     g_state = UA_STATE_ERROR;
 }
 
-static int sip_socket_bind(void)
+static int sip_socket_bind(int local_port)
 {
     int fam = strchr(g_cfg->id.local_ip, ':') ? AF_INET6 : AF_INET;
     int s = socket(fam, SOCK_DGRAM | SOCK_CLOEXEC, 0);
@@ -73,7 +73,7 @@ static int sip_socket_bind(void)
     if (fam == AF_INET6) {
         struct sockaddr_in6 *a = (struct sockaddr_in6 *)&ss;
         a->sin6_family = AF_INET6;
-        a->sin6_port = htons((uint16_t)g_cfg->id.local_port);
+        a->sin6_port = htons((uint16_t)local_port);
         if (inet_pton(AF_INET6, g_cfg->id.local_ip, &a->sin6_addr) != 1) {
             close(s);
             return -1;
@@ -81,7 +81,7 @@ static int sip_socket_bind(void)
     } else {
         struct sockaddr_in *a = (struct sockaddr_in *)&ss;
         a->sin_family = AF_INET;
-        a->sin_port = htons((uint16_t)g_cfg->id.local_port);
+        a->sin_port = htons((uint16_t)local_port);
         if (inet_pton(AF_INET, g_cfg->id.local_ip, &a->sin_addr) != 1) {
             close(s);
             return -1;
@@ -89,14 +89,14 @@ static int sip_socket_bind(void)
     }
     if (bind(s, (struct sockaddr *)&ss, sizeof(ss)) < 0) {
         klog(LOG_ERR, "sip bind port %d failed errno=%d",
-             g_cfg->id.local_port, errno);
+             local_port, errno);
         close(s);
         return -1;
     }
     return s;
 }
 
-static int sip_send_recv(int s, const char *pkt, size_t len,
+static int sip_send_recv(int s, int dport, const char *pkt, size_t len,
                          char *rx, size_t rxlen, int timeout_ms)
 {
     struct sockaddr_storage dst;
@@ -106,14 +106,14 @@ static int sip_send_recv(int s, const char *pkt, size_t len,
     if (fam == AF_INET6) {
         struct sockaddr_in6 *a = (struct sockaddr_in6 *)&dst;
         a->sin6_family = AF_INET6;
-        a->sin6_port = htons((uint16_t)g_cfg->id.pcscf_port);
+        a->sin6_port = htons((uint16_t)dport);
         dlen = sizeof(*a);
         if (inet_pton(AF_INET6, g_cfg->id.pcscf, &a->sin6_addr) != 1)
             return -1;
     } else {
         struct sockaddr_in *a = (struct sockaddr_in *)&dst;
         a->sin_family = AF_INET;
-        a->sin_port = htons((uint16_t)g_cfg->id.pcscf_port);
+        a->sin_port = htons((uint16_t)dport);
         dlen = sizeof(*a);
         if (inet_pton(AF_INET, g_cfg->id.pcscf, &a->sin_addr) != 1)
             return -1;
@@ -160,13 +160,13 @@ int ua_register_stage1(char *nonce_out, size_t nonce_len)
     klog(LOG_INFO, "reg1 built (%d bytes) UDP", n);
 
     g_state = UA_STATE_TRYING;
-    int s = sip_socket_bind();
+    int s = sip_socket_bind(g_cfg->id.local_port);
     if (s < 0) {
         fail("bind", 3);
         return -3;
     }
     char rx[4096];
-    int r = sip_send_recv(s, msg, (size_t)n, rx, sizeof(rx), 8000);
+    int r = sip_send_recv(s, g_cfg->id.pcscf_port, msg, (size_t)n, rx, sizeof(rx), 8000);
     close(s);
     if (r <= 0) {
         fail("reg1 no reply", 4);
@@ -291,8 +291,26 @@ int ua_register_stage2(const uint8_t *res, size_t res_len,
     if (xr != 0)
         klog(LOG_WARN, "xfrm install partial rc=%d (continuing)", xr);
 
-    /* Protected REGISTER. */
+    /* Protected REGISTER.
+     *
+     * This one does NOT go out on 5060 like REG1 did. Once the security
+     * association exists, TS 33.203 / RFC 3329 require the protected
+     * REGISTER to travel inside it: from the UE's protected client port
+     * to the P-CSCF's protected server port, the same selectors
+     * xfrm_install() just programmed. Sending it 5060 -> 5060 bypasses
+     * every SA we installed while the message asserts
+     * integrity-protected=yes and echoes Security-Verify, and the P-CSCF
+     * answers 401 -- which is exactly what this daemon did until now.
+     *
+     * Via and Contact must advertise port-c too, so responses and
+     * subsequent requests come back inside the association. This mirrors
+     * the pmOS implementation that achieved REGISTER 200 on this handset,
+     * which builds msg2 with local_port=port_c and pcscf_port=
+     * pcscf_sec.port_s and sends it over the SA socket.
+     */
     sip_identity_t id = g_cfg->id;
+    id.local_port = (int)ue_sec.port_c;
+    id.pcscf_port = (int)pcscf_sec.port_s;
     char msg[SIP_MAX_MSG];
     int n = build_register(msg, sizeof(msg), &id, &g_txn, 2, &g_ch,
                            res, res_len, ck, ik);
@@ -302,13 +320,16 @@ int ua_register_stage2(const uint8_t *res, size_t res_len,
     }
     klog(LOG_INFO, "reg2 built (%d bytes)", n);
 
-    int s = sip_socket_bind();
+    int s = sip_socket_bind((int)ue_sec.port_c);
     if (s < 0) {
         fail("bind2", 26);
         return -26;
     }
+    klog(LOG_INFO, "reg2 sending %u -> %u (protected)",
+         ue_sec.port_c, pcscf_sec.port_s);
     char rx[4096];
-    int r = sip_send_recv(s, msg, (size_t)n, rx, sizeof(rx), 8000);
+    int r = sip_send_recv(s, (int)pcscf_sec.port_s, msg, (size_t)n,
+                          rx, sizeof(rx), 8000);
     close(s);
     if (r <= 0) {
         fail("reg2 no reply", 27);
