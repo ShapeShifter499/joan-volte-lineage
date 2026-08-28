@@ -50,11 +50,23 @@ not on its allowlist — uid 0, plus whatever
 `/data/vendor/netmgr/joan-ims.allowuid` lists (one uid per line). This
 matters because `REG2` carries AKA key material.
 
-An earlier revision also listened on `127.0.0.1:15090`. That has been
-removed: any app holding `INTERNET` could reach it, and authenticating a TCP
-peer requires reading `/proc/net/tcp`, which returns `EACCES` from the
-`netmgrd` domain (measured on-device). A control channel that injects key
-material and cannot identify its caller is not worth keeping.
+That unix socket is **not currently reachable from the IMS app.** Connecting
+from `priv_app` to the daemon's `netmgrd` domain needs an allow rule for
+`unix_stream_socket connectto`, and a sideloaded zip cannot load a policy
+append on this device — the app gets `EACCES`.
+
+So the daemon also listens on `127.0.0.1:15090`, and today that is the only
+route the app can actually use: TCP has no `connectto` check. **It is
+unauthenticated and must not ship enabled.** Any app holding `INTERNET` can
+reach it, and `REG2` carries AKA key material. Identifying a TCP peer would
+mean reading `/proc/net/tcp`, which returns `EACCES` from `netmgrd`
+(measured on-device), so it cannot be secured in place.
+
+It is guarded by `JOAN_IMS_BRINGUP_TCP_CTL` and announces itself at WARN as
+bring-up only. An in-ROM install — the upstream target — ships sepolicy with
+the image, which makes the unix socket reachable; the flag is then compiled
+out and the authenticated transport is the only one left. `JoanCtl` already
+tries the unix socket first, so it moves over automatically.
 
 ## Building
 
