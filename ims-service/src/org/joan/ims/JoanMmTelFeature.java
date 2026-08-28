@@ -18,7 +18,11 @@ public class JoanMmTelFeature extends MmTelFeature {
     private final Context app;
 
     public JoanMmTelFeature(Context app) {
+        super(app.getMainExecutor());
         this.app = app.getApplicationContext();
+        // Framework should call onFeatureReady(); also post READY in case
+        // the listener attach races FeatureConnector's first status read.
+        app.getMainExecutor().execute(this::markReady);
     }
 
     @Override
@@ -32,6 +36,7 @@ public class JoanMmTelFeature extends MmTelFeature {
     @Override
     public void onFeatureReady() {
         Log.i(TAG, "onFeatureReady");
+        JoanTrace.note("onFeatureReady");
         JoanDriver.start(app);
         markReady();
     }

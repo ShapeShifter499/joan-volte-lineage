@@ -4,6 +4,7 @@
 package android.telephony.ims.feature;
 
 import android.os.Bundle;
+import java.util.concurrent.Executor;
 import android.telephony.ims.ImsCallProfile;
 import android.telephony.ims.stub.ImsCallSessionImplBase;
 
@@ -63,4 +64,6 @@ public abstract class MmTelFeature extends ImsFeature {
     public final void notifyIncomingCall(ImsCallSessionImplBase c, Bundle extras) {}
 
     public MmTelFeature() {}
+
+    public MmTelFeature(Executor executor) { super(); }
 }

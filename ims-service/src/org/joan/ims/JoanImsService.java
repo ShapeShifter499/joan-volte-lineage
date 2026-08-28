@@ -28,6 +28,7 @@ public class JoanImsService extends android.telephony.ims.ImsService {
     @Override
     public ImsFeatureConfiguration querySupportedImsFeatures() {
         Log.i(TAG, "querySupportedImsFeatures MMTEL");
+        JoanTrace.note("querySupportedImsFeatures MMTEL");
         return new ImsFeatureConfiguration.Builder()
                 .addFeature(0, ImsFeature.FEATURE_EMERGENCY_MMTEL)
                 .addFeature(0, ImsFeature.FEATURE_MMTEL)
@@ -39,6 +40,8 @@ public class JoanImsService extends android.telephony.ims.ImsService {
             int slotId, int subscriptionId) {
         Log.i(TAG, "createMmTelFeature slot=" + slotId + " sub="
                 + subscriptionId);
+        JoanTrace.note("createMmTelFeature slot=" + slotId + " sub="
+                + subscriptionId);
         JoanDriver.start(getApplicationContext());
         return new JoanMmTelFeature(getApplicationContext());
     }
@@ -47,6 +50,7 @@ public class JoanImsService extends android.telephony.ims.ImsService {
     public android.telephony.ims.feature.MmTelFeature createMmTelFeature(
             int slotId) {
         Log.i(TAG, "createMmTelFeature legacy slot=" + slotId);
+        JoanTrace.note("createMmTelFeature legacy slot=" + slotId);
         JoanDriver.start(getApplicationContext());
         return new JoanMmTelFeature(getApplicationContext());
     }
