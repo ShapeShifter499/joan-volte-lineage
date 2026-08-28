@@ -32,6 +32,9 @@ int main(int argc, char **argv)
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGINT, &sa, NULL);
 
+    /* Open + positive-control the log sink before anything else, so a
+     * silent channel is caught here rather than mistaken for a quiet run. */
+    klog_banner("joan-ims-ua start");
     klog(LOG_INFO, "start (%s)",
          (argc > 1 && !strcmp(argv[1], "register")) ? "register" : "standby");
 

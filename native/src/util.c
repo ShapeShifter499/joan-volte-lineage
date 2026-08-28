@@ -1,11 +1,13 @@
 #define _GNU_SOURCE
 #include "util.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -19,17 +21,103 @@ static const char *level_tag(int level)
     }
 }
 
+/* Log sink.
+ *
+ * init gives this daemon /dev/null on fd 0/1/2, so stderr is not a channel.
+ * The sink is therefore a file, and picking its path is a MAC+DAC problem:
+ * we run in domain netmgrd as uid root gid radio, so the only directory we
+ * can prove is writable is netmgrd's own /data/vendor/netmgr
+ * (netmgrd_data_file, radio:radio 0770). The remaining candidates are
+ * bring-up conveniences for a permissive or rooted device.
+ *
+ * A previous revision opened a path whose parent directory did not exist,
+ * discarded both open() failures and logged nothing for hours while looking
+ * exactly like a healthy daemon. So this version must never fail silently:
+ * it creates the parent, caches the fd, and records the path it settled on
+ * (or the errno it died with) where the ctl STATUS verb can report it.
+ */
+static const char *const k_log_candidates[] = {
+    "/data/vendor/netmgr/joan-ims-ua.log",
+    "/data/vendor/joan-ims/ua.log",
+    "/data/local/tmp/joan-ua.log",
+};
+
+static int g_log_fd = -1;
+static char g_log_path[128];
+static int g_log_errno;
+
+/* mkdir the parent of path, ignoring an existing directory. */
+static void mkdir_parent(const char *path)
+{
+    char dir[128];
+    snprintf(dir, sizeof(dir), "%s", path);
+    char *slash = strrchr(dir, '/');
+    if (!slash || slash == dir)
+        return;
+    *slash = '\0';
+    if (mkdir(dir, 0770) == 0 || errno == EEXIST)
+        return;
+    /* Parent missing too: one level up, then retry. Enough for our paths. */
+    char *up = strrchr(dir, '/');
+    if (up && up != dir) {
+        *up = '\0';
+        if (mkdir(dir, 0770) != 0 && errno != EEXIST)
+            return;
+        *up = '/';
+        mkdir(dir, 0770);
+    }
+}
+
+static void klog_sink_open(void)
+{
+    if (g_log_fd >= 0)
+        return;
+    for (size_t i = 0; i < sizeof(k_log_candidates) / sizeof(*k_log_candidates);
+         i++) {
+        const char *path = k_log_candidates[i];
+        mkdir_parent(path);
+        int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0640);
+        if (fd >= 0) {
+            g_log_fd = fd;
+            snprintf(g_log_path, sizeof(g_log_path), "%s", path);
+            g_log_errno = 0;
+            return;
+        }
+        g_log_errno = errno;
+    }
+    /* Every candidate failed. Remember why; STATUS will surface it. */
+    g_log_path[0] = '\0';
+}
+
+const char *klog_sink_status(char *buf, size_t buflen)
+{
+    if (g_log_fd >= 0 && g_log_path[0])
+        snprintf(buf, buflen, "%s", g_log_path);
+    else
+        snprintf(buf, buflen, "none errno=%d", g_log_errno);
+    return buf;
+}
+
+void klog_banner(const char *what)
+{
+    char sink[160];
+    char probe[256];
+    klog_sink_open();
+    /* Positive control: if this line is not in the file, the channel is
+     * dead and nothing else in the log can be trusted as evidence. */
+    snprintf(probe, sizeof(probe), "[I] --- %s: log sink open (%s) ---",
+             what, klog_sink_status(sink, sizeof(sink)));
+    klog_raw(probe);
+}
+
 void klog_raw(const char *line)
 {
-    /* stderr is /dev/null under init; mirror to a vendor-data log file so
-     * bring-up debugging can read daemon klog lines without logd access. */
     dprintf(2, "joan-ims: %s\n", line);
-    int fd = open("/data/misc/joan-ims/ua.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd < 0)
-        fd = open("/data/local/tmp/joan-ua.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd >= 0) {
-        dprintf(fd, "joan-ims: %s\n", line);
-        close(fd);
+    klog_sink_open();
+    if (g_log_fd >= 0) {
+        long ms = now_ms();
+        dprintf(g_log_fd, "[%ld.%03ld] joan-ims: %s\n",
+                ms / 1000, ms % 1000, line);
     }
 }
 
