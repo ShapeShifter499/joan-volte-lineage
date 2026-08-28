@@ -23,14 +23,20 @@ echo "== 2. host unit tests (sanity gate)"
 echo "   ok: $(tail -1 /tmp/joan-pack-tests.log)"
 
 echo "== 3. apk build"
+# Clean first: stale .class files from earlier builds must never leak
+# into the dex (the dead JoanSip draft shipped that way once).
+rm -rf ims-service/build/obj ims-service/build/dex
 OBJ=ims-service/build/obj
 DEX=ims-service/build/dex
 mkdir -p "$OBJ" "$DEX"
 javac -classpath "$SDK/platforms/android-36/android.jar:$ROOT/ims-service/stubs" \
-    -d "$OBJ" $(find ims-service/src -name '*.java') 2>/dev/null
+    -d "$OBJ" $(find ims-service/src -name '*.java')
+if [ "$(find "$OBJ" -name '*.class' | wc -l)" -eq 0 ]; then
+    echo "javac produced no classes"; exit 1;
+fi
 rm -f "$DEX"/*.dex
 "$BT/d8" --release --lib "$SDK/platforms/android-36/android.jar" \
-    --output "$DEX" $(find "$OBJ" -name '*.class') 2>&1 | head -3 || true
+    --output "$DEX" $(find "$OBJ" -name '*.class')
 
 APKDIR=ims-service/build/apk
 mkdir -p "$APKDIR"
@@ -75,7 +81,7 @@ PYEOF
 echo "== 4. assemble recovery zip"
 INSTALLED_SIZE=$(stat -c%s ims-service/build/joan-ims.apk)
 [ "$INSTALLED_SIZE" -gt 5000 ] || { echo "apk too small"; exit 1; }
-cp native/build/joan-ims-aarch64 root/vendor/bin/joan-ims
+cp native/build/joan-ims-aarch64 root/system/bin/joan-ims
 mkdir -p out
 python3 - "$ROOT" <<'PYEOF2'
 import os, sys, zipfile
@@ -87,10 +93,10 @@ files = {
         os.path.join(root, 'scripts', 'update-binary'),
     'META-INF/com/google/android/updater-script':
         os.path.join(root, 'META-INF/com/google/android/updater-script'),
-    'vendor/bin/joan-ims':
-        os.path.join(root, 'root/vendor/bin/joan-ims'),
-    'vendor/etc/init/joan-ims.rc':
-        os.path.join(root, 'root/vendor/etc/init/joan-ims.rc'),
+    'system/bin/joan-ims':
+        os.path.join(root, 'root/system/bin/joan-ims'),
+    'system/etc/init/joan-ims.rc':
+        os.path.join(root, 'root/system/etc/init/joan-ims.rc'),
     'app/joan-ims.apk': os.path.join(root,
         'ims-service/build/joan-ims.apk'),
     'etc/permissions/org.joan.ims.xml': os.path.join(root,

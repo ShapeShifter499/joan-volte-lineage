@@ -31,9 +31,10 @@ const char *ua_errstr(void);   /* masked, stable string for STATUS */
  * nonce_out (base64, NUL-terminated). Any other rc = failure. */
 int ua_register_stage1(char *nonce_out, size_t nonce_len);
 
-/* Stage 2. res/ck/ik are raw 16-byte values from ISIM AKA.
+/* Stage 2. res is raw AKA RES (8 or 16 bytes; res_len is exact), ck/ik
+ * are raw 16-byte values from ISIM AKA.
  * Returns 0 iff final REGISTER got 2xx. */
-int ua_register_stage2(const uint8_t *res, const uint8_t *ck,
-                       const uint8_t *ik);
+int ua_register_stage2(const uint8_t *res, size_t res_len,
+                       const uint8_t *ck, const uint8_t *ik);
 
 #endif /* JOAN_IMS_UA_H */

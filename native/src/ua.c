@@ -56,6 +56,18 @@ static int sip_socket_bind(void)
         int v6only = 1;
         setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
     }
+    /* Android routes per-network via fwmark rules; pin egress to the IMS
+     * PDN interface or our packets leak to the default (internet) table
+     * and the P-CSCF never answers. */
+    if (g_cfg->id.iface[0]) {
+        if (setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE,
+                       g_cfg->id.iface, strlen(g_cfg->id.iface) + 1) < 0) {
+            klog(LOG_ERR, "SO_BINDTODEVICE %.16s failed errno=%d",
+                 g_cfg->id.iface, errno);
+            close(s);
+            return -1;
+        }
+    }
     struct sockaddr_storage ss;
     memset(&ss, 0, sizeof(ss));
     if (fam == AF_INET6) {
@@ -140,7 +152,7 @@ int ua_register_stage1(char *nonce_out, size_t nonce_len)
 
     char msg[SIP_MAX_MSG];
     int n = build_register(msg, sizeof(msg), &id, &g_txn, 1, NULL,
-                           NULL, NULL, NULL);
+                           NULL, 0, NULL, NULL);
     if (n <= 0) {
         fail("build reg1", 2);
         return -2;
@@ -227,14 +239,14 @@ int ua_register_stage1(char *nonce_out, size_t nonce_len)
     return 0;
 }
 
-int ua_register_stage2(const uint8_t *res, const uint8_t *ck,
-                       const uint8_t *ik)
+int ua_register_stage2(const uint8_t *res, size_t res_len,
+                       const uint8_t *ck, const uint8_t *ik)
 {
     if (g_state != UA_STATE_CHALLENGED || !g_ch.have_nonce) {
         fail("stage2 without challenge", 20);
         return -20;
     }
-    if (!res || !ck || !ik) {
+    if (!res || (res_len != 8 && res_len != 16) || !ck || !ik) {
         fail("stage2 missing keys arg", 21);
         return -21;
     }
@@ -249,7 +261,7 @@ int ua_register_stage2(const uint8_t *res, const uint8_t *ck,
         sip_challenge_t ch_probe;
         memset(&ch_probe, 0, sizeof(ch_probe));
         build_register(probe, sizeof(probe), &id, &t, 99, NULL,
-                       NULL, NULL, NULL);
+                       NULL, 0, NULL, NULL);
         const char *m = strcasestr(probe, "Security-Client: ");
         if (!m) {
             fail("self sec-client missing", 22);
@@ -283,7 +295,7 @@ int ua_register_stage2(const uint8_t *res, const uint8_t *ck,
     sip_identity_t id = g_cfg->id;
     char msg[SIP_MAX_MSG];
     int n = build_register(msg, sizeof(msg), &id, &g_txn, 2, &g_ch,
-                           res, ck, ik);
+                           res, res_len, ck, ik);
     if (n <= 0) {
         fail("build reg2", 25);
         return -25;
@@ -313,6 +325,26 @@ int ua_register_stage2(const uint8_t *res, const uint8_t *ck,
         klog(LOG_INFO, "REGISTERED expires=%d",
              resp.expires > 0 ? resp.expires : 600000);
         return 0;
+    }
+    if (resp.status == 401) {
+        /* Surface realm/stale (carrier-level metadata, never identity or
+         * key material) so we can see whether the P-CSCF re-challenged
+         * because of a realm mismatch or a digest mismatch. */
+        const char *rp = strcasestr(rx, "realm=\"");
+        char realm[96] = "";
+        if (rp) {
+            rp += 7;
+            const char *re = strchr(rp, '"');
+            size_t rl = re ? (size_t)(re - rp) : 0;
+            if (rl >= sizeof(realm))
+                rl = sizeof(realm) - 1;
+            memcpy(realm, rp, rl);
+            realm[rl] = '\0';
+        }
+        const char *sp = strcasestr(rx, "stale=");
+        int stale = sp ? (!strncasecmp(sp + 6, "true", 4)) : -1;
+        klog(LOG_INFO, "reg2 401 realm=%s stale=%d have_www_auth=%d",
+             realm[0] ? realm : "(none)", stale, resp.have_www_auth);
     }
     snprintf(g_err, sizeof(g_err), "reg2 status %d", resp.status);
     g_state = UA_STATE_ERROR;

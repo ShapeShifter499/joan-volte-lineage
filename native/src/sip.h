@@ -18,6 +18,7 @@ typedef struct {
     char pcscf[80];
     int pcscf_port;
     char imei[24];
+    char iface[32];        /* IMS PDN netdev (e.g. rmnet_data1); optional */
     int have_id;           /* impi non-empty with '@' */
 } sip_identity_t;
 
@@ -70,13 +71,14 @@ int build_register(
         sip_txn_t *txn,
         int cseq,
         const sip_challenge_t *ch,   /* NULL => unprotected */
-        const uint8_t *res,          /* 16-byte AKA RES or NULL */
+        const uint8_t *res,          /* AKA RES (8 or 16 bytes) or NULL */
+        size_t res_len,              /* exact RES byte length */
         const uint8_t *ck,
         const uint8_t *ik);
 
 int parse_response(const char *msg, size_t len, sip_response_t *r);
 
-/* Digest response per RFC 3310 (AKAv1-MD5 password=RES). */
+/* Digest response per RFC 3310 (AKAv1-MD5 password=RES, res_len exact). */
 int aka_digest_response_hex(
         const char *username,
         const char *realm,
@@ -84,6 +86,7 @@ int aka_digest_response_hex(
         const char *uri,
         const char *nonce_b64,
         const uint8_t *res,
+        size_t res_len,
         const char *qop,             /* "auth" or NULL */
         const char *nc,
         const char *cnonce,

@@ -65,7 +65,7 @@ static void test_aka_vectors(void)
         "REGISTER",
         "sip:msg.pc.t-mobile.com",
         "dGVzdG5vbmNlMTIzNA==",
-        res,
+        res, 16,
         "auth", "00000001", "cnonce01",
         out33);
     CHECK(!strcmp(out33, "803db8645c1631ba35e82bc29c8a26c3"),
@@ -77,11 +77,26 @@ static void test_aka_vectors(void)
         "REGISTER",
         "sip:msg.pc.t-mobile.com",
         "dGVzdG5vbmNlMTIzNA==",
-        res,
+        res, 16,
         NULL, NULL, NULL,
         out33);
     CHECK(!strcmp(out33, "96dfcc2174a9ee44d9aded7697ef9340"),
           "aka digest no-qop matches pmOS ground truth");
+
+    /* 8-byte RES variant: digest must use exactly 8 bytes (no padding). */
+    uint8_t res8[8];
+    hex_decode("0011223344556677", res8, 8);
+    aka_digest_response_hex(
+        "user@msg.pc.t-mobile.com",
+        "msg.pc.t-mobile.com",
+        "REGISTER",
+        "sip:msg.pc.t-mobile.com",
+        "dGVzdG5vbmNlMTIzNA==",
+        res8, 8,
+        "auth", "00000001", "cnonce01",
+        out33);
+    CHECK(strcmp(out33, "803db8645c1631ba35e82bc29c8a26c3") != 0,
+          "aka digest 8B RES differs from 16B (no silent padding)");
 }
 
 static void test_b64(void)
@@ -143,7 +158,7 @@ static void test_build_first(void)
 
     char msg[SIP_MAX_MSG];
     int n = build_register(msg, sizeof(msg), &id, &txn, 1, NULL,
-                           NULL, NULL, NULL);
+                           NULL, 0, NULL, NULL);
     CHECK(n > 400 && n < SIP_MAX_MSG, "reg1 size sane");
     CHECK(strstr(msg,
                  "REGISTER sip:msg.pc.t-mobile.com SIP/2.0\r\n") != NULL,
@@ -180,7 +195,7 @@ static void test_build_first(void)
 
     uint8_t res[16];
     hex_decode("00112233445566778899aabbccddeeff", res, 16);
-    build_register(msg2, sizeof(msg2), &id, &txn, 2, &ch, res, res, res);
+    build_register(msg2, sizeof(msg2), &id, &txn, 2, &ch, res, 16, res, res);
     CHECK(strstr(msg2, "Security-Verify:") != NULL, "reg2 Security-Verify present");
     {
         /* mk_branch runs on every build -> txn.branch IS reg2's branch. */

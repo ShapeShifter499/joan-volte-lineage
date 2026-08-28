@@ -1,0 +1,14 @@
+# Open AP SIP UA. Domain netmgrd already has kernel xfrm (vendor policy).
+# `ims` domain cannot create netlink_xfrm (CIL append is not in the loaded policy).
+# Lives on /system: /vendor logical partition has zero free space on joan's
+# dynamic-partition layout (recovery write fails). SELinux binds by label,
+# not path — binary is chcon'd to netmgrd_exec by the installer.
+service joan-ims /system/bin/joan-ims-ua register
+    class late_start
+    user root
+    group radio inet system
+    capabilities NET_ADMIN NET_RAW NET_BIND_SERVICE
+    seclabel u:r:netmgrd:s0
+
+on property:sys.boot_completed=1
+    start joan-ims

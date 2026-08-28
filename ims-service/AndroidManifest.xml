@@ -11,10 +11,29 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CONNECTIVITY_USE_RESTRICTED_NETWORKS" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <application
+        android:name=".JoanApp"
         android:label="Joan IMS"
         android:directBootAware="true"
         android:persistent="true">
+        <provider
+            android:name=".JoanStateProvider"
+            android:authorities="org.joan.ims.state"
+            android:directBootAware="true"
+            android:exported="true" />
+        <receiver
+            android:name=".JoanBootReceiver"
+            android:directBootAware="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.AIRPLANE_MODE" />
+            </intent-filter>
+        </receiver>
         <service
             android:name=".JoanImsService"
             android:exported="true"

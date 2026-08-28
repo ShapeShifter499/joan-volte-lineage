@@ -9,7 +9,8 @@
 void cfg_init(ua_config_t *c)
 {
     memset(c, 0, sizeof(*c));
-    snprintf(c->id.realm, sizeof(c->id.realm), "%s", "msg.pc.t-mobile.com");
+    /* No carrier realm default: the realm always comes from the SIM
+     * (ISIM domain / IMPI suffix) via the ID ctl command. */
     c->id.local_port = 5060;
     c->id.pcscf_port = 5060;
     joan_sec_params_default(&c->mine);
@@ -82,6 +83,10 @@ int cfg_apply_line(ua_config_t *c, const char *line)
         c->id.pcscf_port = atoi(val);
     } else if (!strcmp(key, "IMEI")) {
         snprintf(c->id.imei, sizeof(c->id.imei), "%.15s", val);
+    } else if (!strcmp(key, "IFACE")) {
+        /* Android per-network routing: we must pin egress to the IMS PDN
+         * interface (e.g. rmnet_data1) or packets leak to the main table. */
+        snprintf(c->id.iface, sizeof(c->id.iface), "%.31s", val);
     } else {
         return -2;
     }

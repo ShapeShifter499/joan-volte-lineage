@@ -90,19 +90,22 @@ int aka_digest_response_hex(
         const char *uri,
         const char *nonce_b64,
         const uint8_t *res,
+        size_t res_len,
         const char *qop,
         const char *nc,
         const char *cnonce,
         char *out_hex /* 33 */)
 {
-    /* RFC 3310 AKAv1-MD5: password = raw RES bytes. */
+    /* RFC 3310 AKAv1-MD5: password = raw RES bytes, exactly nres long
+     * (8 for a 64-bit RES, 16 for 128-bit — zero padding would corrupt
+     * the digest). */
     md5_ctx c1;
     md5_init(&c1);
     md5_update(&c1, username, strlen(username));
     md5_update(&c1, ":", 1);
     md5_update(&c1, realm, strlen(realm));
     md5_update(&c1, ":", 1);
-    md5_update(&c1, res, 16);
+    md5_update(&c1, res, res_len);
     uint8_t ha1[16];
     md5_final(&c1, ha1);
 
@@ -173,6 +176,7 @@ int build_register(
         int cseq,
         const sip_challenge_t *ch,
         const uint8_t *res,
+        size_t res_len,
         const uint8_t *ck,
         const uint8_t *ik)
 {
@@ -199,7 +203,8 @@ int build_register(
         char resp_hex[33];
         aka_digest_response_hex(
             id->impi, id->realm, "REGISTER", request_uri,
-            ch->nonce_b64, res, "auth", "00000001", "cnonce01", resp_hex);
+            ch->nonce_b64, res, res_len,
+            "auth", "00000001", "cnonce01", resp_hex);
         snprintf(auth_line, sizeof(auth_line),
                  "Digest username=\"%s\", realm=\"%s\", nonce=\"%s\", "
                  "uri=\"%s\", response=\"%s\", algorithm=%s, "

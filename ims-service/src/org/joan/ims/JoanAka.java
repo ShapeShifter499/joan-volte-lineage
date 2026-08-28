@@ -19,48 +19,69 @@ import java.util.Locale;
 final class JoanAka {
     private static final String TAG = "JoanIms";
 
+    /** ISIM AID used by pmOS on this modem (proven with QMI UIM). */
+    private static final String ISIM_AID = "A0000000871004FFFFFFFF8907030000";
+
     private JoanAka() {}
 
     /** Full registration cycle. Returns true iff final state registered. */
     static boolean registerCycle(Context ctx, String impi, String impu,
                                  String domain, String imei,
                                  String localIp, int localPort,
-                                 String pcscf, int pcscfPort) {
+                                 String pcscf, int pcscfPort,
+                                 String iface) {
+        JoanTrace.akaStage("push ID");
         if (!pushId(impi, impu, domain, imei)) {
+            JoanTrace.akaStage("ID failed");
             return false;
         }
-        if (!pushNet(localIp, localPort, pcscf, pcscfPort)) {
+        JoanTrace.akaStage("push NET");
+        if (!pushNet(localIp, localPort, pcscf, pcscfPort, iface)) {
+            JoanTrace.akaStage("NET failed");
             return false;
         }
+        JoanTrace.akaStage("REG1 send");
         String r1 = JoanCtl.txn("REG1");
         if (r1 == null || !r1.startsWith("CHALLENGE ")) {
+            JoanTrace.akaStage("REG1 failed");
             Log.w(TAG, "reg1 no challenge");
             return false;
         }
+        JoanTrace.akaStage("REG1 challenged");
         String nonce = r1.substring("CHALLENGE ".length()).trim();
         if (nonce.isEmpty()) {
             Log.w(TAG, "reg1 empty nonce");
             return false;
         }
 
+        JoanTrace.akaStage("AKA request");
         String authHex = runIccAuth(ctx, nonce);
         if (authHex == null) {
+            JoanTrace.akaStage("AKA unavailable");
             Log.e(TAG, "icc auth unavailable");
             return false;
         }
         // Response is "RES=... CK=... IK=..." hex triple (framework format).
+        JoanTrace.akaStage("AKA parse");
         String[] parts = parseAuthResponse(authHex);
         if (parts == null) {
+            JoanTrace.akaStage("AKA parse failed");
             Log.e(TAG, "icc auth parse failed");
             return false;
         }
+        JoanTrace.akaStage("REG2 send");
         String r2 = JoanCtl.txn("REG2 " + parts[0] + " " + parts[1]
                 + " " + parts[2]);
         if (r2 == null || !r2.startsWith("STATE")) {
+            JoanTrace.akaStage("REG2 failed");
+            // Reply text is an error code, never key material.
             Log.w(TAG, "reg2 not registered: "
                     + (r2 == null ? "timeout" : r2));
+            JoanTrace.note("reg2 reply: "
+                    + (r2 == null ? "null" : r2));
             return false;
         }
+        JoanTrace.akaStage("registered");
         Log.i(TAG, "IMS registered via native UA");
         return true;
     }
@@ -82,10 +103,12 @@ final class JoanAka {
     }
 
     private static boolean pushNet(String localIp, int localPort,
-                                   String pcscf, int pcscfPort) {
+                                   String pcscf, int pcscfPort,
+                                   String iface) {
         String r = JoanCtl.txn(String.format(
-                "NET %s %d %s %d",
-                safe(localIp), localPort, safe(pcscf), pcscfPort));
+                "NET %s %d %s %d %s",
+                safe(localIp), localPort, safe(pcscf), pcscfPort,
+                safe(iface)));
         return r != null && r.startsWith("OK");
     }
 
@@ -96,6 +119,73 @@ final class JoanAka {
      *   2. getIccAuthentication with 3GPP AKA payload
      * Returns raw response string from framework or null.
      */
+    static String runAkaProbe(Context ctx) {
+        final TelephonyManager tm0 = ctx.getSystemService(TelephonyManager.class);
+        if (tm0 == null) {
+            return "no telephony manager";
+        }
+        int sub = SubscriptionManager.getDefaultDataSubscriptionId();
+        if (sub < 0) {
+            sub = SubscriptionManager.getDefaultSubscriptionId();
+        }
+        final TelephonyManager tm = (sub >= 0)
+                ? tm0.createForSubscriptionId(sub) : tm0;
+
+        // Fixed non-secret test vector: RAND = 00..0F, AUTN = 10..1F.
+        // A valid AUTHENTICATE APDU answers with a DB success or an AUTN
+        // security error — never 6700 "bad P3". Report shape only.
+        final byte[] randAutn = new byte[32];
+        for (int i = 0; i < 16; i++) {
+            randAutn[i] = (byte) i;
+            randAutn[i + 16] = (byte) (0x10 + i);
+        }
+        try {
+            android.telephony.IccOpenLogicalChannelResponse r =
+                    tm.iccOpenLogicalChannel(ISIM_AID);
+            if (r == null) {
+                return "open: null";
+            }
+            int ch = r.getChannel();
+            if (ch <= 0) {
+                return "open: status " + r.getStatus();
+            }
+            try {
+                StringBuilder data = new StringBuilder("10");
+                data.append(hex(randAutn, 0, 16));
+                data.append("10");
+                data.append(hex(randAutn, 16, 16));
+                String resp = tm.iccTransmitApduLogicalChannel(
+                        ch, 0, 0x88, 0, 0x81, 0x22, data.toString());
+                if (resp == null) {
+                    return "apdu: null";
+                }
+                if (resp.length() < 4) {
+                    return "apdu: short " + resp;
+                }
+                String sw = resp.substring(resp.length() - 4);
+                String body = resp.substring(0, resp.length() - 4);
+                String tag = body.isEmpty() ? "-" : body.substring(0, 2);
+                if (sw.startsWith("61")) {
+                    String get = tm.iccTransmitApduLogicalChannel(
+                            ch, 0, 0xC0, 0, 0,
+                            Integer.parseInt(sw.substring(2), 16), "");
+                    if (get != null && get.length() >= 4) {
+                        sw = get.substring(get.length() - 4);
+                        body = get.substring(0, get.length() - 4);
+                        tag = body.isEmpty() ? "-" : body.substring(0, 2);
+                    }
+                }
+                return "apdu sw=" + sw + " tag=" + tag
+                        + " bodylen=" + body.length() / 2;
+            } finally {
+                tm.iccCloseLogicalChannel(ch);
+            }
+        } catch (Exception e) {
+            Throwable c = e.getCause() != null ? e.getCause() : e;
+            return "apdu err " + c.getClass().getSimpleName();
+        }
+    }
+
     static String runIccAuth(Context ctx, String nonceB64) {
         TelephonyManager tm0 = ctx.getSystemService(TelephonyManager.class);
         if (tm0 == null) {
@@ -108,44 +198,187 @@ final class JoanAka {
         TelephonyManager tm = (sub >= 0)
                 ? tm0.createForSubscriptionId(sub) : tm0;
 
-        // Path used in prior LOS experiments: TM.getIccAuthentication
-        // (appType, authType, base64(RAND|AUTN)). Constants differ across
-        // Android versions, so probe both app types (USIM=0/ISIM=1) and
-        // both auth types (EAP-AKA=1 / 3GPP AKA variants) until one
-        // returns data. Payload per 3GPP TS 31.102 7.1.2.
-        for (int appType = 0; appType <= 1; appType++) {
-            for (int authType = 0; authType <= 1; authType++) {
-                String r = iccAuthOnce(tm, appType, authType, nonceB64);
-                if (r != null) {
-                    Log.i(TAG, "icc auth ok app=" + appType
-                            + " type=" + authType);
-                    return r;
-                }
-            }
+        // Primary: raw AUTHENTICATE APDU on the ISIM logical channel. This is
+        // the exact call pmOS proved on this modem (TS 31.102 §7.1.2.1):
+        //   00 88 00 81 22 | 10 RAND[16] 10 AUTN[16]
+        // and is what this card accepts. getIccAuthentication(EAP-AKA) is
+        // rejected by qcril's UIM layer with 6700 "incorrect parameter P3".
+        byte[] nonceRaw = b64(nonceB64);
+        if (nonceRaw == null || nonceRaw.length < 32) {
+            return null;
         }
-        return null;
+        // channel=0: apduAuthenticate opens a fresh logical channel to the
+        // ISIM AID, runs AUTHENTICATE, and closes it. (A literal channel
+        // number here would transmit on an unopened channel — bug fixed.)
+        String apduAuth = apduAuthenticate(tm, nonceRaw, 0, 0);
+        if (apduAuth != null) {
+            return apduAuth;
+        }
+
+        // Fallback: TelephonyManager.getIccAuthentication with the correct
+        // TLV (both tags 0x10 per TS 31.102), for devices whose modem path
+        // accepts it. Kept after the proven APDU route.
+        return runIccAuthViaGet(tm, nonceRaw);
     }
 
-    private static String iccAuthOnce(TelephonyManager tm, int appType,
-                                      int authType, String nonceB64) {
+    /** AUTHENTICATE over a logical channel; returns "RES=.. CK=.. IK=.." */
+    private static String apduAuthenticate(TelephonyManager tm, byte[] randAutn,
+                                           int off, int channel) {
         try {
-            // GBA: RAND + AUTN concatenated then base64:
-            // RAND = first half of nonce? No — AKA nonce = base64(RAND|AUTN).
-            byte[] nonceRaw = b64(nonceB64);
-            if (nonceRaw == null || nonceRaw.length < 32) {
+            int ch = channel;
+            boolean owned = false;
+            if (ch <= 0) {
+                android.telephony.IccOpenLogicalChannelResponse r =
+                        tm.iccOpenLogicalChannel(ISIM_AID);
+                if (r == null || r.getChannel() <= 0) {
+                    JoanTrace.note("apdu: open failed status="
+                            + (r == null ? "null" : r.getStatus()));
+                    return null;
+                }
+                ch = r.getChannel();
+                owned = true;
+            }
+            try {
+                StringBuilder data = new StringBuilder("10");
+                data.append(hex(randAutn, off, 16));
+                data.append("10");
+                data.append(hex(randAutn, off + 16, 16));
+                String resp = tm.iccTransmitApduLogicalChannel(
+                        ch, 0, 0x88, 0, 0x81, 0x22, data.toString());
+                if (resp == null || resp.length() < 4) {
+                    JoanTrace.note("apdu: resp short/null len="
+                            + (resp == null ? -1 : resp.length()));
+                    return null;
+                }
+                // 61 XX = more data pending: GET RESPONSE.
+                String sw = resp.substring(resp.length() - 4);
+                if (sw.startsWith("61")) {
+                    String get = tm.iccTransmitApduLogicalChannel(
+                            ch, 0, 0xC0, 0, 0,
+                            Integer.parseInt(sw.substring(2), 16), "");
+                    if (get != null && get.length() >= 4) {
+                        resp = get;
+                    }
+                }
+                // Shape-only trace (lengths and SW), never key material.
+                String swf = resp.substring(resp.length() - 4);
+                StringBuilder shape = new StringBuilder();
+                byte[] dd = hexBytes(resp);
+                for (int k = 0; k < Math.min(8, dd.length); k++) {
+                    shape.append(String.format(Locale.ROOT, "%02x", dd[k]));
+                }
+                JoanTrace.note("apdu: len=" + resp.length()
+                        + " sw=" + swf + " head=" + shape);
+                return parseApduAka(resp);
+            } finally {
+                if (owned) {
+                    tm.iccCloseLogicalChannel(ch);
+                }
+            }
+        } catch (Exception e) {
+            JoanTrace.note("apdu aka failed: " + e.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    /**
+     * Parse AUTHENTICATE response per TS 31.102 §7.1.2.1: on success the
+     * UICC returns "DB <len> [81 len RES] [82 10 CK] [83 10 IK]".
+     * Sync response status words are already stripped by the caller.
+     * Never logs key material — only shape metadata.
+     */
+    private static String parseApduAka(String respHex) {
+        byte[] d;
+        try {
+            d = hexBytes(respHex);
+        } catch (Exception e) {
+            return null;
+        }
+        if (d.length < 2 || (d[0] & 0xff) != 0xDB) {
+            JoanTrace.note("apdu: not DB tag len=" + d.length
+                    + " b0=" + (d.length > 0
+                    ? String.format(Locale.ROOT, "%02x", d[0]) : "-"));
+            return null;
+        }
+        try {
+            // This card (and pmOS's proven parse in joan_ims_live.py) returns
+            // the plain DB layout, NOT inner 81/82/83 tags:
+            //   DB <nres> <res[nres]> <nck> <ck[nck]> <nik> <ik[nik]>
+            // e.g. DB 08 <res 8B> 10 <ck 16B> 10 <ik 16B> (44 bytes + SW).
+            int i = 1;
+            int nres = d[i++] & 0xff;
+            if (i + nres > d.length) {
+                JoanTrace.note("apdu: res overflow nres=" + nres);
                 return null;
             }
-            byte[] rand = new byte[16];
-            byte[] autn = new byte[16];
-            System.arraycopy(nonceRaw, 0, rand, 0, 16);
-            System.arraycopy(nonceRaw, 16, autn, 0, 16);
-            String payload = b64e(concat(rand, autn));
+            byte[] res = java.util.Arrays.copyOfRange(d, i, i + nres);
+            i += nres;
+            if (i >= d.length) {
+                JoanTrace.note("apdu: truncated after res");
+                return null;
+            }
+            int nck = d[i++] & 0xff;
+            if (i + nck > d.length) {
+                JoanTrace.note("apdu: ck overflow nck=" + nck);
+                return null;
+            }
+            byte[] ck = java.util.Arrays.copyOfRange(d, i, i + nck);
+            i += nck;
+            if (i >= d.length) {
+                JoanTrace.note("apdu: truncated after ck");
+                return null;
+            }
+            int nik = d[i++] & 0xff;
+            if (i + nik > d.length) {
+                JoanTrace.note("apdu: ik overflow nik=" + nik);
+                return null;
+            }
+            byte[] ik = java.util.Arrays.copyOfRange(d, i, i + nik);
+            if (res.length < 4 || res.length > 16
+                    || ck.length != 16 || ik.length != 16) {
+                JoanTrace.note("apdu: bad lens res=" + res.length
+                        + " ck=" + ck.length + " ik=" + ik.length);
+                return null;
+            }
+            return "RES=" + hex(res, 0, res.length)
+                    + " CK=" + hex(ck, 0, 16)
+                    + " IK=" + hex(ik, 0, 16);
+        } catch (Exception e) {
+            JoanTrace.note("apdu: parse exception");
+            return null;
+        }
+    }
 
+    private static byte[] hexBytes(String s) {
+        int n = s.length() / 2;
+        byte[] out = new byte[n];
+        for (int i = 0; i < n; i++) {
+            out[i] = (byte) Integer.parseInt(s.substring(i * 2, i * 2 + 2),
+                    16);
+        }
+        return out;
+    }
+
+    /** Legacy path kept as fallback; corrected TLV tags (both 0x10). */
+    private static String runIccAuthViaGet(TelephonyManager tm,
+                                           byte[] nonceRaw) {
+        try {
+            byte[] tlv34 = new byte[34];
+            tlv34[0] = 0x10;
+            System.arraycopy(nonceRaw, 0, tlv34, 1, 16);
+            tlv34[17] = 0x10;
+            System.arraycopy(nonceRaw, 16, tlv34, 18, 16);
+            String b64 = android.util.Base64.encodeToString(tlv34,
+                    android.util.Base64.NO_WRAP);
             Method m = TelephonyManager.class.getMethod(
                     "getIccAuthentication", int.class, int.class,
                     String.class);
-            Object r = m.invoke(tm, appType, authType, payload);
-            return r == null ? null : String.valueOf(r);
+            Object r = m.invoke(tm, TelephonyManager.APPTYPE_ISIM,
+                    TelephonyManager.AUTHTYPE_EAP_AKA, b64);
+            if (r == null) {
+                return null;
+            }
+            return String.valueOf(r);
         } catch (Exception e) {
             return null;
         }
@@ -172,13 +405,18 @@ final class JoanAka {
                     else if (k.startsWith("IK=")) ik = k.substring(3);
                 }
                 if (res != null && ck != null && ik != null
-                        && res.length() >= 32
+                        && res.length() >= 16
                         && ck.length() >= 32 && ik.length() >= 32) {
                     return new String[]{
-                            lower(res.substring(0, 32)),
+                            lower(res),
                             lower(ck.substring(0, 32)),
                             lower(ik.substring(0, 32))
                     };
+                } else {
+                    JoanTrace.note("aka resp lens res="
+                            + (res == null ? -1 : res.length()) + " ck="
+                            + (ck == null ? -1 : ck.length()) + " ik="
+                            + (ik == null ? -1 : ik.length()));
                 }
             } catch (Exception e) {
                 // fall through

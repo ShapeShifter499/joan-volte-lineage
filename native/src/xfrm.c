@@ -26,7 +26,7 @@ static int g_nl = -1;
 static uint32_t g_seq;
 
 typedef struct {
-    const char *kname;    /* kernel algo name */
+    char kname[32];       /* kernel algo name (array: snprintf target) */
     uint8_t key[32];
     unsigned key_bits;
 } alg_key_t;

@@ -21,7 +21,16 @@ static const char *level_tag(int level)
 
 void klog_raw(const char *line)
 {
+    /* stderr is /dev/null under init; mirror to a vendor-data log file so
+     * bring-up debugging can read daemon klog lines without logd access. */
     dprintf(2, "joan-ims: %s\n", line);
+    int fd = open("/data/misc/joan-ims/ua.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0)
+        fd = open("/data/local/tmp/joan-ua.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd >= 0) {
+        dprintf(fd, "joan-ims: %s\n", line);
+        close(fd);
+    }
 }
 
 void klog(int level, const char *fmt, ...)
