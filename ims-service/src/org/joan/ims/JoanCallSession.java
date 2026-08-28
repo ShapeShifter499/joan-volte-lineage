@@ -56,6 +56,7 @@ public class JoanCallSession extends ImsCallSessionImplBase {
     @Override
     public void start(String callee, ImsCallProfile p) {
         Log.i(TAG, "call session start");
+        JoanTrace.note("call session start");
         state = STATE_ESTABLISHING;
         ImsCallProfile used = p != null ? p : profile;
         notifyInitiating(used);
@@ -150,7 +151,10 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             return;
         }
         try {
-            l.callSessionProgressing(new ImsStreamMediaProfile());
+            l.callSessionProgressing(new ImsStreamMediaProfile(
+                    ImsStreamMediaProfile.AUDIO_QUALITY_NONE,
+                    ImsStreamMediaProfile.DIRECTION_SEND_RECEIVE,
+                    0, ImsStreamMediaProfile.DIRECTION_INVALID));
         } catch (Throwable t) {
             Log.w(TAG, "progressing notify " + t.getClass().getSimpleName());
         }
@@ -163,9 +167,9 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             return;
         }
         try {
-            l.callSessionStarted(p);
+            l.callSessionInitiated(p);
         } catch (Throwable t) {
-            Log.w(TAG, "started notify " + t.getClass().getSimpleName());
+            Log.w(TAG, "initiated notify " + t.getClass().getSimpleName());
         }
     }
 
@@ -191,7 +195,7 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             return;
         }
         try {
-            l.callSessionStartFailed(new ImsReasonInfo(
+            l.callSessionInitiatingFailed(new ImsReasonInfo(
                     ImsReasonInfo.CODE_UNSPECIFIED, -1, why));
         } catch (Throwable t) {
             Log.w(TAG, "fail notify " + t.getClass().getSimpleName());

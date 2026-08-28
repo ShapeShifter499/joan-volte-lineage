@@ -9,7 +9,9 @@ import java.util.concurrent.Executor;
 
 public class ImsCallSessionImplBase {
     public static final int STATE_IDLE = 0;
-    public static final int STATE_ESTABLISHING = 1;
+    public static final int STATE_INITIATED = 1;
+    public static final int STATE_NEGOTIATING = 2;
+    public static final int STATE_ESTABLISHING = 3;
     public static final int STATE_ESTABLISHED = 4;
     public static final int STATE_TERMINATED = 8;
 
@@ -19,7 +21,7 @@ public class ImsCallSessionImplBase {
 
     public void setListener(ImsCallSessionListener listener) {}
 
-    public void setDefaultExecutor(java.util.concurrent.Executor executor) {}
+    public void setDefaultExecutor(Executor executor) {}
 
     public String getCallId() { return null; }
 

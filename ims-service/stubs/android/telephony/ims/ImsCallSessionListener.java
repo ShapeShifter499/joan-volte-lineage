@@ -4,7 +4,8 @@ package android.telephony.ims;
 public class ImsCallSessionListener {
     public void callSessionInitiating(ImsCallProfile profile) {}
     public void callSessionProgressing(ImsStreamMediaProfile profile) {}
-    public void callSessionStarted(ImsCallProfile profile) {}
-    public void callSessionStartFailed(ImsReasonInfo reason) {}
+    /* AOSP name for ACTIVE. CAF's older IImsCallSession used callSessionStarted. */
+    public void callSessionInitiated(ImsCallProfile profile) {}
+    public void callSessionInitiatingFailed(ImsReasonInfo reason) {}
     public void callSessionTerminated(ImsReasonInfo reason) {}
 }
