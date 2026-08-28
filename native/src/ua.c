@@ -18,6 +18,7 @@
 
 static ua_config_t *g_cfg;
 static int g_port_s_fd = -1;
+static int g_port_s_bound = -1;
 static ua_state_t g_state;
 static char g_err[160];
 
@@ -97,8 +98,51 @@ static int sip_socket_bind(int local_port)
     return s;
 }
 
-static int sip_send_recv(int s, int dport, const char *pkt, size_t len,
-                         char *rx, size_t rxlen, int timeout_ms)
+static int sip_sendto(int s, int dport, const char *pkt, size_t len);
+
+/* Send on `s`, then wait for a reply on EITHER `s` or `alt`.
+ *
+ * The P-CSCF answers a protected REGISTER on the UE's protected SERVER
+ * port, not the client port the request went out from. Measured on joan:
+ * the inbound SA for pcscf-port-c -> ue-port-s counted a decrypted 1217
+ * byte packet while the daemon sat blocked on the port-c socket and timed
+ * out. Waiting on only the sending socket loses every response.
+ */
+static int sip_send_recv_dual(int s, int alt, int dport,
+                              const char *pkt, size_t len,
+                              char *rx, size_t rxlen, int timeout_ms)
+{
+    if (sip_sendto(s, dport, pkt, len) < 0)
+        return -1;
+
+    struct timeval tv;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(s, &rfds);
+    int maxfd = s;
+    if (alt >= 0) {
+        FD_SET(alt, &rfds);
+        if (alt > maxfd)
+            maxfd = alt;
+    }
+    int rc = select(maxfd + 1, &rfds, NULL, NULL, &tv);
+    if (rc <= 0)
+        return -1;
+
+    int from = FD_ISSET(s, &rfds) ? s : alt;
+    ssize_t r = recv(from, rx, rxlen - 1, 0);
+    if (r <= 0)
+        return -1;
+    rx[r] = '\0';
+    klog(LOG_INFO, "reply arrived on %s port socket",
+         from == s ? "client" : "server");
+    return (int)r;
+}
+
+static int sip_sendto(int s, int dport, const char *pkt, size_t len)
 {
     struct sockaddr_storage dst;
     memset(&dst, 0, sizeof(dst));
@@ -125,15 +169,7 @@ static int sip_send_recv(int s, int dport, const char *pkt, size_t len,
              errno, w, len);
         return -1;
     }
-    struct timeval tv;
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    ssize_t r = recv(s, rx, rxlen - 1, 0);
-    if (r <= 0)
-        return -1;
-    rx[r] = '\0';
-    return (int)r;
+    return 0;
 }
 
 int ua_register_stage1(char *nonce_out, size_t nonce_len)
@@ -167,7 +203,8 @@ int ua_register_stage1(char *nonce_out, size_t nonce_len)
         return -3;
     }
     char rx[4096];
-    int r = sip_send_recv(s, g_cfg->id.pcscf_port, msg, (size_t)n, rx, sizeof(rx), 8000);
+    int r = sip_send_recv_dual(s, -1, g_cfg->id.pcscf_port, msg,
+                               (size_t)n, rx, sizeof(rx), 8000);
     close(s);
     if (r <= 0) {
         fail("reg1 no reply", 4);
@@ -310,13 +347,22 @@ int ua_register_stage2(const uint8_t *res, size_t res_len,
      * port-c to send from, port-s to receive requests on. We only ever
      * bound port-c, so the UE was never reachable on the server port the
      * Security-Client advertised. Hold it for the life of the process. */
+    /* The security parameters are regenerated per registration attempt, so
+     * port-s changes each cycle; a socket bound once holds a stale port and
+     * the P-CSCF's reply lands on nothing. Rebind whenever it moves. */
+    if (g_port_s_fd >= 0 && g_port_s_bound != (int)ue_sec.port_s) {
+        close(g_port_s_fd);
+        g_port_s_fd = -1;
+    }
     if (g_port_s_fd < 0) {
         g_port_s_fd = sip_socket_bind((int)ue_sec.port_s);
-        if (g_port_s_fd < 0)
+        if (g_port_s_fd < 0) {
             klog(LOG_WARN, "could not hold protected server port %u",
                  ue_sec.port_s);
-        else
+        } else {
+            g_port_s_bound = (int)ue_sec.port_s;
             klog(LOG_INFO, "holding protected server port %u", ue_sec.port_s);
+        }
     }
 
     /* Give the P-CSCF a moment to install its own SAs before the first
@@ -360,8 +406,8 @@ int ua_register_stage2(const uint8_t *res, size_t res_len,
     klog(LOG_INFO, "reg2 sending %u -> %u (protected)",
          ue_sec.port_c, pcscf_sec.port_s);
     char rx[4096];
-    int r = sip_send_recv(s, (int)pcscf_sec.port_s, msg, (size_t)n,
-                          rx, sizeof(rx), 8000);
+    int r = sip_send_recv_dual(s, g_port_s_fd, (int)pcscf_sec.port_s,
+                               msg, (size_t)n, rx, sizeof(rx), 8000);
     close(s);
     if (r <= 0) {
         fail("reg2 no reply", 27);

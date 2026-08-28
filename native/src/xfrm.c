@@ -163,7 +163,7 @@ struct algo_wire {
 
 static int sa_add_once(
         const char *src, const char *dst,
-        uint32_t spi, int fam,
+        uint32_t spi, int fam, uint32_t reqid,
         const alg_key_t *auth, const alg_key_t *enc)
 {
     char buf[1024];
@@ -180,6 +180,17 @@ static int sa_add_once(
         return -EINVAL;
     su->id.proto = IPPROTO_ESP;
     su->id.spi = (uint32_t)htonl(spi);
+    /* Bind this SA to one policy.
+     *
+     * Four SAs share the same address pair and the SA selector is
+     * wildcard (ip xfrm state shows "sel src ::/0 dst ::/0"), so with
+     * reqid 0 on both the states and the policy templates the kernel has
+     * nothing to distinguish them by: an outbound flow can resolve to
+     * either of the two ue->pcscf states, i.e. it can encrypt REG2 under
+     * the P-CSCF's spi-c when RFC 3329 requires spi-s. The P-CSCF then
+     * cannot match the SA and drops the packet in silence, which is
+     * exactly the symptom. reqid pairs each policy with its state. */
+    su->reqid = reqid;
     /* Lifetimes MUST be set explicitly.
      *
      * This message is memset to zero, and a zeroed xfrm_lifetime_cfg does
@@ -197,7 +208,6 @@ static int sa_add_once(
     su->mode = XFRM_MODE_TRANSPORT;
     su->replay_window = 0;
     su->flags = 0;
-    su->reqid = 0;
 
     struct algo_wire aw;
     memset(&aw, 0, sizeof(aw));
@@ -238,13 +248,13 @@ static int sa_del(const char *src, const char *dst,
 }
 
 static int sa_install(const char *src, const char *dst,
-                      uint32_t spi, int fam,
+                      uint32_t spi, int fam, uint32_t reqid,
                       const alg_key_t *auth, const alg_key_t *enc)
 {
-    int rc = sa_add_once(src, dst, spi, fam, auth, enc);
+    int rc = sa_add_once(src, dst, spi, fam, reqid, auth, enc);
     if (rc == -EEXIST) {
         sa_del(src, dst, spi, fam);
-        rc = sa_add_once(src, dst, spi, fam, auth, enc);
+        rc = sa_add_once(src, dst, spi, fam, reqid, auth, enc);
     }
     return rc;
 }
@@ -252,7 +262,7 @@ static int sa_install(const char *src, const char *dst,
 static int pol_add_once(
         const char *src, const char *dst,
         uint16_t sport, uint16_t dport,
-        uint8_t proto, int fam, uint8_t dir)
+        uint8_t proto, int fam, uint8_t dir, uint32_t reqid)
 {
     char buf[768];
     memset(buf, 0, sizeof(buf));
@@ -292,6 +302,7 @@ static int pol_add_once(
     tpl.id.proto = IPPROTO_ESP;
     tpl.family = (uint16_t)fam;
     tpl.mode = XFRM_MODE_TRANSPORT;
+    tpl.reqid = reqid;   /* pairs with the state installed above */
     tpl.share = XFRM_SHARE_ANY;
     tpl.optional = 0;
     rta_append(n, XFRMA_TMPL, &tpl, sizeof(tpl));
@@ -391,8 +402,9 @@ int xfrm_install(
     int bad_pol = 0;
     for (int i = 0; i < 4; i++) {
         int fam = AF_INET6;
+        uint32_t reqid = (uint32_t)(i + 1);
         int sar = sa_install(rows[i].src, rows[i].dst, rows[i].spi,
-                             fam, &auth, &enc);
+                             fam, reqid, &auth, &enc);
         if (st)
             st->sa_ok[i] = (sar == 0);
         if (sar != 0) {
@@ -400,11 +412,33 @@ int xfrm_install(
             rc = -3;
             continue;
         }
+        /* Inbound policies are omitted deliberately.
+         *
+         * The SA decrypts the P-CSCF's reply correctly (the inbound state
+         * counts it), and then an inbound policy re-checks the decrypted
+         * packet against its template and drops it: XfrmInTmplMismatch
+         * climbed in step with every reply while userspace saw nothing.
+         * Linux accepts a decrypted packet when no inbound policy demands
+         * otherwise, so requiring one here buys nothing and costs us the
+         * response. Outbound policies still force our own traffic into
+         * the SA, which is what the P-CSCF actually checks. */
+        if (rows[i].dir != XFRM_POLICY_OUT)
+            continue;
         static const uint8_t protos[2] = { IPPROTO_UDP, IPPROTO_TCP };
         for (int pt = 0; pt < 2; pt++) {
+            /* reqid pins SA selection, which outbound needs: two
+             * ue->pcscf states share an address pair and the wildcard SA
+             * selector cannot tell them apart. Inbound is the opposite --
+             * the kernel picks the SA by the packet's SPI and then checks
+             * it against the policy template, so a pinned reqid there just
+             * rejects a correctly decrypted reply (XfrmInTmplMismatch, seen
+             * on device while the inbound SA counted the P-CSCF's answer).
+             * Pin outbound, leave inbound permissive. */
+            uint32_t pol_reqid =
+                (rows[i].dir == XFRM_POLICY_OUT) ? reqid : 0;
             int pr = pol_add_once(rows[i].src, rows[i].dst,
                                   rows[i].sport, rows[i].dport,
-                                  protos[pt], fam, rows[i].dir);
+                                  protos[pt], fam, rows[i].dir, pol_reqid);
             if (pr != 0 && pr != -EEXIST) {
                 klog(LOG_ERR, "POL[%d,%s,%s] failed rc=%d",
                      i, pt ? "tcp" : "udp",
