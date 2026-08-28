@@ -27,6 +27,7 @@ static struct {
     char service_route[512];
     char sec_verify[512];
     int  port_c;          /* our protected client port */
+    int  port_s;          /* our protected server port (inbound requests) */
     int  pcscf_port_s;    /* where protected requests go */
     char public_id[300];   /* IMPU from P-Associated-URI; NEVER the IMPI */
     int  valid;
@@ -418,6 +419,7 @@ int ua_register_stage2(const uint8_t *res, size_t res_len,
      */
     sip_identity_t id = g_cfg->id;
     id.local_port = (int)ue_sec.port_c;
+    id.contact_port = (int)ue_sec.port_s;
     id.pcscf_port = (int)pcscf_sec.port_s;
     char msg[SIP_MAX_MSG];
     int n = build_register(msg, sizeof(msg), &id, &g_txn, 2, &g_ch,
@@ -458,6 +460,7 @@ int ua_register_stage2(const uint8_t *res, size_t res_len,
         snprintf(g_reg.sec_verify, sizeof(g_reg.sec_verify), "%s",
                  g_ch.sec_server);
         g_reg.port_c = (int)ue_sec.port_c;
+        g_reg.port_s = (int)ue_sec.port_s;
         g_reg.pcscf_port_s = (int)pcscf_sec.port_s;
         /* Take the public identity from P-Associated-URI.
          *
@@ -565,6 +568,7 @@ int ua_call_invite(const char *dest)
 
     sip_identity_t id = g_cfg->id;
     id.local_port = g_reg.port_c;
+    id.contact_port = g_reg.port_s;
     id.pcscf_port = g_reg.pcscf_port_s;
     snprintf(id.impu, sizeof(id.impu), "%s", g_reg.public_id);
 
@@ -717,4 +721,101 @@ int ua_call_hangup(void)
     close(s);
     g_call.active = 0;
     return rc;
+}
+
+
+/* ---- Inbound (MT) calls ------------------------------------------------ */
+
+int ua_inbound_fd(void)
+{
+    return (g_state == UA_STATE_REGISTERED) ? g_port_s_fd : -1;
+}
+
+static void inbound_send(const struct sockaddr_storage *peer, socklen_t plen,
+                         const char *pkt, size_t len)
+{
+    sendto(g_port_s_fd, pkt, len, 0, (const struct sockaddr *)peer, plen);
+}
+
+void ua_handle_inbound(void)
+{
+    char rx[4096];
+    struct sockaddr_storage peer;
+    socklen_t plen = sizeof(peer);
+    ssize_t r = recvfrom(g_port_s_fd, rx, sizeof(rx) - 1, 0,
+                         (struct sockaddr *)&peer, &plen);
+    if (r <= 0)
+        return;
+    rx[r] = '\0';
+
+    char method[16];
+    if (sip_request_method(rx, method, sizeof(method)) != 0)
+        return;                         /* a response; call paths read those */
+
+    sip_identity_t id = g_cfg->id;
+    id.local_port = g_reg.port_c;
+    id.contact_port = g_reg.port_s;
+    id.pcscf_port = g_reg.pcscf_port_s;
+    snprintf(id.impu, sizeof(id.impu), "%s", g_reg.public_id);
+
+    char resp[SIP_MAX_MSG];
+    int n;
+
+    if (!strcasecmp(method, "INVITE")) {
+        klog(LOG_INFO, "inbound INVITE");
+        char tag[16];
+        mk_tag_public(tag, sizeof(tag));
+
+        n = build_response(resp, sizeof(resp), rx, 100, "Trying", &id, NULL, NULL);
+        if (n > 0) inbound_send(&peer, plen, resp, (size_t)n);
+
+        n = build_response(resp, sizeof(resp), rx, 180, "Ringing", &id, tag, NULL);
+        if (n > 0) inbound_send(&peer, plen, resp, (size_t)n);
+        klog(LOG_INFO, "sent 100 + 180");
+
+        /* Auto-answer: there is no dialer wiring yet, so accepting here is
+         * what makes an inbound call verifiable at all. A product build
+         * hands this to the framework to ring instead. */
+        const char *body = strstr(rx, "\r\n\r\n");
+        char sdp[768];
+        int sl = sdp_answer(sdp, sizeof(sdp), g_cfg->id.local_ip,
+                            JOAN_RTP_PORT, body ? body + 4 : NULL);
+        if (sl <= 0)
+            return;
+        n = build_response(resp, sizeof(resp), rx, 200, "OK", &id, tag, sdp);
+        if (n > 0) {
+            inbound_send(&peer, plen, resp, (size_t)n);
+            klog(LOG_INFO, "inbound call answered (200 OK sent)");
+        }
+        return;
+    }
+
+    if (!strcasecmp(method, "BYE")) {
+        klog(LOG_INFO, "inbound BYE");
+        n = build_response(resp, sizeof(resp), rx, 200, "OK", &id, NULL, NULL);
+        if (n > 0) inbound_send(&peer, plen, resp, (size_t)n);
+        g_call.active = 0;
+        return;
+    }
+
+    if (!strcasecmp(method, "CANCEL")) {
+        klog(LOG_INFO, "inbound CANCEL");
+        n = build_response(resp, sizeof(resp), rx, 200, "OK", &id, NULL, NULL);
+        if (n > 0) inbound_send(&peer, plen, resp, (size_t)n);
+        return;
+    }
+
+    if (!strcasecmp(method, "ACK"))
+        return;                         /* nothing to answer */
+
+    if (!strcasecmp(method, "OPTIONS")) {
+        n = build_response(resp, sizeof(resp), rx, 200, "OK", &id, NULL, NULL);
+        if (n > 0) inbound_send(&peer, plen, resp, (size_t)n);
+        return;
+    }
+
+    klog(LOG_INFO, "inbound %.12s (not handled)", method);
+    n = build_response(resp, sizeof(resp), rx, 501, "Not Implemented",
+                       &id, NULL, NULL);
+    if (n > 0) inbound_send(&peer, plen, resp, (size_t)n);
 }

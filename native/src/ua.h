@@ -43,6 +43,13 @@ int ua_call_invite(const char *dest);
  * sent, -1 if no call is up. */
 int ua_call_hangup(void);
 
+/* The socket inbound requests arrive on (the protected server port), or -1
+ * if we are not registered. The ctl loop selects on it. */
+int ua_inbound_fd(void);
+
+/* Read and act on one inbound SIP request. */
+void ua_handle_inbound(void);
+
 int ua_register_stage2(const uint8_t *res, size_t res_len,
                        const uint8_t *ck, const uint8_t *ik);
 

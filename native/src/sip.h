@@ -14,7 +14,10 @@ typedef struct {
     char impu[256];        /* public identity (sip:…) or empty to use impi */
     char realm[128];       /* msg.pc.t-mobile.com */
     char local_ip[64];     /* unbracketed text form */
-    int local_port;
+    int local_port;        /* Via: where we send from, and get responses */
+    int contact_port;      /* Contact: where the network sends us REQUESTS.
+                            * RFC 3329 -- this is the protected server port,
+                            * not the client port. 0 means use local_port. */
     char pcscf[80];
     int pcscf_port;
     char imei[24];
@@ -83,6 +86,26 @@ int build_register(
         const uint8_t *ik);
 
 int parse_response(const char *msg, size_t len, sip_response_t *r);
+
+/* Method of an inbound request ("INVITE", "BYE", ...), or "" if `msg` is a
+ * response rather than a request. */
+int sip_request_method(const char *msg, char *out, size_t outlen);
+
+void mk_tag_public(char *dst, size_t n);
+
+/* Response to an inbound request. Echoes the Via, Record-Route, From,
+ * Call-ID and CSeq the request carried -- a response that does not is
+ * unroutable -- and adds our tag to To. `sdp` may be NULL. */
+int build_response(char *out, size_t outlen,
+                   const char *req,
+                   int code, const char *reason,
+                   const sip_identity_t *id,
+                   const char *to_tag,
+                   const char *sdp);
+
+/* SDP answer accepting one codec from an offer. */
+int sdp_answer(char *out, size_t outlen, const char *ip, int rtp_port,
+               const char *offer);
 
 /* Dialog identifiers minted by build_invite(), needed for the ACK. */
 typedef struct {

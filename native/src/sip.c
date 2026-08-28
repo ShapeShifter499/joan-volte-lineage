@@ -249,10 +249,15 @@ int build_register(
     app(&a, "To: <%s>\r\n", aor);
     app(&a, "Call-ID: %s\r\n", txn->call_id);
     app(&a, "CSeq: %d REGISTER\r\n", cseq);
+    /* Contact carries the port the network should send REQUESTS to, which
+     * RFC 3329 puts on the protected server port -- Via keeps the client
+     * port for responses. Advertising port-c here means an inbound INVITE
+     * is addressed to a port we do not accept requests on. */
     app(&a, "Contact: <sip:%s@%s:%d>;+sip.instance=\"<urn:gsma:imei:%s>\""
         ";+g.3gpp.icsi-ref=\"urn%%3Aurn-7%%3A3gpp-service.ims.icsi.mmtel\""
         ";+g.3gpp.smsip;audio\r\n",
-        contact_user, contact_host, id->local_port, inst);
+        contact_user, contact_host,
+        id->contact_port ? id->contact_port : id->local_port, inst);
     app(&a, "Expires: 600000\r\n");
     app(&a, "Allow: INVITE, ACK, CANCEL, BYE, UPDATE, REFER, NOTIFY, MESSAGE, OPTIONS, PRACK\r\n");
     app(&a, "Supported: path, sec-agree\r\n");
@@ -433,7 +438,8 @@ int build_invite(char *out, size_t outlen,
     app(&a, "Contact: <sip:%s@%s:%d>"
             ";+g.3gpp.icsi-ref=\"urn%%3Aurn-7%%3A3gpp-service.ims.icsi.mmtel\""
             ";audio\r\n",
-        contact_user, host, id->local_port);
+        contact_user, host,
+        id->contact_port ? id->contact_port : id->local_port);
     app(&a, "P-Preferred-Identity: <%s>\r\n", aor);
     app(&a, "P-Access-Network-Info: 3GPP-E-UTRAN-FDD\r\n");
     app(&a, "Allow: INVITE, ACK, CANCEL, BYE, UPDATE, PRACK, INFO, OPTIONS\r\n");
@@ -573,4 +579,152 @@ int build_cancel(char *out, size_t outlen,
     app(&a, "Content-Length: 0\r\n");
     app(&a, "\r\n");
     return (int)(outlen - a.left);
+}
+
+
+/* ---- Inbound requests -------------------------------------------------- */
+
+int sip_request_method(const char *msg, char *out, size_t outlen)
+{
+    out[0] = '\0';
+    if (!strncmp(msg, "SIP/2.0", 7))
+        return -1;                      /* a response, not a request */
+    size_t i = 0;
+    while (msg[i] && msg[i] != ' ' && i + 1 < outlen) {
+        out[i] = msg[i];
+        i++;
+    }
+    out[i] = '\0';
+    return i ? 0 : -1;
+}
+
+/* Copy every occurrence of `name` from the request into the response. Via
+ * in particular can repeat, and dropping any of them makes the response
+ * unroutable. */
+static void echo_headers(appender_t *a, const char *req, const char *name)
+{
+    size_t nl = strlen(name);
+    const char *p = req;
+    while ((p = strcasestr(p, name)) != NULL) {
+        int at_line_start = (p == req) ||
+                            (p >= req + 2 && p[-1] == '\n' && p[-2] == '\r');
+        if (!at_line_start || p[nl] != ':') {
+            p += nl;
+            continue;
+        }
+        const char *eol = strstr(p, "\r\n");
+        size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        app(a, "%.*s\r\n", (int)len, p);
+        p = eol ? eol + 2 : p + nl;
+    }
+}
+
+int build_response(char *out, size_t outlen,
+                   const char *req,
+                   int code, const char *reason,
+                   const sip_identity_t *id,
+                   const char *to_tag,
+                   const char *sdp)
+{
+    appender_t a = { out, outlen };
+    app(&a, "SIP/2.0 %d %s\r\n", code, reason);
+    echo_headers(&a, req, "Via");
+    echo_headers(&a, req, "Record-Route");
+    echo_headers(&a, req, "From");
+
+    /* To, with our tag added if the request had none. */
+    const char *t = req;
+    int wrote_to = 0;
+    while ((t = strcasestr(t, "To:")) != NULL) {
+        int line_start = (t == req) ||
+                         (t >= req + 2 && t[-1] == '\n' && t[-2] == '\r');
+        if (!line_start) { t += 3; continue; }
+        const char *eol = strstr(t, "\r\n");
+        size_t len = eol ? (size_t)(eol - t) : strlen(t);
+        char to_line[400];
+        if (len >= sizeof(to_line)) len = sizeof(to_line) - 1;
+        memcpy(to_line, t, len);
+        to_line[len] = '\0';
+        if (strcasestr(to_line, "tag=") || !to_tag || !to_tag[0])
+            app(&a, "%s\r\n", to_line);
+        else
+            app(&a, "%s;tag=%s\r\n", to_line, to_tag);
+        wrote_to = 1;
+        break;
+    }
+    if (!wrote_to)
+        return -1;
+
+    echo_headers(&a, req, "Call-ID");
+    echo_headers(&a, req, "CSeq");
+
+    if (code >= 180 && code < 300) {
+        char host[80];
+        bracket(id->local_ip, host, sizeof(host));
+        const char *pid = id->impu[0] ? id->impu : "";
+        char cu[128];
+        const char *p = pid;
+        if (!strncmp(p, "sip:", 4)) p += 4;
+        if (!strncmp(p, "tel:", 4)) p += 4;
+        const char *at = strchr(p, '@');
+        size_t ul = at ? (size_t)(at - p) : strlen(p);
+        if (ul >= sizeof(cu)) ul = sizeof(cu) - 1;
+        memcpy(cu, p, ul);
+        cu[ul] = '\0';
+        app(&a, "Contact: <sip:%s@%s:%d>"
+                ";+g.3gpp.icsi-ref=\"urn%%3Aurn-7%%3A3gpp-service.ims.icsi.mmtel\""
+                ";audio\r\n",
+            cu, host, id->contact_port ? id->contact_port : id->local_port);
+    }
+    if (sdp && sdp[0]) {
+        app(&a, "Content-Type: application/sdp\r\n");
+        app(&a, "Content-Length: %d\r\n", (int)strlen(sdp));
+        app(&a, "\r\n");
+        app(&a, "%s", sdp);
+    } else {
+        app(&a, "Content-Length: 0\r\n");
+        app(&a, "\r\n");
+    }
+    return (int)(outlen - a.left);
+}
+
+int sdp_answer(char *out, size_t outlen, const char *ip, int rtp_port,
+               const char *offer)
+{
+    /* Answer with one codec. Prefer AMR-WB when the offer carries it --
+     * 16 kHz against PCMU's 8 kHz -- and fall back to PCMU, which every
+     * IMS core offers. */
+    int pt = 0;
+    const char *rtpmap = "a=rtpmap:0 PCMU/8000\r\n";
+    const char *wb = offer ? strcasestr(offer, "AMR-WB/16000") : NULL;
+    if (wb) {
+        const char *line = wb;
+        while (line > offer && *line != ':') line--;
+        int cand = atoi(line + 1);
+        if (cand > 0 && cand < 128) {
+            pt = cand;
+            rtpmap = NULL;
+        }
+    }
+    appender_t a = { out, outlen };
+    app(&a, "v=0\r\n");
+    app(&a, "o=- %ld 1 IN IP6 %s\r\n", (long)time(NULL), ip);
+    app(&a, "s=-\r\n");
+    app(&a, "c=IN IP6 %s\r\n", ip);
+    app(&a, "t=0 0\r\n");
+    app(&a, "m=audio %d RTP/AVP %d\r\n", rtp_port, pt);
+    if (rtpmap)
+        app(&a, "%s", rtpmap);
+    else
+        app(&a, "a=rtpmap:%d AMR-WB/16000/1\r\n"
+                "a=fmtp:%d octet-align=0\r\n", pt, pt);
+    app(&a, "a=ptime:20\r\n");
+    app(&a, "a=sendrecv\r\n");
+    return (int)(outlen - a.left);
+}
+
+
+void mk_tag_public(char *dst, size_t n)
+{
+    mk_tag(dst, n);
 }

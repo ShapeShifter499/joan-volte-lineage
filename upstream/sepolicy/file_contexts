@@ -1,0 +1,2 @@
+/system/bin/joan-ims-ua    u:object_r:joan_ims_exec:s0
+/data/vendor/joan-ims(/.*)?    u:object_r:joan_ims_data_file:s0

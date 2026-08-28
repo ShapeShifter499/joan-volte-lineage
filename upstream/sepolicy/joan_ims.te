@@ -1,0 +1,48 @@
+# joan-ims: AP-side IMS SIP/AKA/IPsec user agent.
+#
+# UNTESTED. Everything else in this repository was verified on a device;
+# this file cannot be, because a sideloaded zip on joan cannot load a policy
+# append -- that was measured, and it is the whole reason the daemon
+# currently borrows the netmgrd domain and the app reaches it over a
+# loopback socket. These rules are the shape the daemon needs in a ROM
+# build. Expect to iterate them against `audit2allow` on a real build.
+
+type joan_ims, domain;
+type joan_ims_exec, exec_type, file_type, system_file_type;
+init_daemon_domain(joan_ims)
+
+# Kernel IPsec. This is the permission that forces a native helper at all:
+# an app domain cannot program xfrm (platform neverallow), so the SIP UA
+# cannot live in the Java ImsService.
+allow joan_ims self:netlink_xfrm_socket
+    { create bind read write getattr setattr nlmsg_read nlmsg_write };
+
+# SIP signalling on the IMS PDN.
+allow joan_ims self:udp_socket create_socket_perms_no_ioctl;
+allow joan_ims self:tcp_socket create_stream_socket_perms;
+allow joan_ims self:capability { net_admin net_raw net_bind_service };
+allow joan_ims node_type:udp_socket node_bind;
+allow joan_ims port_type:udp_socket name_bind;
+
+# Control channel: the abstract unix socket the ImsService drives.
+allow joan_ims self:unix_stream_socket { create_stream_socket_perms };
+
+# Bring-up log sink. Drop this in a release build and use logd instead.
+type joan_ims_data_file, file_type, data_file_type, core_data_file_type;
+allow joan_ims joan_ims_data_file:dir  rw_dir_perms;
+allow joan_ims joan_ims_data_file:file create_file_perms;
+
+# The ImsService reaching the daemon.
+#
+# THIS is the rule that lets the loopback listener be compiled out. Without
+# it, priv_app connecting to this domain is EACCES (measured), and TCP --
+# which has no connectto check and no way to identify its peer from this
+# domain, because /proc/net/tcp is EACCES here too -- is the only route
+# left. That listener is unauthenticated and must not ship.
+#
+# Whether `priv_app` is the right source depends on how the app is
+# packaged; see upstream/README.md. If it is platform-signed with
+# sharedUserId android.uid.system, use system_app instead, which is the
+# easier rule to defend upstream.
+allow priv_app joan_ims:unix_stream_socket connectto;
+allow priv_app joan_ims_socket:sock_file write;

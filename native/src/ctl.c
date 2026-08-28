@@ -378,12 +378,22 @@ int ctl_serve(void)
             FD_SET(tcp_ls, &rfds);
             if (tcp_ls > maxfd) maxfd = tcp_ls;
         }
+        /* Inbound SIP arrives on the protected server port. Watch it here
+         * so the daemon can answer an INVITE while idle, rather than only
+         * while it happens to be inside a call setup. */
+        int sip_fd = ua_inbound_fd();
+        if (sip_fd >= 0) {
+            FD_SET(sip_fd, &rfds);
+            if (sip_fd > maxfd) maxfd = sip_fd;
+        }
         if (select(maxfd + 1, &rfds, NULL, NULL, NULL) < 0) {
             if (errno == EINTR)
                 continue;
             sleep(1);
             continue;
         }
+        if (sip_fd >= 0 && FD_ISSET(sip_fd, &rfds))
+            ua_handle_inbound();
         if (unix_ls >= 0 && FD_ISSET(unix_ls, &rfds)) {
             int c = accept4(unix_ls, NULL, NULL, SOCK_CLOEXEC);
             if (c >= 0) {
