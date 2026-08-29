@@ -133,24 +133,17 @@ final class JoanMedia {
         AudioTrack trk = null;
         try {
             AudioManager am = app.getSystemService(AudioManager.class);
-            if (am != null) {
-                am.setMode(AudioManager.MODE_NORMAL);
-                am.setSpeakerphoneOn(true);
-                int maxm = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-                if (maxm > 0) {
-                    am.setStreamVolume(AudioManager.STREAM_MUSIC, maxm, 0);
-                }
-            }
             int minOut = AudioTrack.getMinBufferSize(SAMPLE_HZ,
                     AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
             int outBuf = Math.max(minOut, PTIME_SAMPLES * 16);
             trk = openMusicTrack(outBuf);
             if (trk == null) {
-                JoanTrace.note("media no music track");
+                JoanTrace.note("media no play track");
                 return;
             }
             trk.setVolume(1.0f);
             trk.play();
+            routeOutput(am, trk, true);
             DatagramSocket sock = sSock;
             if (sock == null) {
                 return;
@@ -162,7 +155,8 @@ final class JoanMedia {
             short[] pcm = new short[PTIME_SAMPLES];
             DatagramPacket in = new DatagramPacket(down, down.length);
             int dl = 0;
-            JoanTrace.note("media play rolling speaker");
+            boolean lastSpk = am != null && am.isSpeakerphoneOn();
+            JoanTrace.note("media play rolling spk=" + lastSpk);
             while (sRun) {
                 try {
                     sock.receive(in);
@@ -181,15 +175,16 @@ final class JoanMedia {
                 }
                 int wr = trk.write(pcm, 0, m);
                 dl++;
+                boolean spk = am != null && am.isSpeakerphoneOn();
+                if (spk != lastSpk) {
+                    lastSpk = spk;
+                    routeOutput(am, trk, false);
+                    JoanTrace.note("media route spk=" + spk);
+                }
                 if (dl == 1 || (dl % 50) == 0) {
                     JoanTrace.note("media dl frames=" + dl + " write=" + wr
-                            + " mode=" + (am == null ? -1 : am.getMode()));
-                    if (am != null) {
-                        try {
-                            am.setMode(AudioManager.MODE_NORMAL);
-                            am.setSpeakerphoneOn(true);
-                        } catch (Throwable ignored) {}
-                    }
+                            + " mode=" + (am == null ? -1 : am.getMode())
+                            + " spk=" + spk);
                 }
             }
         } catch (Throwable t) {
@@ -197,6 +192,31 @@ final class JoanMedia {
             Log.w(TAG, "media play", t);
         } finally {
             try { if (trk != null) trk.release(); } catch (Throwable ignored) {}
+        }
+    }
+
+    private static void routeOutput(AudioManager am, AudioTrack trk, boolean init) {
+        if (am == null || trk == null) {
+            return;
+        }
+        boolean spk = am.isSpeakerphoneOn();
+        int want = spk ? AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                       : AudioDeviceInfo.TYPE_BUILTIN_EARPIECE;
+        try {
+            for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+                if (d.getType() == want) {
+                    trk.setPreferredDevice(d);
+                    try {
+                        am.setCommunicationDevice(d);
+                    } catch (Throwable ignored) {}
+                    if (init) {
+                        JoanTrace.note("media route init spk=" + spk);
+                    }
+                    return;
+                }
+            }
+        } catch (Throwable t) {
+            JoanTrace.note("media route " + t.getClass().getSimpleName());
         }
     }
 

@@ -448,7 +448,7 @@ int build_invite(char *out, size_t outlen,
     app(&a, "P-Preferred-Identity: <%s>\r\n", aor);
     app(&a, "P-Access-Network-Info: 3GPP-E-UTRAN-FDD\r\n");
     app(&a, "Allow: INVITE, ACK, CANCEL, BYE, UPDATE, PRACK, INFO, OPTIONS\r\n");
-    app(&a, "Supported: replaces, timer\r\n");
+    app(&a, "Supported: replaces\r\n");
     app(&a, "Require: sec-agree\r\n");
     app(&a, "Proxy-Require: sec-agree\r\n");
     if (sec_verify && sec_verify[0])
