@@ -6,6 +6,8 @@ import android.content.Context;
 import android.database.Cursor;
 import android.database.MatrixCursor;
 import android.net.Uri;
+import android.os.Binder;
+import android.os.Process;
 
 /**
  * Non-secret diagnostics/start provider. Querying this provider forces Android
@@ -34,9 +36,29 @@ public class JoanStateProvider extends ContentProvider {
     private static volatile String sAppRegResult = "";
     private static volatile boolean sAppRegRunning = false;
 
+    /**
+     * The provider stays exported so `adb shell content query` still works
+     * for bring-up, but only the platform, root and the shell may call it.
+     *
+     * The rows themselves are coarse by design. The side effects are not:
+     * the akaprobe/ipsecspike/appregister paths drive ISIM AUTHENTICATE,
+     * allocate SPIs and run a whole REGISTER cycle. Exported with no
+     * permission, any installed app could spin SIM authentication and IPsec
+     * setup at will, and read the subscription debug row while doing it.
+     */
+    private static void enforceCaller() {
+        int uid = Binder.getCallingUid();
+        if (uid == Process.SYSTEM_UID || uid == Process.SHELL_UID
+                || uid == 0 || uid == Process.myUid()) {
+            return;
+        }
+        throw new SecurityException("org.joan.ims.state is not for uid " + uid);
+    }
+
     @Override
     public Cursor query(Uri uri, String[] projection, String selection,
                         String[] selectionArgs, String sortOrder) {
+        enforceCaller();
         Context ctx = getContext();
         boolean probe = uri != null && (
                 "akaprobe".equals(uri.getLastPathSegment())
