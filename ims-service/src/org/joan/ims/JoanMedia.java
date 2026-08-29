@@ -238,9 +238,21 @@ final class JoanMedia {
                     if (m < RTP_HDR) {
                         continue;
                     }
-                    int pt = down[1] & 0x7f;
-                    if (pt == 200 || pt == 201 || pt == 202) {
-                        continue; /* RTCP */
+                    /* RTCP packet types live in the whole second octet
+                     * (200..204). RTP's payload type is the low 7 bits of
+                     * that octet because bit 7 is the marker, so masking
+                     * 0x7f before the comparison folded an SR (200) to 72
+                     * and the test could never be true -- every report the
+                     * peer sent was decoded as u-law and played. With
+                     * a=rtcp-mux, which this UA both offers and answers,
+                     * those reports arrive on this very socket.
+                     * Version must be 2; anything else is not ours. */
+                    if ((down[0] & 0xc0) != 0x80) {
+                        continue;
+                    }
+                    int type = down[1] & 0xff;
+                    if (type >= 200 && type <= 204) {
+                        continue; /* RTCP, not audio */
                     }
                     off = RTP_HDR;
                     m -= RTP_HDR;
