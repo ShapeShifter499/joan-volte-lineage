@@ -480,6 +480,20 @@ final class JoanSipUa {
             handleCancel(rx);
             return;
         }
+        if ("OPTIONS".equals(method)) {
+            /* Cores use OPTIONS as a liveness probe. Silence can get the
+             * binding torn down, and we advertise OPTIONS in Allow, so
+             * answer it and say what we accept. */
+            try {
+                sendReply(buildResponse(rx, 200, "OK", sId,
+                        sOurToTag != null ? sOurToTag : "opt", null,
+                        "Allow: " + JoanSipBuilder.ALLOW + "\r\n")
+                        .getBytes(StandardCharsets.US_ASCII));
+            } catch (Exception ignored) {
+                // ignore
+            }
+            return;
+        }
         if (!"INVITE".equals(method)) {
             /* Anything else is dropped without a reply. That is worth
              * saying out loud: the REGISTER Contact advertises
@@ -712,6 +726,12 @@ final class JoanSipUa {
     private static String buildResponse(String req, int code, String reason,
                                         JoanSipBuilder.Id id, String toTag,
                                         String sdp) {
+        return buildResponse(req, code, reason, id, toTag, sdp, null);
+    }
+
+    private static String buildResponse(String req, int code, String reason,
+                                        JoanSipBuilder.Id id, String toTag,
+                                        String sdp, String extraHeaders) {
         String via = JoanSipBuilder.header(req, "Via");
         String from = JoanSipBuilder.header(req, "From");
         String to = JoanSipBuilder.header(req, "To");
@@ -756,6 +776,9 @@ final class JoanSipUa {
         }
         a.append("Contact: <sip:").append(contactUser).append('@')
                 .append(host).append(':').append(id.contactPort).append(">\r\n");
+        if (extraHeaders != null) {
+            a.append(extraHeaders);
+        }
         if (sdp != null) {
             a.append("Content-Type: application/sdp\r\n");
             a.append("Content-Length: ").append(sdp.length()).append("\r\n\r\n");

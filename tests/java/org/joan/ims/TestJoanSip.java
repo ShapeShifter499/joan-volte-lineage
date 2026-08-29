@@ -13,6 +13,7 @@ public final class TestJoanSip {
         testImei();
         testGrantedExpires();
         testRefreshLead();
+        testAdvertisedCapabilities();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -335,6 +336,37 @@ public final class TestJoanSip {
                 "short grant beats the floor rather than expiring");
         check(JoanSipBuilder.refreshLeadMs(-1, CAP, FLOOR) == CAP,
                 "silent registrar falls back to the cap");
+    }
+
+    /** We must not advertise a capability this UA does not implement. */
+    private static void testAdvertisedCapabilities() {
+        JoanSipBuilder.Params m = new JoanSipBuilder.Params(1, 2, 5000, 5001);
+        java.security.SecureRandom rng = new java.security.SecureRandom();
+        JoanSipBuilder.Txn txn = new JoanSipBuilder.Txn(m, rng);
+        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                "user@ims.example", "sip:+15555550100@ims.example",
+                "ims.example", "2600::5", 5000, 5001, "123456789012345");
+        String reg = JoanSipBuilder.buildRegister(id, txn, 1, null, null);
+        /* +g.3gpp.smsip tells the core to deliver SMS as a SIP MESSAGE.
+         * handleInbound has no MESSAGE case, so those would be dropped. */
+        check(!reg.contains("smsip"),
+                "REGISTER does not claim SMS over IP");
+        check(!reg.contains("MESSAGE"),
+                "REGISTER does not allow MESSAGE");
+
+        JoanSipBuilder.Dialog dlg = new JoanSipBuilder.Dialog();
+        String inv = JoanSipBuilder.buildInvite(id, dlg, "tel:+15555550111",
+                null, null, 40000, "3GPP-E-UTRAN-FDD");
+        check(!inv.contains("Supported: replaces"),
+                "INVITE does not claim Replaces");
+        for (String m2 : new String[] { "UPDATE", "REFER", "NOTIFY",
+                "MESSAGE", "INFO" }) {
+            check(!reg.contains(m2) && !inv.contains(m2),
+                    "neither request allows " + m2);
+        }
+        check(reg.contains("Allow: " + JoanSipBuilder.ALLOW)
+                && inv.contains("Allow: " + JoanSipBuilder.ALLOW),
+                "both advertise exactly the handled method set");
     }
 
     private static void testImei() {

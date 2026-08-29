@@ -9,6 +9,14 @@ import java.security.SecureRandom;
  */
 final class JoanSipBuilder {
     static final int REG1_PORT = 15060;
+
+    /**
+     * Methods this UA actually accepts. handleInbound() dispatches INVITE,
+     * ACK (by correctly ignoring it), CANCEL, BYE and OPTIONS; anything
+     * else is dropped. Advertising more than that invites the network to
+     * send us traffic we silently discard.
+     */
+    static final String ALLOW = "INVITE, ACK, CANCEL, BYE, OPTIONS";
     static final int PCSCF_SIP_PORT = 5060;
 
     static final class Params {
@@ -230,9 +238,9 @@ final class JoanSipBuilder {
                 .append(">;+sip.instance=\"<urn:gsma:imei:")
                 .append(imeiInstance(id.imei))
                 .append(">\";+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\""
-                        + ";+g.3gpp.smsip;audio\r\n");
+                        + ";audio\r\n");
         a.append("Expires: 600000\r\n");
-        a.append("Allow: INVITE, ACK, CANCEL, BYE, UPDATE, REFER, NOTIFY, MESSAGE, OPTIONS, PRACK\r\n");
+        a.append("Allow: ").append(ALLOW).append("\r\n");
         a.append("Supported: path, sec-agree\r\n");
         a.append("Require: sec-agree\r\n");
         a.append("Proxy-Require: sec-agree\r\n");
@@ -646,8 +654,7 @@ final class JoanSipBuilder {
                 .append(">;+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\";audio\r\n");
         a.append("P-Preferred-Identity: <").append(aor).append(">\r\n");
         a.append("P-Access-Network-Info: ").append(pani).append("\r\n");
-        a.append("Allow: INVITE, ACK, CANCEL, BYE, UPDATE, PRACK, INFO, OPTIONS\r\n");
-        a.append("Supported: replaces\r\n");
+        a.append("Allow: ").append(ALLOW).append("\r\n");
         a.append("Require: sec-agree\r\n");
         a.append("Proxy-Require: sec-agree\r\n");
         if (secVerify != null && !secVerify.isEmpty()) {
