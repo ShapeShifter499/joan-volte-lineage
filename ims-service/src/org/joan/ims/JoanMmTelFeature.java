@@ -54,7 +54,25 @@ public class JoanMmTelFeature extends MmTelFeature {
     @Override
     public ImsCallSessionImplBase createCallSession(ImsCallProfile profile) {
         Log.i(TAG, "createCallSession");
-        return new JoanCallSession(app, profile);
+        return new JoanCallSession(app, this, profile);
+    }
+
+    /**
+     * AOSP MmTelFeature#setCallAudioHandler: AUDIO_HANDLER_ANDROID
+     * makes Telephony Connection audioModeIsVoip=true, which Telecom
+     * turns into MODE_IN_COMMUNICATION instead of MODE_IN_CALL (radio
+     * mixer). Call after the session is ACTIVE so ImsPhoneCallTracker
+     * can find the Connection.
+     */
+    void useAndroidAudioHandler() {
+        try {
+            setCallAudioHandler(AUDIO_HANDLER_ANDROID);
+            JoanTrace.note("audio handler ANDROID");
+            Log.i(TAG, "setCallAudioHandler ANDROID");
+        } catch (Throwable t) {
+            JoanTrace.note("audio handler " + t.getClass().getSimpleName());
+            Log.w(TAG, "setCallAudioHandler", t);
+        }
     }
 
     @Override

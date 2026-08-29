@@ -49,6 +49,16 @@ public abstract class MmTelFeature extends ImsFeature {
     public static final int PROCESS_CALL_IMS = 0;
     public static final int PROCESS_CALL_CSFB = 1;
 
+    /** AOSP: Android (AP) handles IMS call audio, not the modem. */
+    public static final int AUDIO_HANDLER_ANDROID = 0;
+    public static final int AUDIO_HANDLER_BASEBAND = 1;
+
+    /**
+     * Runtime (framework) tells Telephony/Telecom to use VoIP audio
+     * mode when {@code AUDIO_HANDLER_ANDROID}. Compile stub is a no-op.
+     */
+    public final void setCallAudioHandler(int imsAudioHandler) {}
+
     public ImsCallProfile createCallProfile(int callSessionType, int callType) {
         return null;
     }

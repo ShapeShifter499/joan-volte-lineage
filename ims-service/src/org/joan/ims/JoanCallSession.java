@@ -9,27 +9,30 @@ import android.telephony.ims.stub.ImsCallSessionImplBase;
 import android.util.Log;
 
 /**
- * One IMS call session. Callback sequence matches CAF
- * {@code org.codeaurora.ims.ImsCallSessionImpl}:
+ * One IMS call session. Callback sequence matches AOSP
+ * ImsPhoneCallTracker (SystemApi names, not CAF):
  *
- *   DIALING  -> callSessionProgressing(empty ImsStreamMediaProfile)
- *   ACTIVE   -> callSessionStarted(profile)
+ *   DIALING  -> callSessionInitiating then callSessionProgressing
+ *   ACTIVE   -> callSessionInitiated(profile)
  *   END      -> callSessionTerminated
  *
- * Audio is not injected here. CAF leaves media to the modem; AOSP
- * ImsService docs leave in-call audio to the HAL after STARTED.
+ * After the session exists, MmTelFeature.setCallAudioHandler(ANDROID)
+ * tells Telecom this call is AP-owned (MODE_IN_COMMUNICATION).
+ * JoanMedia then plays/records on the voice-communication stream.
  */
 public class JoanCallSession extends ImsCallSessionImplBase {
     private static final String TAG = "JoanIms";
     private final Context app;
+    private final JoanMmTelFeature feature;
     private final ImsCallProfile profile;
     private volatile ImsCallSessionListener listener;
     private volatile int state = STATE_IDLE;
     private final String callId;
     private volatile boolean watchHangup;
 
-    JoanCallSession(Context app, ImsCallProfile profile) {
+    JoanCallSession(Context app, JoanMmTelFeature feature, ImsCallProfile profile) {
         this.app = app.getApplicationContext();
+        this.feature = feature;
         this.profile = profile;
         this.callId = "joan-" + Long.toHexString(System.nanoTime());
     }
@@ -65,6 +68,8 @@ public class JoanCallSession extends ImsCallSessionImplBase {
         notifyInitiating(used);
         /* CAF fires Progressing as soon as MO is DIALING, before 200. */
         notifyProgressing();
+        /* Connection exists as DIALING; tell Telecom AP owns audio now. */
+        feature.useAndroidAudioHandler();
         if (callee == null || callee.isEmpty()) {
             failStart("empty callee");
             return;
@@ -79,8 +84,9 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             String resp = JoanCtl.txn("CALL " + uri);
             if (resp != null && resp.startsWith("OK")) {
                 state = STATE_ESTABLISHED;
-                JoanMedia.start(this.app);
                 notifyStarted(used);
+                feature.useAndroidAudioHandler();
+                JoanMedia.start(this.app);
                 watchRemoteHangup();
             } else {
                 failStart(resp == null ? "ctl failed" : "call failed");
@@ -93,6 +99,8 @@ public class JoanCallSession extends ImsCallSessionImplBase {
         Log.i(TAG, "call session accept");
         state = STATE_ESTABLISHED;
         notifyStarted(profile);
+        feature.useAndroidAudioHandler();
+        JoanMedia.start(this.app);
     }
 
     @Override

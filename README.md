@@ -9,11 +9,11 @@ handset (REGISTER 200, INVITE 180/200 with PCMU audio, SMS both ways) onto a
 stock-shaped Android ROM. The longer-term intent is to offer this upstream so
 LineageOS can ship working VoLTE for joan rather than requiring a side-load.
 
-> **Status: REGISTER 200, MO and MT PCMU audio work on LineageOS 22.2.**
-> Live answered calls both ways carried a 440 Hz µ-law tone the far end
-> heard. MT INVITE arrived over TCP on the protected server port.
-> Dialer wiring is not yet the path those calls used. See
-> [Current state](#current-state).
+> **Status: REGISTER 200, MO and MT PCMU, and Dialer two-way audio work on
+> LineageOS 22.2.** Live answered Dialer MO carried mic to GV and GV on
+> Joan (STREAM_MUSIC, split cap/play). Speaker/earpiece follows Dialer.
+> Calls still drop around 30s — RTCP/Session-Expires keepalive is the
+> next measurement. See [Current state](#current-state).
 
 ## How it works
 
@@ -171,22 +171,21 @@ so the addresses are carried but ignored for matching.
 Working beyond registration:
 
 - MO INVITE → 100 → 180 → 200 → ACK on a live answered call, with PCMU
-  RTP in both directions (tone heard at the far end). Earpiece/mic on
-  the handset is still the separate q6voice lane.
+  RTP in both directions. Dialer MO two-way audio is proven (mic to GV
+  and GV heard on Joan via STREAM_MUSIC / split threads).
 - Protected client **and** server ports held for the registration
   lifetime, UDP and TCP. An inbound INVITE arrived over **TCP** on
   port-s (the pmOS bring-up had already seen TCP-in-ESP probes).
 - `MmTelFeature.createCallSession` / `shouldProcessCall` so Dialer can
   place an IMS MO call through ctl `CALL`. MT still auto-answers in the
-  daemon; ringing the Dialer needs a reverse event channel and a reboot
-  to load the new APK (`android:persistent`).
+  daemon; ringing the Dialer needs a reverse event channel.
 
 Not yet verified on device:
 
-- Dialer MO/MT through `ImsCallSession` (APK is persistent; needs a reboot).
-- Handset earpiece/mic on the IMS session (q6voice lane, separate).
-- Clean MO BYE: one hangup after the first answered call returned 481.
-  The later MT hangup was a normal inbound BYE.
+- Holding a Dialer MO past ~30s (GV BYE after downlink freeze; RTCP
+  SR + Session-Expires UPDATE are in tree, not listen-tested).
+- MT ringing the Dialer (`notifyIncomingCall`).
+- Authenticated unix ctl without the unauthenticated TCP fallback.
 
 Known defects:
 

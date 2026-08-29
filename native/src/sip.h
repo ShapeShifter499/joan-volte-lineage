@@ -71,6 +71,8 @@ typedef struct {
     char date_hdr[64];
     int rseq;                         /* RFC 3262; 0 if absent */
     char require[128];
+    int session_expires;              /* RFC 4028; 0 if absent */
+    char se_refresher[8];             /* "uac", "uas", or empty */
 } sip_response_t;
 
 void txn_new(sip_txn_t *t, const sip_identity_t *id, sec_params_t mine);
@@ -115,6 +117,7 @@ typedef struct {
     int port;
     int pt;          /* first payload type on m=audio */
     int have_pcmu;   /* 1 if PT 0 or an rtpmap names PCMU */
+    int have_rtcp_mux;
 } sdp_media_t;
 
 /* Parse c=/m=audio from a SIP message (headers + body) or a bare SDP
@@ -176,6 +179,17 @@ int build_ack(char *out, size_t outlen,
               const char *sec_verify,
               const sip_dialog_t *dlg,
               const char *to_tag);
+
+/* RFC 4028 session refresh. CSeq is dlg->cseq+1. No SDP. */
+int build_update(char *out, size_t outlen,
+                 const sip_identity_t *id,
+                 const char *target,
+                 const char *to_uri,
+                 const char *route,
+                 const char *sec_verify,
+                 const sip_dialog_t *dlg,
+                 const char *to_tag,
+                 int session_expires);
 
 /* RFC 3262 PRACK for a reliable 1xx (RSeq). CSeq is dlg->cseq+1. */
 int build_prack(char *out, size_t outlen,

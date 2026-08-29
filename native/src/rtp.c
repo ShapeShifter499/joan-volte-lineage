@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include "util.h"
@@ -14,17 +15,27 @@
 #define PCMU_PT 0
 #define PCMU_SAMPLES 160 /* 8 kHz * 20 ms */
 #define RTP_HDR 12
+#define RTCP_INTERVAL_MS 5000
+#define RTCP_FIRST_MS 400
 
 static int g_fd = -1;
+static int g_rtcp_fd = -1;
 static int g_active;
 static int g_pt;
+static int g_rtcp_mux;
 static uint16_t g_seq;
 static uint32_t g_ts;
 static uint32_t g_ssrc;
+static uint32_t g_remote_ssrc;
+static int g_have_remote_ssrc;
+static uint16_t g_remote_seq;
 static uint32_t g_phase;
 static long g_next_ms;
+static long g_rtcp_next_ms;
 static unsigned g_sent;
 static unsigned g_recv;
+static unsigned g_rtcp_sent;
+static unsigned g_octets;
 static struct sockaddr_storage g_dst;
 static socklen_t g_dlen;
 
@@ -116,7 +127,7 @@ static uint8_t linear_to_ulaw(int16_t pcm)
  * is the HAL after STARTED. A 440 Hz square wave made the far end hang
  * up while Dialer was still DIALING. Send µ-law idle instead. */
 
-static int rtp_bind(const char *local_ip, const char *iface, int port)
+static int udp_bind(const char *local_ip, const char *iface, int port)
 {
     int fam = strchr(local_ip, ':') ? AF_INET6 : AF_INET;
     int s = socket(fam, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
@@ -161,10 +172,115 @@ static int rtp_bind(const char *local_ip, const char *iface, int port)
     return s;
 }
 
+static void put32(unsigned char *p, uint32_t v)
+{
+    p[0] = (unsigned char)(v >> 24);
+    p[1] = (unsigned char)(v >> 16);
+    p[2] = (unsigned char)(v >> 8);
+    p[3] = (unsigned char)v;
+}
+
+static int is_rtcp(const unsigned char *buf, ssize_t r)
+{
+    /* RTP PT is 0..127 in the low 7 bits of byte 1. RTCP PT is the
+     * whole of byte 1 (SR=200, RR=201, SDES=202, BYE=203, APP=204). */
+    return r >= 8 && (buf[0] & 0xc0) == 0x80 && buf[1] >= 200 && buf[1] <= 204;
+}
+
+static void rtcp_dest(struct sockaddr_storage *ss, socklen_t *len)
+{
+    *ss = g_dst;
+    *len = g_dlen;
+    if (g_rtcp_mux)
+        return;
+    if (ss->ss_family == AF_INET6) {
+        struct sockaddr_in6 *a = (struct sockaddr_in6 *)ss;
+        a->sin6_port = htons((uint16_t)(ntohs(a->sin6_port) + 1));
+    } else if (ss->ss_family == AF_INET) {
+        struct sockaddr_in *a = (struct sockaddr_in *)ss;
+        a->sin_port = htons((uint16_t)(ntohs(a->sin_port) + 1));
+    }
+}
+
+/* Compound RTCP as used by PJSIP pjmedia (pjmedia_rtcp_build_rtcp +
+ * send_rtcp with_sdes): SR with one RR block, then SDES CNAME.
+ * PJMEDIA_RTCP_INTERVAL is 5000 ms. RFC 3550 §6.1: a compound packet
+ * MUST include a report (SR/RR) and an SDES CNAME. RFC 5761: mux only
+ * when the SDP answer carried a=rtcp-mux — never because a stray
+ * packet arrived on the RTP socket. RFC 4028 §1: RTCP is the audio
+ * liveness signal. */
+static void rtp_send_rtcp(void)
+{
+    if (g_fd < 0)
+        return;
+
+    unsigned char pkt[96];
+    memset(pkt, 0, sizeof(pkt));
+
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    uint32_t ntp_sec = (uint32_t)tv.tv_sec + 2208988800u;
+    uint32_t ntp_frac = (uint32_t)(((uint64_t)tv.tv_usec << 32) / 1000000u);
+
+    int rc = g_have_remote_ssrc ? 1 : 0;
+    /* SR header + SSRC + sender info = 28 bytes; each RR block = 24. */
+    int sr_bytes = 28 + rc * 24;
+    pkt[0] = (unsigned char)(0x80 | rc);
+    pkt[1] = 200;
+    pkt[2] = 0;
+    pkt[3] = (unsigned char)(sr_bytes / 4 - 1);
+    put32(pkt + 4, g_ssrc);
+    put32(pkt + 8, ntp_sec);
+    put32(pkt + 12, ntp_frac);
+    put32(pkt + 16, g_ts);
+    put32(pkt + 20, g_sent);
+    put32(pkt + 24, g_octets);
+    if (rc) {
+        put32(pkt + 28, g_remote_ssrc);
+        pkt[32] = 0; /* fraction lost */
+        pkt[33] = pkt[34] = pkt[35] = 0; /* cumul lost */
+        put32(pkt + 36, g_remote_seq); /* extended highest seq */
+        put32(pkt + 40, 0); /* jitter */
+        put32(pkt + 44, 0); /* LSR */
+        put32(pkt + 48, 0); /* DLSR */
+    }
+
+    unsigned char *sdes = pkt + sr_bytes;
+    sdes[0] = 0x81;
+    sdes[1] = 202;
+    sdes[2] = 0;
+    sdes[3] = 4;
+    put32(sdes + 4, g_ssrc);
+    sdes[8] = 1;  /* CNAME */
+    sdes[9] = 8;
+    memcpy(sdes + 10, "joan.ims", 8);
+    sdes[18] = 0;
+    sdes[19] = 0;
+    int n = sr_bytes + 20;
+
+    struct sockaddr_storage dest;
+    socklen_t dlen;
+    rtcp_dest(&dest, &dlen);
+    int fd = g_rtcp_mux ? g_fd : g_rtcp_fd;
+    if (fd < 0) {
+        klog(LOG_WARN, "rtcp no socket mux=%d", g_rtcp_mux);
+        return;
+    }
+    ssize_t w = sendto(fd, pkt, n, 0, (struct sockaddr *)&dest, dlen);
+    if (w == n) {
+        g_rtcp_sent++;
+        if (g_rtcp_sent == 1 || (g_rtcp_sent % 4) == 0)
+            klog(LOG_INFO, "rtcp sr sent=%u mux=%d rc=%d rtp sent=%u recv=%u",
+                 g_rtcp_sent, g_rtcp_mux, rc, g_sent, g_recv);
+    } else if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        klog(LOG_WARN, "rtcp send errno=%d mux=%d", errno, g_rtcp_mux);
+    }
+}
+
 int rtp_start(const char *local_ip, const char *iface,
               int local_port,
               const char *remote_ip, int remote_port,
-              int pt)
+              int pt, int rtcp_mux)
 {
     rtp_stop();
     if (!local_ip || !remote_ip || remote_port <= 0)
@@ -173,7 +289,7 @@ int rtp_start(const char *local_ip, const char *iface,
         klog(LOG_WARN, "rtp skip: payload type %d is not PCMU", pt);
         return -2;
     }
-    int s = rtp_bind(local_ip, iface, local_port);
+    int s = udp_bind(local_ip, iface, local_port);
     if (s < 0)
         return -1;
 
@@ -199,21 +315,32 @@ int rtp_start(const char *local_ip, const char *iface,
     }
 
     g_fd = s;
+    g_rtcp_mux = rtcp_mux ? 1 : 0;
+    g_rtcp_fd = udp_bind(local_ip, iface, local_port + 1);
+    if (g_rtcp_fd < 0)
+        klog(LOG_WARN, "rtcp bind %d failed; mux=%d", local_port + 1, g_rtcp_mux);
     g_active = 1;
     g_pt = pt;
     g_seq = (uint16_t)rand_u64();
     g_ts = (uint32_t)rand_u64();
     g_ssrc = 0xA11E0001u;
+    g_remote_ssrc = 0;
+    g_have_remote_ssrc = 0;
+    g_remote_seq = 0;
     g_phase = 0;
     g_sent = 0;
     g_recv = 0;
+    g_rtcp_sent = 0;
+    g_octets = 0;
     g_have_uplink = 0;
     g_have_media_peer = 0;
     g_next_ms = now_ms();
+    g_rtcp_next_ms = g_next_ms + RTCP_FIRST_MS;
     if (g_media_fd >= 0)
         close(g_media_fd);
     g_media_fd = media_bind();
-    klog(LOG_INFO, "rtp start PCMU %d -> %d", local_port, remote_port);
+    klog(LOG_INFO, "rtp start PCMU %d -> %d mux=%d", local_port, remote_port,
+         g_rtcp_mux);
     return 0;
 }
 
@@ -222,18 +349,23 @@ void rtp_stop(void)
     if (g_fd >= 0)
         close(g_fd);
     g_fd = -1;
+    if (g_rtcp_fd >= 0)
+        close(g_rtcp_fd);
+    g_rtcp_fd = -1;
     if (g_media_fd >= 0)
         close(g_media_fd);
     g_media_fd = -1;
     g_have_media_peer = 0;
     g_have_uplink = 0;
     if (g_active)
-        klog(LOG_INFO, "rtp stop sent=%u recv=%u", g_sent, g_recv);
+        klog(LOG_INFO, "rtp stop sent=%u recv=%u rtcp=%u",
+             g_sent, g_recv, g_rtcp_sent);
     g_active = 0;
 }
 
 int rtp_active(void) { return g_active; }
 int rtp_fd(void) { return g_fd; }
+int rtp_rtcp_fd(void) { return g_rtcp_fd; }
 
 int rtp_poll_ms(void)
 {
@@ -243,6 +375,11 @@ int rtp_poll_ms(void)
     long d = g_next_ms - n;
     if (d < 0)
         d = 0;
+    long r = g_rtcp_next_ms - n;
+    if (r < 0)
+        r = 0;
+    if (r < d)
+        d = r;
     if (d > RTP_PTIME_MS)
         d = RTP_PTIME_MS;
     return (int)d;
@@ -278,6 +415,7 @@ static void rtp_send_one(void)
         g_seq++;
         g_ts += PCMU_SAMPLES;
         g_sent++;
+        g_octets += PCMU_SAMPLES;
         if (g_sent == 1 || (g_sent % 50) == 0)
             klog(LOG_INFO, "rtp sent=%u recv=%u", g_sent, g_recv);
     } else if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -285,21 +423,51 @@ static void rtp_send_one(void)
     }
 }
 
+static void rtp_take(const unsigned char *buf, ssize_t r)
+{
+    if (r <= 0)
+        return;
+    /* RFC 5761 §4: RTCP PT is 200-204. Do not decode as PCMU.
+     * Mux is SDP-only (RFC 5761 §5.1.3) — PJSIP/Asterisk set
+     * remote_rtcp_mux from a=rtcp-mux, never from a stray packet. */
+    if (is_rtcp(buf, r))
+        return;
+    if (r < RTP_HDR || (buf[0] & 0xc0) != 0x80)
+        return;
+    g_recv++;
+    g_remote_seq = (uint16_t)((buf[2] << 8) | buf[3]);
+    if (!g_have_remote_ssrc) {
+        g_remote_ssrc = ((uint32_t)buf[8] << 24) | ((uint32_t)buf[9] << 16) |
+                        ((uint32_t)buf[10] << 8) | buf[11];
+        g_have_remote_ssrc = 1;
+    }
+    int hdr = 12 + ((buf[0] & 0x0f) * 4);
+    if ((buf[0] & 0x10) && r >= hdr + 4) {
+        int ext = (buf[hdr + 2] << 8) | buf[hdr + 3];
+        hdr += 4 + ext * 4;
+    }
+    if (hdr < r)
+        media_push_downlink(buf + hdr, (int)r - hdr);
+}
+
 static void rtp_drain(void)
 {
     unsigned char buf[2048];
-    for (;;) {
-        ssize_t r = recv(g_fd, buf, sizeof(buf), 0);
-        if (r <= 0)
-            break;
-        g_recv++;
-        int hdr = 12 + ((buf[0] & 0x0f) * 4);
-        if ((buf[0] & 0x10) && r >= hdr + 4) {
-            int ext = (buf[hdr + 2] << 8) | buf[hdr + 3];
-            hdr += 4 + ext * 4;
+    if (g_fd >= 0) {
+        for (;;) {
+            ssize_t r = recv(g_fd, buf, sizeof(buf), 0);
+            if (r <= 0)
+                break;
+            rtp_take(buf, r);
         }
-        if (hdr < r)
-            media_push_downlink(buf + hdr, (int)r - hdr);
+    }
+    if (g_rtcp_fd >= 0) {
+        for (;;) {
+            ssize_t r = recv(g_rtcp_fd, buf, sizeof(buf), 0);
+            if (r <= 0)
+                break;
+            /* Inbound RR/SR: we don't need the numbers, just drain. */
+        }
     }
 }
 
@@ -318,4 +486,10 @@ void rtp_tick(void)
     }
     if (g_next_ms < n)
         g_next_ms = n + RTP_PTIME_MS;
+    if (n >= g_rtcp_next_ms) {
+        rtp_send_rtcp();
+        /* PJSIP: (PJMEDIA_RTCP_INTERVAL-500 + rand%1000) msec. */
+        g_rtcp_next_ms = n + (RTCP_INTERVAL_MS - 500) +
+                         (long)(rand_u64() % 1000);
+    }
 }

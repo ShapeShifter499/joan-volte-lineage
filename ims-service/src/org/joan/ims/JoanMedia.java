@@ -2,7 +2,6 @@ package org.joan.ims;
 
 import android.content.Context;
 import android.media.AudioAttributes;
-import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioRecord;
@@ -18,27 +17,20 @@ import java.net.SocketTimeoutException;
 /**
  * 8 kHz PCMU between AudioFlinger and the native RTP UA.
  *
- * Capture and playback run on separate threads: a single loop that
- * blocked on mic read then UDP receive sent uplink every ~40 ms
- * (choppy on the far end).
+ * Capture and playback run on separate threads (a single loop that
+ * blocked on mic read then UDP receive sent uplink every ~40 ms).
  *
- * Telecom MODE_IN_CALL ducks STREAM_VOICE_CALL and
- * USAGE_VOICE_COMMUNICATION, so write() can return 160 with no
- * audible output. STREAM_MUSIC + speakerphone is the diagnostic
- * path that can actually be heard during an IMS call.
+ * Audio is the AOSP AP-IMS path: after
+ * {@code MmTelFeature.setCallAudioHandler(AUDIO_HANDLER_ANDROID)},
+ * Telecom uses {@code MODE_IN_COMMUNICATION} and the voice-communication
+ * stream is the in-call mixer. Do not change AudioManager mode or
+ * speakerphone from this class. Routing stays with Dialer/Telecom.
  */
 final class JoanMedia {
     private static final String TAG = "JoanIms";
     private static final int SAMPLE_HZ = 8000;
     private static final int PTIME_SAMPLES = 160;
     private static final int NATIVE_PORT = 15091;
-
-    private static final int[] SOURCES = {
-            MediaRecorder.AudioSource.MIC,
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-            MediaRecorder.AudioSource.CAMCORDER,
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
-    };
 
     private static volatile boolean sRun;
     private static Thread sCap;
@@ -62,7 +54,7 @@ final class JoanMedia {
         sPlay = new Thread(() -> playback(app), "joan-ims-play");
         sCap.start();
         sPlay.start();
-        JoanTrace.note("media start split");
+        JoanTrace.note("media start voice");
     }
 
     static void stop() {
@@ -87,6 +79,14 @@ final class JoanMedia {
             }
         }
         JoanTrace.note("media stop");
+    }
+
+    private static AudioAttributes voiceAttrs() {
+        return new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .setLegacyStreamType(AudioManager.STREAM_VOICE_CALL)
+                .build();
     }
 
     private static void capture(Context app) {
@@ -136,14 +136,12 @@ final class JoanMedia {
             int minOut = AudioTrack.getMinBufferSize(SAMPLE_HZ,
                     AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
             int outBuf = Math.max(minOut, PTIME_SAMPLES * 16);
-            trk = openMusicTrack(outBuf);
+            trk = openVoiceTrack(outBuf);
             if (trk == null) {
                 JoanTrace.note("media no play track");
                 return;
             }
-            trk.setVolume(1.0f);
             trk.play();
-            routeOutput(am, trk, true);
             DatagramSocket sock = sSock;
             if (sock == null) {
                 return;
@@ -155,8 +153,8 @@ final class JoanMedia {
             short[] pcm = new short[PTIME_SAMPLES];
             DatagramPacket in = new DatagramPacket(down, down.length);
             int dl = 0;
-            boolean lastSpk = am != null && am.isSpeakerphoneOn();
-            JoanTrace.note("media play rolling spk=" + lastSpk);
+            JoanTrace.note("media play rolling voice mode="
+                    + (am == null ? -1 : am.getMode()));
             while (sRun) {
                 try {
                     sock.receive(in);
@@ -175,16 +173,10 @@ final class JoanMedia {
                 }
                 int wr = trk.write(pcm, 0, m);
                 dl++;
-                boolean spk = am != null && am.isSpeakerphoneOn();
-                if (spk != lastSpk) {
-                    lastSpk = spk;
-                    routeOutput(am, trk, false);
-                    JoanTrace.note("media route spk=" + spk);
-                }
                 if (dl == 1 || (dl % 50) == 0) {
                     JoanTrace.note("media dl frames=" + dl + " write=" + wr
                             + " mode=" + (am == null ? -1 : am.getMode())
-                            + " spk=" + spk);
+                            + " spk=" + (am != null && am.isSpeakerphoneOn()));
                 }
             }
         } catch (Throwable t) {
@@ -195,37 +187,23 @@ final class JoanMedia {
         }
     }
 
-    private static void routeOutput(AudioManager am, AudioTrack trk, boolean init) {
-        if (am == null || trk == null) {
-            return;
-        }
-        boolean spk = am.isSpeakerphoneOn();
-        int want = spk ? AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
-                       : AudioDeviceInfo.TYPE_BUILTIN_EARPIECE;
-        try {
-            for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
-                if (d.getType() == want) {
-                    trk.setPreferredDevice(d);
-                    try {
-                        am.setCommunicationDevice(d);
-                    } catch (Throwable ignored) {}
-                    if (init) {
-                        JoanTrace.note("media route init spk=" + spk);
-                    }
-                    return;
-                }
-            }
-        } catch (Throwable t) {
-            JoanTrace.note("media route " + t.getClass().getSimpleName());
-        }
-    }
-
     private static AudioRecord openRecord(int inBuf) {
-        for (int src : SOURCES) {
+        int[] sources = {
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                MediaRecorder.AudioSource.MIC,
+        };
+        for (int src : sources) {
             AudioRecord rec = null;
             try {
-                rec = new AudioRecord(src, SAMPLE_HZ, AudioFormat.CHANNEL_IN_MONO,
-                        AudioFormat.ENCODING_PCM_16BIT, inBuf);
+                rec = new AudioRecord.Builder()
+                        .setAudioSource(src)
+                        .setAudioFormat(new AudioFormat.Builder()
+                                .setSampleRate(SAMPLE_HZ)
+                                .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                .build())
+                        .setBufferSizeInBytes(inBuf)
+                        .build();
                 if (rec.getState() == AudioRecord.STATE_INITIALIZED) {
                     JoanTrace.note("media record ok src=" + src);
                     return rec;
@@ -242,13 +220,10 @@ final class JoanMedia {
         return null;
     }
 
-    private static AudioTrack openMusicTrack(int outBuf) {
+    private static AudioTrack openVoiceTrack(int outBuf) {
         try {
             AudioTrack t = new AudioTrack.Builder()
-                    .setAudioAttributes(new AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .build())
+                    .setAudioAttributes(voiceAttrs())
                     .setAudioFormat(new AudioFormat.Builder()
                             .setSampleRate(SAMPLE_HZ)
                             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
@@ -261,18 +236,10 @@ final class JoanMedia {
                 return t;
             }
             t.release();
+            JoanTrace.note("media voice track uninit");
         } catch (Throwable t) {
-            JoanTrace.note("media music " + t.getClass().getSimpleName());
+            JoanTrace.note("media voice " + t.getClass().getSimpleName());
         }
-        try {
-            AudioTrack t = new AudioTrack(AudioManager.STREAM_MUSIC, SAMPLE_HZ,
-                    AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                    outBuf, AudioTrack.MODE_STREAM);
-            if (t.getState() == AudioTrack.STATE_INITIALIZED) {
-                return t;
-            }
-            t.release();
-        } catch (Throwable ignored) {}
         return null;
     }
 

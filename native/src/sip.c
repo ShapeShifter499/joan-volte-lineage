@@ -344,6 +344,23 @@ int parse_response(const char *msg, size_t len, sip_response_t *r)
         r->rseq = atoi(rs);
     r->require[0] = '\0';
     header_value(msg, "Require", r->require, sizeof(r->require));
+    r->session_expires = 0;
+    r->se_refresher[0] = '\0';
+    char se[64];
+    if (header_value(msg, "Session-Expires", se, sizeof(se)) >= 0) {
+        r->session_expires = atoi(se);
+        const char *rf = strcasestr(se, "refresher=");
+        if (rf) {
+            rf += 10;
+            size_t i = 0;
+            while (rf[i] && rf[i] != ';' && rf[i] != ' ' && rf[i] != '\r' &&
+                   i + 1 < sizeof(r->se_refresher)) {
+                r->se_refresher[i] = rf[i];
+                i++;
+            }
+            r->se_refresher[i] = '\0';
+        }
+    }
     return 0;
 }
 
@@ -375,6 +392,8 @@ static int sdp_offer(char *out, size_t outlen, const char *ip, int rtp_port)
     app(&a, "a=fmtp:101 0-15\r\n");
     app(&a, "a=ptime:20\r\n");
     app(&a, "a=maxptime:240\r\n");
+    app(&a, "a=rtcp:%d\r\n", rtp_port + 1);
+    app(&a, "a=rtcp-mux\r\n");
     app(&a, "a=sendrecv\r\n");
     return (int)(outlen - a.left);
 }
@@ -548,6 +567,52 @@ int build_prack(char *out, size_t outlen,
     return (int)(outlen - a.left);
 }
 
+
+int build_update(char *out, size_t outlen,
+                 const sip_identity_t *id,
+                 const char *target,
+                 const char *to_uri,
+                 const char *route,
+                 const char *sec_verify,
+                 const sip_dialog_t *dlg,
+                 const char *to_tag,
+                 int session_expires)
+{
+    const char *public_id = id->impu[0] ? id->impu : id->impi;
+    char aor[300];
+    if (!strncmp(public_id, "tel:", 4) || !strncmp(public_id, "sip:", 4))
+        snprintf(aor, sizeof(aor), "%s", public_id);
+    else
+        snprintf(aor, sizeof(aor), "sip:%s", public_id);
+
+    char host[80];
+    bracket(id->local_ip, host, sizeof(host));
+    char branch[40];
+    mk_branch(branch, sizeof(branch));
+
+    appender_t a = { out, outlen };
+    app(&a, "UPDATE %s SIP/2.0\r\n", target);
+    app(&a, "Via: SIP/2.0/UDP %s:%d;branch=%s;rport\r\n",
+        host, id->local_port, branch);
+    app(&a, "Max-Forwards: 70\r\n");
+    if (route && route[0])
+        app(&a, "Route: %s\r\n", route);
+    app(&a, "From: <%s>;tag=%s\r\n", aor, dlg->from_tag);
+    if (to_tag && to_tag[0])
+        app(&a, "To: <%s>;tag=%s\r\n", to_uri, to_tag);
+    else
+        app(&a, "To: <%s>\r\n", to_uri);
+    app(&a, "Call-ID: %s\r\n", dlg->call_id);
+    app(&a, "CSeq: %d UPDATE\r\n", dlg->cseq + 1);
+    if (session_expires > 0)
+        app(&a, "Session-Expires: %d;refresher=uac\r\n", session_expires);
+    app(&a, "Supported: timer\r\n");
+    if (sec_verify && sec_verify[0])
+        app(&a, "Security-Verify: %s\r\n", sec_verify);
+    app(&a, "Content-Length: 0\r\n");
+    app(&a, "\r\n");
+    return (int)(outlen - a.left);
+}
 
 int build_bye(char *out, size_t outlen,
               const sip_identity_t *id,
@@ -762,6 +827,9 @@ int sdp_answer(char *out, size_t outlen, const char *ip, int rtp_port,
     app(&a, "m=audio %d RTP/AVP 0\r\n", rtp_port);
     app(&a, "a=rtpmap:0 PCMU/8000\r\n");
     app(&a, "a=ptime:20\r\n");
+    app(&a, "a=rtcp:%d\r\n", rtp_port + 1);
+    if (!offer || strstr(offer, "a=rtcp-mux"))
+        app(&a, "a=rtcp-mux\r\n");
     app(&a, "a=sendrecv\r\n");
     return (int)(outlen - a.left);
 }
@@ -825,6 +893,8 @@ int sdp_parse_media(const char *msg, sdp_media_t *out)
             int rpt = atoi(p + 9);
             if (out->pt < 0 && rpt >= 0)
                 out->pt = rpt;
+        } else if (n >= 10 && !strncmp(p, "a=rtcp-mux", 10)) {
+            out->have_rtcp_mux = 1;
         }
         if (!eol)
             break;

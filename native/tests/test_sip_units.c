@@ -230,6 +230,17 @@ static void test_response_parse(void)
           "parse www-auth nonce extractable");
     CHECK(rr.have_sec_server, "parse security-server");
     CHECK(rr.expires == -1, "parse absent expires");
+    CHECK(rr.session_expires == 0, "parse absent session-expires");
+
+    static const char r200se[] =
+        "SIP/2.0 200 OK\r\n"
+        "Session-Expires: 90;refresher=uac\r\n"
+        "Content-Length: 0\r\n\r\n";
+    sip_response_t se;
+    CHECK(parse_response(r200se, sizeof(r200se) - 1, &se) == 0 &&
+          se.status == 200, "parse 200 with session-expires");
+    CHECK(se.session_expires == 90, "parse session-expires 90");
+    CHECK(!strcmp(se.se_refresher, "uac"), "parse refresher uac");
 }
 
 static void test_sdp_and_tcp_frame(void)
@@ -245,19 +256,23 @@ static void test_sdp_and_tcp_frame(void)
         "c=IN IP6 2001:db8::9\r\n"
         "t=0 0\r\n"
         "m=audio 40000 RTP/AVP 0 96 101\r\n"
-        "a=rtpmap:0 PCMU/8000\r\n";
+        "a=rtpmap:0 PCMU/8000\r\n"
+        "a=rtcp-mux\r\n";
     sdp_media_t m;
     CHECK(sdp_parse_media(sdp, &m) == 0, "sdp parse finds c/m");
     CHECK(!strcmp(m.ip, "2001:db8::9"), "sdp parse IP6");
     CHECK(m.port == 40000, "sdp parse port");
     CHECK(m.have_pcmu == 1, "sdp parse PCMU");
     CHECK(m.pt == 0, "sdp parse pt 0");
+    CHECK(m.have_rtcp_mux == 1, "sdp parse rtcp-mux");
 
     char ans[512];
     int n = sdp_answer(ans, sizeof(ans), "2001:db8::2", 40000, sdp);
     CHECK(n > 40, "sdp answer size");
     CHECK(strstr(ans, "RTP/AVP 0") != NULL, "sdp answer PCMU");
     CHECK(strstr(ans, "AMR-WB") == NULL, "sdp answer not AMR");
+    CHECK(strstr(ans, "a=rtcp-mux") != NULL, "sdp answer rtcp-mux");
+    CHECK(strstr(ans, "a=rtcp:40001") != NULL, "sdp answer rtcp port");
 
     sip_identity_t id;
     memset(&id, 0, sizeof(id));
@@ -279,6 +294,23 @@ static void test_sdp_and_tcp_frame(void)
     CHECK(strstr(msg, ":16000>") != NULL, "REGISTER Contact uses contact_port");
     CHECK(strstr(msg, "Via: SIP/2.0/UDP [2001:db8::2]:15000") != NULL,
           "REGISTER Via uses local_port");
+
+    sip_dialog_t dlg;
+    char inv[SIP_MAX_MSG];
+    int ni = build_invite(inv, sizeof(inv), &id, "tel:+15551212",
+                          NULL, NULL, 40000, &dlg);
+    CHECK(ni > 0, "invite builds");
+    CHECK(strstr(inv, "a=rtcp-mux") != NULL, "invite SDP rtcp-mux");
+    CHECK(strstr(inv, "a=rtcp:40001") != NULL, "invite SDP rtcp port");
+    CHECK(strstr(inv, "Supported: replaces, timer") == NULL,
+          "invite does not advertise timer");
+
+    char upd[SIP_MAX_MSG];
+    int nu = build_update(upd, sizeof(upd), &id, "sip:peer@ims.example.net",
+                          "tel:+15551212", NULL, NULL, &dlg, "totag", 90);
+    CHECK(nu > 0 && strstr(upd, "UPDATE ") == upd, "update builds");
+    CHECK(strstr(upd, "Session-Expires: 90;refresher=uac") != NULL,
+          "update carries session-expires");
 
     char buf[256];
     const char *wire =

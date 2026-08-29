@@ -66,6 +66,9 @@ static struct {
     char route[512];       /* route set: Record-Route if the 2xx carried one */
     char to_tag[64];
     int  active;
+    int  se_sec;           /* RFC 4028 Session-Expires; 0 = none */
+    int  se_uac;           /* 1 if we are the refresher */
+    long refresh_at;
 } g_call;
 static ua_state_t g_state;
 static char g_err[160];
@@ -308,6 +311,7 @@ int ua_select_prep(fd_set *rfds, int maxfd)
     for (int i = 0; i < TCP_MAX; i++)
         maxfd = add_fd(rfds, g_tcp[i].fd, maxfd);
     maxfd = add_fd(rfds, rtp_fd(), maxfd);
+    maxfd = add_fd(rfds, rtp_rtcp_fd(), maxfd);
     return maxfd;
 }
 
@@ -320,7 +324,7 @@ static int media_from_sip(const char *msg)
     }
     int pt = m.have_pcmu ? 0 : m.pt;
     return rtp_start(g_cfg->id.local_ip, g_cfg->id.iface,
-                     40000, m.ip, m.port, pt);
+                     40000, m.ip, m.port, pt, m.have_rtcp_mux);
 }
 
 static int sip_sendto(int s, int dport, const char *pkt, size_t len);
@@ -874,6 +878,32 @@ int ua_call_invite(const char *dest)
                  resp.have_record_route ? "yes" : "no");
             g_call.dlg = dlg;
             g_call.active = 1;
+            g_call.se_sec = resp.session_expires;
+            g_call.se_uac = 0;
+            g_call.refresh_at = 0;
+            if (resp.session_expires > 0) {
+                /* RFC 4028 §7.2: a 2xx with Session-Expires starts the
+                 * timer even if we did not advertise Supported: timer.
+                 * refresher=uac (or absent while we are UAC) means we
+                 * send UPDATE at half the interval. */
+                if (!resp.se_refresher[0] ||
+                    !strcasecmp(resp.se_refresher, "uac"))
+                    g_call.se_uac = 1;
+                klog(LOG_INFO, "session-expires=%d refresher=%s",
+                     resp.session_expires,
+                     resp.se_refresher[0] ? resp.se_refresher : "uac");
+                if (g_call.se_uac) {
+                    int half = resp.session_expires / 2;
+                    if (half < 15)
+                        half = resp.session_expires > 15 ? 15
+                                                       : resp.session_expires - 1;
+                    if (half < 1)
+                        half = 1;
+                    g_call.refresh_at = now_ms() + (long)half * 1000;
+                }
+            } else {
+                klog(LOG_INFO, "session-expires=none");
+            }
             char ack[SIP_MAX_MSG];
             int an = build_ack(ack, sizeof(ack), &id,
                                g_call.target[0] ? g_call.target : dest,
@@ -973,6 +1003,30 @@ int ua_media_poll_ms(void)
 void ua_media_tick(void)
 {
     rtp_tick();
+    if (!g_call.active || !g_call.se_uac || g_call.se_sec <= 0 ||
+        g_call.refresh_at <= 0 || now_ms() < g_call.refresh_at)
+        return;
+    sip_identity_t id = g_cfg->id;
+    id.local_port = g_reg.port_c;
+    id.pcscf_port = g_reg.pcscf_port_s;
+    char msg[SIP_MAX_MSG];
+    int n = build_update(msg, sizeof(msg), &id,
+                         g_call.target[0] ? g_call.target : g_call.dest,
+                         g_call.dest, g_call.route, g_reg.sec_verify,
+                         &g_call.dlg, g_call.to_tag, g_call.se_sec);
+    if (n <= 0 || g_port_c_fd < 0) {
+        klog(LOG_WARN, "session UPDATE build failed");
+        g_call.refresh_at = now_ms() + 5000;
+        return;
+    }
+    if (sip_sendto(g_port_c_fd, g_reg.pcscf_port_s, msg, (size_t)n) == 0) {
+        g_call.dlg.cseq++;
+        klog(LOG_INFO, "session UPDATE sent se=%d", g_call.se_sec);
+        g_call.refresh_at = now_ms() + (long)(g_call.se_sec / 2) * 1000;
+    } else {
+        klog(LOG_WARN, "session UPDATE send failed");
+        g_call.refresh_at = now_ms() + 2000;
+    }
 }
 
 static void inbound_send(const char *pkt, size_t len)
@@ -1060,6 +1114,13 @@ static void handle_sip_request(char *rx, size_t r)
         return;
     }
 
+    if (!strcasecmp(method, "UPDATE")) {
+        klog(LOG_INFO, "inbound UPDATE");
+        n = build_response(resp, sizeof(resp), rx, 200, "OK", &id, NULL, NULL);
+        if (n > 0) inbound_send(resp, (size_t)n);
+        return;
+    }
+
     klog(LOG_INFO, "inbound %.12s (not handled)", method);
     n = build_response(resp, sizeof(resp), rx, 501, "Not Implemented",
                        &id, NULL, NULL);
@@ -1113,6 +1174,8 @@ void ua_select_handle(fd_set *rfds)
         handle_sip_request(rx, (size_t)r);
     }
     if (rtp_fd() >= 0 && FD_ISSET(rtp_fd(), rfds))
+        rtp_tick();
+    if (rtp_rtcp_fd() >= 0 && FD_ISSET(rtp_rtcp_fd(), rfds))
         rtp_tick();
 }
 
