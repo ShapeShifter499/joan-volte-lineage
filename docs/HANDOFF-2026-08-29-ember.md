@@ -123,12 +123,13 @@ never loads into the running policy, which is why a zero-byte
 
 Options, cheapest first, none yet tried:
 
-1. **Re-test the unix socket.** The app now runs as `platform_app`, not the
-   `priv_app` the fallback was written for. `JoanCtl` already prefers unix
-   and falls back silently, and `ctl_last` shows it is still falling back --
-   but nobody has looked at *why* since the domain changed. If
-   `platform_app` -> `netmgrd` `connectto` is permitted, the listener can be
-   compiled out today with no other work. **Start here.**
+1. ~~Re-test the unix socket.~~ **Tried 2026-08-29; dead.** Even as
+   `platform_app` the connect is refused:
+
+       avc: denied { connectto } scontext=u:r:platform_app:s0
+            tcontext=u:r:netmgrd:s0 tclass=unix_stream_socket permissive=0
+
+   The domain change from `priv_app` did not help. No policy, no socket.
 2. **Bind and token.** Have the daemon write a random per-boot token where
    only the app can read it. Weak on this device: the daemon's files are
    netmgrd-owned and the app cannot read them without the policy we do not
@@ -136,8 +137,14 @@ Options, cheapest first, none yet tried:
 3. **Reverse the direction** -- daemon connects to a socket the app listens
    on -- which needs `netmgrd` -> `platform_app` `connectto` and is no more
    likely to be permitted.
-4. **Delete the daemon** (see above). This is the real answer; the listener
-   stops existing rather than being secured.
+4. **Delete the daemon** (see above). This is the real answer, and after
+   option 1 was measured dead it is close to the only one.
+
+The reason none of 2 or 3 amount to security: TCP has no `SO_PEERCRED`, and
+`/proc/net/tcp` is EACCES from `netmgrd`, so **the daemon cannot identify its
+peer at all**. Anything built on top of that is obfuscation. Until the
+daemon goes, any local app can drive the UA, and a release should say so
+rather than soften it.
 
 `JOAN_IMS_BRINGUP_TCP_CTL=0` already compiles it out for an in-tree build.
 
