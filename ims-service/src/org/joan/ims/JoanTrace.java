@@ -14,6 +14,9 @@ final class JoanTrace {
     private static final String TAG = "JoanIms";
     private static final Object LOCK = new Object();
     private static File sFile;
+    private static int sWrites;
+    /** Truncate past this; the log is a bring-up aid, not an archive. */
+    private static final long MAX_BYTES = 256 * 1024;
     private static volatile String sLastAkaStage = "";
 
     private JoanTrace() {}
@@ -42,7 +45,18 @@ final class JoanTrace {
             try {
                 String ts = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS",
                         Locale.US).format(new Date());
-                FileWriter fw = new FileWriter(sFile, true);
+                /* Unbounded growth was a real finding: 393 KB and climbing
+                 * on the test handset, in device-protected storage, with
+                 * no rotation. Check occasionally rather than every line. */
+                boolean fresh = false;
+                if (++sWrites % 64 == 0 && sFile.length() > MAX_BYTES) {
+                    fresh = true;
+                }
+                FileWriter fw = new FileWriter(sFile, !fresh);
+                if (fresh) {
+                    fw.write(ts + " trace truncated at " + MAX_BYTES
+                            + " bytes\n");
+                }
                 fw.write(ts + " " + msg + "\n");
                 fw.close();
             } catch (Throwable t) {

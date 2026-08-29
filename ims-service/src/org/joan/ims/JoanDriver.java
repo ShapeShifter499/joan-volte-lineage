@@ -20,8 +20,9 @@ import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Registration driver: watches the IMS network, pulls identity from the
- * ISIM, and runs the two-stage REGISTER with the native UA over ctl.
+ * Registration driver: watches the IMS network, checks that the radio,
+ * SIM and IMS PDN are all ready, and then runs the two-stage REGISTER in
+ * JoanAppRegister, refreshing it before the registrar's grant lapses.
  *
  * Important battery/user-intent rule: if cellular/LTE is intentionally off
  * (airplane mode, no active SIM/subscription, preferred network mode excludes
@@ -95,49 +96,42 @@ final class JoanDriver {
                 }
 
                 Cycle c = d.cycle;
-                if (JoanSipUa.isRegistered()) {
-                    logState("app UA still registered; refresh in 30m");
-                    Thread.sleep(30 * 60_000L);
-                    continue;
-                }
-                if (daemonDown()) {
-                    logState("attempt REGISTER via app UA");
-                    String r = JoanSipUa.register(app);
-                    boolean ok = r != null && r.contains("reg2=200");
-                    JoanTrace.note("app register: "
-                            + (r == null ? "null" : r));
-                    if (ok && JoanSipUa.isRegistered()) {
-                        JoanRegistration.setRegistered(true, c.pcscf);
-                        logState("registered via app UA; re-register in 30m");
-                        registerBackoff = REG_RETRY_MIN_MS;
-                        Thread.sleep(30 * 60_000L);
-                    } else {
-                        JoanRegistration.setRegistered(false, null);
-                        logState("app REGISTER failed; backoff "
-                                + (registerBackoff / 1000) + "s");
-                        Thread.sleep(registerBackoff);
-                        registerBackoff = Math.min(REG_RETRY_MAX_MS,
-                                registerBackoff * 2);
+                boolean refreshing = JoanSipUa.isRegistered();
+                if (refreshing) {
+                    long wait = JoanSipUa.msUntilRefresh();
+                    if (wait > 0) {
+                        logState("registered via app UA; refresh in "
+                                + (wait / 60_000L) + "m");
+                        Thread.sleep(wait);
+                        continue;
                     }
+                }
+                logState(refreshing ? "refreshing REGISTER via app UA"
+                        : "attempt REGISTER via app UA");
+                String r = JoanSipUa.register(app);
+                boolean ok = r != null && r.contains("reg2=200");
+                JoanTrace.note("app register: "
+                        + (r == null ? "null" : r));
+                if (ok && JoanSipUa.isRegistered()) {
+                    JoanRegistration.setRegistered(true, c.pcscf);
+                    registerBackoff = REG_RETRY_MIN_MS;
+                    /* The next pass reads the granted lifetime and
+                     * sleeps until the refresh is due. */
                     continue;
                 }
-                logState("attempt REGISTER via native UA");
-                if (JoanAka.registerCycle(app, c.impi, c.impu,
-                        c.domain, c.imei, c.localIp, c.localPort,
-                        c.pcscf, c.pcscfPort, c.iface)) {
-                    JoanRegistration.setRegistered(true, c.pcscf);
-                    logState("registered; re-register in 30m");
-                    registerBackoff = REG_RETRY_MIN_MS;
-                    // Re-REGISTER well before default expiry drift.
-                    Thread.sleep(30 * 60_000L);
-                } else {
-                    JoanRegistration.setRegistered(false, null);
-                    logState("REGISTER failed; backoff "
-                            + (registerBackoff / 1000) + "s");
-                    Thread.sleep(registerBackoff);
-                    registerBackoff = Math.min(REG_RETRY_MAX_MS,
-                            registerBackoff * 2);
+                if (refreshing) {
+                    /* A failed refresh leaves the old binding in place
+                     * but unrenewed, and isRegistered() would send us
+                     * straight back to sleep instead of retrying. */
+                    JoanSipUa.release();
                 }
+                JoanRegistration.setRegistered(false, null);
+                logState("app REGISTER failed; backoff "
+                        + (registerBackoff / 1000) + "s");
+                Thread.sleep(registerBackoff);
+                registerBackoff = Math.min(REG_RETRY_MAX_MS,
+                        registerBackoff * 2);
+                continue;
             } catch (InterruptedException ie) {
                 // A receiver/provider/service poke woke us after a user/radio
                 // state change. Re-run discovery immediately instead of
@@ -162,13 +156,13 @@ final class JoanDriver {
         }
     }
 
+    /**
+     * What discovery proved is ready. JoanAppRegister reads the IMS network
+     * and the ISIM itself; the only field anyone still consumes is the
+     * P-CSCF list, which JoanRegistration reports as registration state.
+     */
     private static final class Cycle {
-        String impi, impu, domain, imei;
-        String localIp;
-        int localPort = 15060;
         String pcscf;
-        int pcscfPort = 5060;
-        String iface;
     }
 
     private static final class Discovery {
@@ -290,27 +284,17 @@ final class JoanDriver {
         // Only after radio+IMS prerequisites are met do we ask for identity.
         String domain = hiddenString(tm, "getIsimDomain");
         String impi = hiddenString(tm, "getIsimImpi");
-        String impu = firstIsimImpu(tm);
-        String imei = safeImei(tm);
         if (impi == null || !impi.contains("@")) {
             return Discovery.waitFor("no ISIM IMPI on this device/SIM yet");
         }
-        if (impu == null || impu.isEmpty()) {
-            impu = impi;
-        }
 
-        Cycle c = new Cycle();
-        c.localIp = stripScope(local.getHostAddress());
-        c.pcscf = pcscf;
-        c.iface = imsLp.getInterfaceName();
-        c.impi = impi;
-        c.impu = impu;
-        c.domain = (domain != null && !domain.isEmpty())
+        String realm = (domain != null && !domain.isEmpty())
                 ? domain : realmFromImpi(impi);
-        if (c.domain == null || c.domain.isEmpty()) {
+        if (realm == null || realm.isEmpty()) {
             return Discovery.waitFor("no IMS realm derivable from SIM");
         }
-        c.imei = imei;
+        Cycle c = new Cycle();
+        c.pcscf = pcscf;
         return Discovery.ready(c);
     }
 
@@ -556,31 +540,6 @@ final class JoanDriver {
         return at > 0 ? impi.substring(at + 1) : null;
     }
 
-    private static String safeImei(TelephonyManager tm) {
-        try {
-            Method m = TelephonyManager.class.getMethod("getImei");
-            Object v = m.invoke(tm);
-            return v == null ? "" : String.valueOf(v);
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private static String firstIsimImpu(TelephonyManager tm) {
-        try {
-            Method m = TelephonyManager.class.getMethod("getIsimImpu");
-            Object v = m.invoke(tm);
-            if (v instanceof String[]) {
-                String[] a = (String[]) v;
-                return a.length > 0 ? a[0] : null;
-            }
-            return v == null ? null : String.valueOf(v);
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
     private static String hiddenString(TelephonyManager tm, String name) {
         try {
             Method m = TelephonyManager.class.getMethod(name);
@@ -643,13 +602,6 @@ final class JoanDriver {
         } catch (Exception e) {
             return null;
         }
-    }
-
-    private static boolean daemonDown() {
-        String r = JoanCtl.txn("STATUS");
-        return r == null || r.isEmpty()
-                || !(r.startsWith("STATE") || r.startsWith("INFO")
-                || r.startsWith("OK") || r.startsWith("ERR"));
     }
 
     private static String stripScope(String host) {

@@ -29,9 +29,9 @@ public class JoanCallSession extends ImsCallSessionImplBase {
     private volatile int state = STATE_IDLE;
     private final String callId;
     private volatile boolean watchHangup;
-    /* An inbound call the daemon is holding at 180. accept() and reject()
-     * must drive the daemon rather than just telling Telecom, because the
-     * INVITE has not been answered yet. */
+    /* An inbound call held at 180. accept() and reject() must drive the UA
+     * rather than just telling Telecom, because the INVITE has not been
+     * answered yet. */
     private final boolean incoming;
 
     JoanCallSession(Context app, JoanMmTelFeature feature, ImsCallProfile profile) {
@@ -106,29 +106,29 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             uri = "tel:" + callee;
         }
         new Thread(() -> {
-            if (JoanSipUa.isRegistered()) {
-                String resp = JoanSipUa.invite(uri);
-                if (resp != null && resp.startsWith("OK")) {
-                    state = STATE_ESTABLISHED;
-                    notifyStarted(used);
-                    feature.useAndroidAudioHandler();
-                    startMedia();
-                    watchRemoteHangup();
-                } else {
-                    failStart(resp == null ? "invite failed" : resp);
-                }
+            if (!JoanSipUa.isRegistered()) {
+                failStart("not registered");
                 return;
             }
-            String resp = JoanCtl.txn("CALL " + uri);
-            if (resp != null && resp.startsWith("OK")) {
-                state = STATE_ESTABLISHED;
-                notifyStarted(used);
-                feature.useAndroidAudioHandler();
-                JoanMedia.start(this.app);
-                watchRemoteHangup();
-            } else {
-                failStart(resp == null ? "ctl failed" : "call failed");
+            String resp = JoanSipUa.invite(uri);
+            if (resp == null || !resp.startsWith("OK")) {
+                failStart(resp == null ? "invite failed" : resp);
+                return;
             }
+            if (!hasNegotiatedMedia()) {
+                JoanSipUa.hangup();
+                failStart("no negotiated media");
+                return;
+            }
+            /* Order matters: Telecom only switches to
+             * MODE_IN_COMMUNICATION once the session is ACTIVE and the
+             * audio handler is ANDROID. AudioRecord and AudioTrack have to
+             * open after that or they land on the wrong routing. */
+            state = STATE_ESTABLISHED;
+            notifyStarted(used);
+            feature.useAndroidAudioHandler();
+            startMedia();
+            watchRemoteHangup();
         }, "joan-ims-call").start();
     }
 
@@ -139,43 +139,35 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             state = STATE_ESTABLISHED;
             notifyStarted(profile);
             feature.useAndroidAudioHandler();
-            JoanMedia.start(this.app);
+            if (hasNegotiatedMedia()) {
+                startMedia();
+            }
             return;
         }
-        /* The INVITE is still unanswered: the daemon must send the 200 OK
-         * before we can claim the call is up. Off the binder thread. */
+        /* The INVITE is still unanswered: the 200 OK has to go out before
+         * we can claim the call is up. Off the binder thread. */
         new Thread(() -> {
-            if (JoanSipUa.isRegistered()) {
-                String resp = JoanSipUa.answer();
-                if (resp != null && resp.startsWith("OK")) {
-                    state = STATE_ESTABLISHED;
-                    notifyStarted(profile);
-                    feature.useAndroidAudioHandler();
-                    startMedia();
-                    watchRemoteHangup();
-                    JoanTrace.note("incoming call answered");
-                } else {
-                    Log.w(TAG, "ANSWER refused by app UA");
-                    JoanTrace.note("incoming answer failed");
-                    state = STATE_TERMINATED;
-                    notifyTerminated(0);
-                }
-                return;
-            }
-            String resp = JoanCtl.txn("ANSWER");
-            if (resp != null && resp.startsWith("OK")) {
-                state = STATE_ESTABLISHED;
-                notifyStarted(profile);
-                feature.useAndroidAudioHandler();
-                JoanMedia.start(this.app);
-                watchRemoteHangup();
-                JoanTrace.note("incoming call answered");
-            } else {
-                Log.w(TAG, "ANSWER refused by daemon");
+            String resp = JoanSipUa.answer();
+            if (resp == null || !resp.startsWith("OK")) {
+                Log.w(TAG, "ANSWER refused by app UA");
                 JoanTrace.note("incoming answer failed");
                 state = STATE_TERMINATED;
                 notifyTerminated(0);
+                return;
             }
+            if (!hasNegotiatedMedia()) {
+                JoanSipUa.hangup();
+                JoanTrace.note("incoming answer had no media");
+                state = STATE_TERMINATED;
+                notifyTerminated(0);
+                return;
+            }
+            state = STATE_ESTABLISHED;
+            notifyStarted(profile);
+            feature.useAndroidAudioHandler();
+            startMedia();
+            watchRemoteHangup();
+            JoanTrace.note("incoming call answered");
         }, "joan-ims-answer").start();
     }
 
@@ -185,13 +177,8 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             /* 603 Decline says the user refused; 486 would claim we are
              * busy, which sends some callers to a different treatment. */
             state = STATE_TERMINATED;
-            new Thread(() -> {
-                if (JoanSipUa.isRegistered()) {
-                    JoanSipUa.reject(603);
-                } else {
-                    JoanCtl.txn("REJECT 603");
-                }
-            }, "joan-ims-reject").start();
+            new Thread(() -> JoanSipUa.reject(603),
+                    "joan-ims-reject").start();
             notifyTerminated(reason);
             return;
         }
@@ -210,13 +197,7 @@ public class JoanCallSession extends ImsCallSessionImplBase {
     private void hangupAsync() {
         watchHangup = false;
         JoanMedia.stop();
-        new Thread(() -> {
-            if (JoanSipUa.isRegistered()) {
-                JoanSipUa.hangup();
-            } else {
-                JoanCtl.txn("HANGUP");
-            }
-        }, "joan-ims-hangup").start();
+        new Thread(JoanSipUa::hangup, "joan-ims-hangup").start();
     }
 
     private void watchRemoteHangup() {
@@ -229,23 +210,12 @@ public class JoanCallSession extends ImsCallSessionImplBase {
                     if (!watchHangup) {
                         return;
                     }
-                    if (JoanSipUa.isRegistered()) {
-                        if (JoanSipUa.callActive()) {
-                            seenUp = true;
-                            continue;
-                        }
-                    } else {
-                        String st = JoanCtl.txn("STATUS");
-                        if (st == null) {
-                            continue;
-                        }
-                        if (st.contains("CALL=1")) {
-                            seenUp = true;
-                            continue;
-                        }
+                    if (JoanSipUa.callActive()) {
+                        seenUp = true;
+                        continue;
                     }
                     if (seenUp) {
-                        JoanTrace.note("remote hangup STATUS without CALL=1");
+                        JoanTrace.note("remote hangup: call no longer active");
                         state = STATE_TERMINATED;
                         JoanMedia.stop();
                         notifyTerminated(ImsReasonInfo.CODE_USER_TERMINATED);
@@ -312,14 +282,24 @@ public class JoanCallSession extends ImsCallSessionImplBase {
         }
     }
 
-    private void startMedia() {
-        if (JoanSipUa.mediaIp() != null) {
-            JoanMedia.startRtp(app, JoanSipUa.network(), JoanSipUa.localAddr(),
-                    JoanSipUa.mediaIp(), JoanSipUa.mediaPort(),
-                    JoanSipUa.mediaMux());
-        } else {
-            JoanMedia.start(app);
+    /**
+     * Whether the answer gave us somewhere to send RTP. Checked before the
+     * session is declared ACTIVE: JoanMedia.start() used to bridge audio to
+     * the native daemon when there was no negotiated media, which produced
+     * a call that looked connected and was silent. Failing is better.
+     */
+    private boolean hasNegotiatedMedia() {
+        if (JoanSipUa.mediaIp() == null || JoanSipUa.mediaPort() <= 0) {
+            JoanTrace.note("no negotiated media");
+            return false;
         }
+        return true;
+    }
+
+    private void startMedia() {
+        JoanMedia.startRtp(app, JoanSipUa.network(), JoanSipUa.localAddr(),
+                JoanSipUa.mediaIp(), JoanSipUa.mediaPort(),
+                JoanSipUa.mediaRtcpPort(), JoanSipUa.mediaMux());
     }
 
     private void failStart(String why) {

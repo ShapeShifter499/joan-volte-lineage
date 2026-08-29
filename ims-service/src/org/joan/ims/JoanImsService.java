@@ -25,12 +25,19 @@ public class JoanImsService extends android.telephony.ims.ImsService {
         JoanDriver.start(getApplicationContext());
     }
 
+    /**
+     * MMTEL only. FEATURE_EMERGENCY_MMTEL is deliberately not advertised:
+     * there is no emergency registration, no urn:service:sos handling and
+     * no PSAP callback path here, and ImsService#createEmergencyMmTelFeature
+     * would otherwise hand emergency dials to this stack. Claiming the
+     * feature we do not implement is how an emergency call gets lost
+     * instead of falling back to CS.
+     */
     @Override
     public ImsFeatureConfiguration querySupportedImsFeatures() {
         Log.i(TAG, "querySupportedImsFeatures MMTEL");
         JoanTrace.note("querySupportedImsFeatures MMTEL");
         return new ImsFeatureConfiguration.Builder()
-                .addFeature(0, ImsFeature.FEATURE_EMERGENCY_MMTEL)
                 .addFeature(0, ImsFeature.FEATURE_MMTEL)
                 .build();
     }

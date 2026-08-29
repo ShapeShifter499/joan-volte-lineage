@@ -17,12 +17,15 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 
 /**
- * In-app SIP UA: keeps the IPsec sockets after REGISTER 200 so INVITE
- * and inbound requests can use them. Replaces JoanCtl when the native
- * daemon is stopped. Never logs identities or SIP request-URIs.
+ * In-app SIP UA: keeps the IPsec sockets after REGISTER 200 so INVITE and
+ * inbound requests can use them. Never logs identities or request-URIs.
  */
 final class JoanSipUa {
     static final int RTP_PORT = 40000;
+
+    /** Refresh at 80% of the granted lifetime, within these bounds. */
+    private static final long REFRESH_FLOOR_MS = 60_000L;
+    private static final long REFRESH_CAP_MS = 30 * 60_000L;
 
     private static final Object LOCK = new Object();
     private static volatile boolean sReg;
@@ -39,6 +42,8 @@ final class JoanSipUa {
     private static FileDescriptor sTcpS, sTcpC, sTcpPeer;
     private static final StringBuilder sTcpAcc = new StringBuilder();
     private static volatile boolean sReplyTcp;
+    private static volatile long sRegisteredAtMs;
+    private static volatile int sExpiresSec;
     private static JoanSipBuilder.Id sId;
     private static String sPani;
     private static String sSecVerify;
@@ -57,6 +62,7 @@ final class JoanSipUa {
     private static volatile String sOurToTag;
     private static volatile InetAddress sMediaIp;
     private static volatile int sMediaPort;
+    private static volatile int sMediaRtcpPort;
     private static volatile boolean sMediaMux;
 
     private JoanSipUa() {}
@@ -69,12 +75,47 @@ final class JoanSipUa {
         return sCall;
     }
 
+    /**
+     * Milliseconds until this registration must be refreshed, 0 when it is
+     * due now or there is nothing registered.
+     *
+     * The registrar is free to grant less than the Expires we asked for,
+     * and when its grant lapses the binding is gone while this side still
+     * believes it is registered: MO calls fail and MT calls never arrive.
+     * The cap re-validates the binding periodically even when the grant is
+     * long, which is what the driver's old "re-register in 30m" comment
+     * intended before the app path stopped re-registering at all.
+     */
+    static long msUntilRefresh() {
+        if (!sReg) {
+            return 0;
+        }
+        long lead = JoanSipBuilder.refreshLeadMs(sExpiresSec,
+                REFRESH_CAP_MS, REFRESH_FLOOR_MS);
+        long left = sRegisteredAtMs + lead - System.currentTimeMillis();
+        return left > 0 ? left : 0;
+    }
+
+    /** Tear the binding down so the driver's backoff path takes over. */
+    static void release() {
+        synchronized (LOCK) {
+            releaseLocked();
+        }
+        JoanRegistration.setRegistered(false, null);
+        JoanTrace.note("app UA released");
+    }
+
     static InetAddress mediaIp() {
         return sMediaIp;
     }
 
     static int mediaPort() {
         return sMediaPort;
+    }
+
+    /** The peer's RTCP port from its a=rtcp:, or the RTP port + 1. */
+    static int mediaRtcpPort() {
+        return sMediaRtcpPort > 0 ? sMediaRtcpPort : sMediaPort + 1;
     }
 
     static boolean mediaMux() {
@@ -129,6 +170,9 @@ final class JoanSipUa {
             sReg = sPublicId != null && !sPublicId.isEmpty();
             sCall = false;
             sReplyTcp = false;
+            sExpiresSec = JoanSipBuilder.grantedExpiresSeconds(
+                    reg2Msg, id.contactPort);
+            sRegisteredAtMs = System.currentTimeMillis();
         }
         if (sReg) {
             /* Same as native hold_protected_ports: TCP listen on port-s
@@ -138,7 +182,9 @@ final class JoanSipUa {
             JoanRegistration.setRegistered(true, null);
             startListen();
             JoanTrace.note("app UA registered public=yes tcp_s="
-                    + (sTcpS != null) + " tcp_c=" + (sTcpC != null));
+                    + (sTcpS != null) + " tcp_c=" + (sTcpC != null)
+                    + " granted=" + sExpiresSec + "s refresh_in="
+                    + (msUntilRefresh() / 1000) + "s");
         } else {
             JoanTrace.note("app UA REGISTER 200 but no public identity");
         }
@@ -212,6 +258,32 @@ final class JoanSipUa {
                     route = rr;
                 }
                 JoanSipBuilder.Media media = JoanSipBuilder.parseSdp(rx);
+                /* The answer names the codec that was actually selected.
+                 * We only speak PCMU; streaming u-law into anything else
+                 * is noise in both directions and reports no error. ACK
+                 * first so the dialog is well formed, then hang it up. */
+                if (media != null && media.payloadType != 0) {
+                    JoanTrace.note("app invite answered pt="
+                            + media.payloadType + "; only PCMU implemented");
+                    try {
+                        send(sSockC, sPcscf, sPcscfPortS,
+                                JoanSipBuilder.buildAck(id, dlg, target,
+                                        route, sSecVerify, toHdr, fromHdr)
+                                        .getBytes(StandardCharsets.US_ASCII));
+                    } catch (Exception ignored) {
+                        // ignore
+                    }
+                    synchronized (LOCK) {
+                        sDlg = dlg;
+                        sTarget = target;
+                        sRoute = route;
+                        sToHdr = toHdr;
+                        sFromHdr = fromHdr;
+                        sCall = true;
+                    }
+                    hangup();
+                    return "ERR unsupported codec " + media.payloadType;
+                }
                 String ack = JoanSipBuilder.buildAck(id, dlg, target, route,
                         sSecVerify, toHdr, fromHdr);
                 try {
@@ -232,6 +304,7 @@ final class JoanSipUa {
                         try {
                             sMediaIp = InetAddress.getByName(media.ip);
                             sMediaPort = media.port;
+                            sMediaRtcpPort = media.rtcpPort;
                             sMediaMux = media.mux;
                         } catch (Exception e) {
                             sMediaIp = null;
@@ -339,6 +412,7 @@ final class JoanSipUa {
                 try {
                     sMediaIp = InetAddress.getByName(media.ip);
                     sMediaPort = media.port;
+                    sMediaRtcpPort = media.rtcpPort;
                     sMediaMux = media.mux;
                 } catch (Exception ignored) {
                     sMediaIp = null;
@@ -428,7 +502,36 @@ final class JoanSipUa {
             JoanMedia.stop();
             return;
         }
+        if ("CANCEL".equals(method)) {
+            handleCancel(rx);
+            return;
+        }
+        if ("OPTIONS".equals(method)) {
+            /* Cores use OPTIONS as a liveness probe. Silence can get the
+             * binding torn down, and we advertise OPTIONS in Allow, so
+             * answer it and say what we accept. */
+            try {
+                sendReply(buildResponse(rx, 200, "OK", sId,
+                        sOurToTag != null ? sOurToTag : "opt", null,
+                        "Allow: " + JoanSipBuilder.ALLOW + "\r\n")
+                        .getBytes(StandardCharsets.US_ASCII));
+            } catch (Exception ignored) {
+                // ignore
+            }
+            return;
+        }
         if (!"INVITE".equals(method)) {
+            /* Anything else is dropped without a reply. That is worth
+             * saying out loud: the REGISTER Contact advertises
+             * +g.3gpp.smsip and Allow lists MESSAGE, so a core is entitled
+             * to deliver SMS here as a SIP MESSAGE -- which would land
+             * exactly here and vanish. Log the method, never the message:
+             * a MESSAGE body is the text of someone's SMS. */
+            if (!"ACK".equals(method)) {
+                /* ACK needs no response and ignoring it is correct;
+                 * calling that "unhandled" in the log is misleading. */
+                JoanTrace.note("app inbound unhandled method=" + method);
+            }
             return;
         }
         if (sCall || sHeldInvite != null) {
@@ -439,6 +542,21 @@ final class JoanSipUa {
                 // ignore
             }
             JoanTrace.note("app inbound INVITE busy");
+            return;
+        }
+        JoanSipBuilder.Media offer = JoanSipBuilder.parseSdp(rx);
+        if (offer != null && !offer.offersPcmu) {
+            /* sdpAnswer() would answer PCMU regardless of what was
+             * offered. Better to decline than to ring the user for a call
+             * that cannot carry audio. */
+            JoanTrace.note("app inbound INVITE offers no PCMU; 488");
+            try {
+                sendReply(buildResponse(rx, 488, "Not Acceptable Here",
+                        sId, "nocodec", null)
+                        .getBytes(StandardCharsets.US_ASCII));
+            } catch (Exception ignored) {
+                // ignore
+            }
             return;
         }
         sOurToTag = String.format("%012x",
@@ -459,6 +577,54 @@ final class JoanSipUa {
         if (sApp != null) {
             JoanMmTelFeature.onIncomingCall(sApp, cli.uri, cli.name);
         }
+    }
+
+    /**
+     * The caller gave up while we were ringing.
+     *
+     * CANCEL used to fall off the end of handleInbound, which had two
+     * consequences. Telecom was never told, so the dialer went on ringing
+     * for a call the network had already abandoned. And sHeldInvite --
+     * cleared only by answer() and reject() -- stayed set forever, so the
+     * busy guard above answered 486 to every later inbound INVITE and the
+     * phone silently stopped receiving calls until the process restarted.
+     *
+     * Answer the CANCEL, 487 the INVITE it names, and let go of the dialog.
+     */
+    private static void handleCancel(String rx) {
+        String held;
+        synchronized (LOCK) {
+            held = sHeldInvite;
+        }
+        String callId = JoanSipBuilder.header(rx, "Call-ID");
+        boolean mine = held != null && callId != null
+                && callId.equals(JoanSipBuilder.header(held, "Call-ID"));
+        String tag = sOurToTag != null ? sOurToTag : "x";
+        /* A UAS answers the CANCEL transaction either way. */
+        try {
+            sendReply(buildResponse(rx, 200, "OK", sId, tag, null)
+                    .getBytes(StandardCharsets.US_ASCII));
+        } catch (Exception ignored) {
+            // ignore
+        }
+        JoanTrace.note("app inbound CANCEL held=" + (held != null)
+                + " matched=" + mine);
+        if (!mine) {
+            return;
+        }
+        try {
+            sendReply(buildResponse(held, 487, "Request Terminated",
+                    sId, tag, null).getBytes(StandardCharsets.US_ASCII));
+        } catch (Exception ignored) {
+            // ignore
+        }
+        synchronized (LOCK) {
+            if (sHeldInvite == held) {
+                sHeldInvite = null;
+            }
+        }
+        sOurToTag = null;
+        JoanMmTelFeature.onCallEndedRemotely();
     }
 
     private static FileDescriptor tcpListen(int port, IpSecTransform inXf,
@@ -605,6 +771,12 @@ final class JoanSipUa {
     private static String buildResponse(String req, int code, String reason,
                                         JoanSipBuilder.Id id, String toTag,
                                         String sdp) {
+        return buildResponse(req, code, reason, id, toTag, sdp, null);
+    }
+
+    private static String buildResponse(String req, int code, String reason,
+                                        JoanSipBuilder.Id id, String toTag,
+                                        String sdp, String extraHeaders) {
         String via = JoanSipBuilder.header(req, "Via");
         String from = JoanSipBuilder.header(req, "From");
         String to = JoanSipBuilder.header(req, "To");
@@ -649,6 +821,9 @@ final class JoanSipUa {
         }
         a.append("Contact: <sip:").append(contactUser).append('@')
                 .append(host).append(':').append(id.contactPort).append(">\r\n");
+        if (extraHeaders != null) {
+            a.append(extraHeaders);
+        }
         if (sdp != null) {
             a.append("Content-Type: application/sdp\r\n");
             a.append("Content-Length: ").append(sdp.length()).append("\r\n\r\n");
@@ -696,6 +871,8 @@ final class JoanSipUa {
     private static void releaseLocked() {
         sReg = false;
         sCall = false;
+        sExpiresSec = 0;
+        sRegisteredAtMs = 0;
         closeFd(sTcpPeer);
         closeFd(sTcpS);
         closeFd(sTcpC);

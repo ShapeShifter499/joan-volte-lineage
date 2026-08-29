@@ -8,7 +8,19 @@ import java.security.SecureRandom;
  * IMPI).
  */
 final class JoanSipBuilder {
+    /* One RNG. Constructing a SecureRandom per message seeds it afresh,
+     * and inDialog() runs for every ACK, BYE and PRACK. It is thread-safe. */
+    private static final SecureRandom RNG = new SecureRandom();
+
     static final int REG1_PORT = 15060;
+
+    /**
+     * Methods this UA actually accepts. handleInbound() dispatches INVITE,
+     * ACK (by correctly ignoring it), CANCEL, BYE and OPTIONS; anything
+     * else is dropped. Advertising more than that invites the network to
+     * send us traffic we silently discard.
+     */
+    static final String ALLOW = "INVITE, ACK, CANCEL, BYE, OPTIONS";
     static final int PCSCF_SIP_PORT = 5060;
 
     static final class Params {
@@ -165,7 +177,7 @@ final class JoanSipBuilder {
     static String buildRegister(Id id, Txn txn, int cseq,
                                 Challenge ch, byte[] res,
                                 byte[] ck, byte[] ik, String pani) {
-        txn.newBranch(new SecureRandom());
+        txn.newBranch(RNG);
         String publicId = id.impu;
         String aor;
         if (publicId.startsWith("tel:") || publicId.startsWith("sip:")) {
@@ -230,9 +242,9 @@ final class JoanSipBuilder {
                 .append(">;+sip.instance=\"<urn:gsma:imei:")
                 .append(imeiInstance(id.imei))
                 .append(">\";+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\""
-                        + ";+g.3gpp.smsip;audio\r\n");
+                        + ";audio\r\n");
         a.append("Expires: 600000\r\n");
-        a.append("Allow: INVITE, ACK, CANCEL, BYE, UPDATE, REFER, NOTIFY, MESSAGE, OPTIONS, PRACK\r\n");
+        a.append("Allow: ").append(ALLOW).append("\r\n");
         a.append("Supported: path, sec-agree\r\n");
         a.append("Require: sec-agree\r\n");
         a.append("Proxy-Require: sec-agree\r\n");
@@ -384,6 +396,123 @@ final class JoanSipBuilder {
         return null;
     }
 
+    /** Every header line with this name, in message order. */
+    static java.util.List<String> headers(String msg, String name) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        int i = 0;
+        while (i < msg.length()) {
+            int eol = eol(msg, i);
+            if (eol == i) {
+                break; /* blank line: headers end, body begins */
+            }
+            String line = msg.substring(i, eol);
+            int colon = line.indexOf(':');
+            if (colon > 0 && line.substring(0, colon).equalsIgnoreCase(name)) {
+                out.add(line.substring(colon + 1).trim());
+            }
+            i = skipEol(msg, eol);
+            if (i == eol) {
+                break;
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Seconds the registrar actually granted, or -1 when it said nothing.
+     *
+     * A REGISTER 200 carries the granted lifetime as an expires= parameter
+     * on the returned Contact, or as an Expires header. Several contacts
+     * can come back when the same IMPU is registered from more than one
+     * device, so prefer the one bound to our own contact port and only
+     * then fall back.
+     */
+    static int grantedExpiresSeconds(String reg200, int contactPort) {
+        java.util.List<String> contacts = headers(reg200, "Contact");
+        String portMark = ":" + contactPort;
+        int fallback = -1;
+        for (String c : contacts) {
+            int e = expiresParam(c);
+            if (e < 0) {
+                continue;
+            }
+            int at = c.indexOf(portMark);
+            if (at >= 0) {
+                char after = at + portMark.length() < c.length()
+                        ? c.charAt(at + portMark.length()) : '>';
+                if (after < '0' || after > '9') {
+                    return e;
+                }
+            }
+            if (fallback < 0) {
+                fallback = e;
+            }
+        }
+        if (fallback >= 0) {
+            return fallback;
+        }
+        String h = header(reg200, "Expires");
+        if (h != null) {
+            try {
+                return Integer.parseInt(h.trim());
+            } catch (NumberFormatException ignored) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * How long to wait before refreshing a registration the registrar
+     * granted for {@code grantedSec}.
+     *
+     * The lifetime is the registrar's to choose and carriers differ widely
+     * -- this handset's core grants 3600s against the 600000s we ask for,
+     * and others use 600 or 1800. So aim at 80% of whatever came back,
+     * capped so a very long grant is still re-validated periodically, and
+     * rate-limited so a very short one cannot spin.
+     *
+     * The rate limit must never win outright: a floor applied on top of a
+     * short grant would schedule the refresh at or after expiry, which is
+     * the failure it was supposed to prevent. Clamp it to half the grant.
+     *
+     * @param grantedSec seconds granted, or <= 0 when the registrar said
+     *                   nothing, in which case the cap is used
+     */
+    static long refreshLeadMs(int grantedSec, long capMs, long floorMs) {
+        if (grantedSec <= 0) {
+            return capMs;
+        }
+        long grantMs = grantedSec * 1000L;
+        long lead = Math.min(grantMs / 5 * 4, capMs);
+        long floor = Math.min(floorMs, grantMs / 2);
+        return Math.max(lead, floor);
+    }
+
+    private static int expiresParam(String contact) {
+        int i = indexOfIgnoreCase(contact, "expires=");
+        if (i < 0) {
+            return -1;
+        }
+        int v = i + "expires=".length();
+        int e = v;
+        while (e < contact.length()) {
+            char c = contact.charAt(e);
+            if (c < '0' || c > '9') {
+                break;
+            }
+            e++;
+        }
+        if (e == v) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(contact.substring(v, e));
+        } catch (NumberFormatException ignored) {
+            return -1;
+        }
+    }
+
     private static int eol(String msg, int from) {
         int r = msg.indexOf('\r', from);
         int n = msg.indexOf('\n', from);
@@ -419,6 +548,10 @@ final class JoanSipBuilder {
         int port;
         boolean mux;
         int rtcpPort;
+        /** First payload type on m=audio: the selected one in an answer. */
+        int payloadType = -1;
+        /** Whether payload type 0 (PCMU) appears at all: offers list many. */
+        boolean offersPcmu;
     }
 
     static String sdpOffer(String ip, int rtpPort) {
@@ -430,14 +563,17 @@ final class JoanSipBuilder {
                 + "s=-\r\n"
                 + "c=IN " + fam + " " + ip + "\r\n"
                 + "t=0 0\r\n"
-                + "m=audio " + rtpPort + " RTP/AVP 0 96 97 101\r\n"
+                /* PCMU only: JoanMedia implements G.711 u-law and
+                 * nothing else. Offering AMR-WB, AMR and telephone-event
+                 * as the C UA did invited the core to answer with one of
+                 * them, after which we would have sent u-law labelled as
+                 * payload type 0 into an AMR session and decoded AMR as
+                 * u-law -- noise both ways, with no error anywhere. This
+                 * core happens to pick the first entry, which is the only
+                 * reason that was survivable. Implementing AMR-WB is the
+                 * real fix and is not done here. */
+                + "m=audio " + rtpPort + " RTP/AVP 0\r\n"
                 + "a=rtpmap:0 PCMU/8000\r\n"
-                + "a=rtpmap:96 AMR-WB/16000/1\r\n"
-                + "a=fmtp:96 octet-align=0;mode-change-capability=2\r\n"
-                + "a=rtpmap:97 AMR/8000/1\r\n"
-                + "a=fmtp:97 octet-align=0\r\n"
-                + "a=rtpmap:101 telephone-event/8000\r\n"
-                + "a=fmtp:101 0-15\r\n"
                 + "a=ptime:20\r\n"
                 + "a=maxptime:240\r\n"
                 + "a=rtcp:" + (rtpPort + 1) + "\r\n"
@@ -497,7 +633,7 @@ final class JoanSipBuilder {
         }
         String aor = aorOf(id.impu);
         String host = bracket(id.localIp);
-        SecureRandom rng = new SecureRandom();
+        SecureRandom rng = RNG;
         dlg.branch = String.format("z9hG4bK%08x%08x", rng.nextInt(), rng.nextInt());
         dlg.callId = String.format("%08x-%04x-%04x-%04x-%06x%04x",
                 rng.nextInt(), rng.nextInt() & 0xffff, rng.nextInt() & 0xffff,
@@ -529,8 +665,7 @@ final class JoanSipBuilder {
                 .append(">;+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\";audio\r\n");
         a.append("P-Preferred-Identity: <").append(aor).append(">\r\n");
         a.append("P-Access-Network-Info: ").append(pani).append("\r\n");
-        a.append("Allow: INVITE, ACK, CANCEL, BYE, UPDATE, PRACK, INFO, OPTIONS\r\n");
-        a.append("Supported: replaces\r\n");
+        a.append("Allow: ").append(ALLOW).append("\r\n");
         a.append("Require: sec-agree\r\n");
         a.append("Proxy-Require: sec-agree\r\n");
         if (secVerify != null && !secVerify.isEmpty()) {
@@ -627,12 +762,26 @@ final class JoanSipBuilder {
             } else if (line.startsWith("c=IN IP4 ")) {
                 m.ip = line.substring(9).trim();
             } else if (line.startsWith("m=audio ")) {
-                String rest = line.substring(8).trim();
-                int sp = rest.indexOf(' ');
+                /* m=audio <port> <proto> <pt> [<pt> ...] */
+                String[] tok = line.substring(8).trim().split("\\s+");
                 try {
-                    m.port = Integer.parseInt(sp < 0 ? rest : rest.substring(0, sp));
-                } catch (NumberFormatException ignored) {
+                    m.port = Integer.parseInt(tok[0]);
+                } catch (Exception ignored) {
                     m.port = 0;
+                }
+                for (int i = 2; i < tok.length; i++) {
+                    int pt;
+                    try {
+                        pt = Integer.parseInt(tok[i]);
+                    } catch (NumberFormatException ignored) {
+                        continue;
+                    }
+                    if (m.payloadType < 0) {
+                        m.payloadType = pt;
+                    }
+                    if (pt == 0) {
+                        m.offersPcmu = true;
+                    }
                 }
             } else if (line.equalsIgnoreCase("a=rtcp-mux")) {
                 m.mux = true;
@@ -667,7 +816,7 @@ final class JoanSipBuilder {
         String aor = aorOf(id.impu != null && !id.impu.isEmpty()
                 ? id.impu : id.impi);
         String host = bracket(id.localIp);
-        SecureRandom rng = new SecureRandom();
+        SecureRandom rng = RNG;
         String branch = String.format("z9hG4bK%08x%08x", rng.nextInt(), rng.nextInt());
         StringBuilder a = new StringBuilder(1200);
         a.append(method).append(' ').append(target).append(" SIP/2.0\r\n");

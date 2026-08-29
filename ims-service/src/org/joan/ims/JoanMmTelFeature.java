@@ -2,6 +2,7 @@ package org.joan.ims;
 
 import android.content.Context;
 import android.os.Bundle;
+import android.telephony.TelephonyManager;
 import android.telephony.ims.ImsCallProfile;
 import android.telephony.ims.feature.ImsFeature;
 import android.telephony.ims.feature.MmTelFeature;
@@ -12,8 +13,8 @@ import android.util.Log;
  * MmTel feature: the capability surface Dialer and telephony query, plus
  * call sessions in both directions.
  *
- * Inbound calls arrive as a pushed event from the daemon (see JoanEvents),
- * which holds the INVITE at 180 Ringing until the user answers or declines.
+ * Inbound calls arrive from JoanSipUa, which holds the INVITE at 180
+ * Ringing until the user answers, declines, or the caller cancels.
  */
 public class JoanMmTelFeature extends MmTelFeature {
     private static final String TAG = "JoanIms";
@@ -28,7 +29,6 @@ public class JoanMmTelFeature extends MmTelFeature {
          * and when, varies. An inbound call that arrives before we are
          * attached cannot ring, so attach as early as we exist. */
         sInstance = this;
-        JoanEvents.start(this.app);
         // Framework should call onFeatureReady(); also post READY in case
         // the listener attach races FeatureConnector's first status read.
         app.getMainExecutor().execute(this::markReady);
@@ -40,7 +40,6 @@ public class JoanMmTelFeature extends MmTelFeature {
         Log.i(TAG, "changeEnabledCapabilities");
         sInstance = this;
         JoanDriver.start(app);
-        JoanEvents.start(app);
         markReady();
     }
 
@@ -50,7 +49,6 @@ public class JoanMmTelFeature extends MmTelFeature {
         JoanTrace.note("onFeatureReady");
         sInstance = this;
         JoanDriver.start(app);
-        JoanEvents.start(app);
         markReady();
     }
 
@@ -60,8 +58,8 @@ public class JoanMmTelFeature extends MmTelFeature {
     private static volatile JoanCallSession sIncoming;
 
     /**
-     * An inbound INVITE is being held by the daemon while we ring.
-     * Build a session for it and hand it to Telecom.
+     * An inbound INVITE is being held at 180 while we ring. Build a session
+     * for it and hand it to Telecom.
      */
     static void onIncomingCall(Context ctx, String callerUri,
                                String callerName) {
@@ -69,13 +67,8 @@ public class JoanMmTelFeature extends MmTelFeature {
         if (f == null) {
             Log.w(TAG, "incoming call but no MmTelFeature; cannot ring");
             JoanTrace.note("incoming with no feature");
-            new Thread(() -> {
-                if (JoanSipUa.isRegistered()) {
-                    JoanSipUa.reject(486);
-                } else {
-                    JoanCtl.txn("REJECT 486");
-                }
-            }, "joan-ims-noferature-reject").start();
+            new Thread(() -> JoanSipUa.reject(486),
+                    "joan-ims-nofeature-reject").start();
             return;
         }
         try {
@@ -92,13 +85,8 @@ public class JoanMmTelFeature extends MmTelFeature {
         } catch (Throwable t) {
             Log.w(TAG, "notifyIncomingCall failed", t);
             JoanTrace.note("incoming failed " + t.getClass().getSimpleName());
-            new Thread(() -> {
-                if (JoanSipUa.isRegistered()) {
-                    JoanSipUa.reject(486);
-                } else {
-                    JoanCtl.txn("REJECT 486");
-                }
-            }, "joan-ims-fail-reject").start();
+            new Thread(() -> JoanSipUa.reject(486),
+                    "joan-ims-fail-reject").start();
         }
     }
 
@@ -230,12 +218,54 @@ public class JoanMmTelFeature extends MmTelFeature {
         }
     }
 
+    /**
+     * Telephony asks whether a dial should go over IMS or fall back to CS.
+     *
+     * Emergency numbers always fall back. This stack has no emergency
+     * registration and no urn:service:sos path, so an emergency dial placed
+     * over it would reach an S-CSCF that has no idea it is an emergency
+     * call. If the number cannot be classified at all we also fall back:
+     * losing VoLTE on a call is recoverable, guessing wrong about an
+     * emergency call is not.
+     */
     @Override
     public int shouldProcessCall(String[] numbers) {
-        if (JoanRegistration.isRegistered()) {
-            return PROCESS_CALL_IMS;
+        if (!JoanRegistration.isRegistered()) {
+            return PROCESS_CALL_CSFB;
         }
-        return PROCESS_CALL_CSFB;
+        if (anyEmergency(numbers)) {
+            JoanTrace.note("emergency dial -> CSFB");
+            return PROCESS_CALL_CSFB;
+        }
+        return PROCESS_CALL_IMS;
+    }
+
+    private boolean anyEmergency(String[] numbers) {
+        if (numbers == null || numbers.length == 0) {
+            return false;
+        }
+        TelephonyManager tm = app.getSystemService(TelephonyManager.class);
+        if (tm == null) {
+            return true;
+        }
+        for (String n : numbers) {
+            if (n == null || n.isEmpty()) {
+                continue;
+            }
+            try {
+                if (tm.isEmergencyNumber(n)) {
+                    return true;
+                }
+            } catch (Throwable t) {
+                /* Cannot classify: treat as emergency and use CS. */
+                Log.w(TAG, "isEmergencyNumber unavailable "
+                        + t.getClass().getSimpleName());
+                JoanTrace.note("emergency check failed "
+                        + t.getClass().getSimpleName());
+                return true;
+            }
+        }
+        return false;
     }
 
     private void markReady() {

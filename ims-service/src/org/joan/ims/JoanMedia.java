@@ -7,6 +7,7 @@ import android.media.AudioManager;
 import android.media.AudioRecord;
 import android.media.AudioTrack;
 import android.media.MediaRecorder;
+import android.os.Process;
 import android.util.Log;
 
 import android.net.Network;
@@ -19,7 +20,7 @@ import java.net.SocketTimeoutException;
 import java.security.SecureRandom;
 
 /**
- * 8 kHz PCMU between AudioFlinger and the native RTP UA.
+ * 8 kHz PCMU between AudioFlinger and the peer's RTP.
  *
  * Capture and playback run on separate threads (a single loop that
  * blocked on mic read then UDP receive sent uplink every ~40 ms).
@@ -34,7 +35,6 @@ final class JoanMedia {
     private static final String TAG = "JoanIms";
     private static final int SAMPLE_HZ = 8000;
     private static final int PTIME_SAMPLES = 160;
-    private static final int NATIVE_PORT = 15091;
 
     private static volatile boolean sRun;
     private static Thread sCap;
@@ -42,9 +42,9 @@ final class JoanMedia {
     private static DatagramSocket sSock;
 
     private static final int RTP_HDR = 12;
-    private static volatile boolean sRtp;
     private static volatile InetAddress sDest;
     private static volatile int sDestPort;
+    private static volatile int sRtcpPort;
     private static volatile boolean sMux;
     private static volatile int sSeq;
     private static volatile int sTs;
@@ -56,23 +56,14 @@ final class JoanMedia {
 
     private JoanMedia() {}
 
-    static void start(Context ctx) {
-        startInternal(ctx, null, null, null, 0, false);
-    }
-
     static void startRtp(Context ctx, Network net, InetAddress local,
-                         InetAddress dest, int destPort, boolean mux) {
-        startInternal(ctx, net, local, dest, destPort, mux);
-    }
-
-    private static void startInternal(Context ctx, Network net,
-                                      InetAddress local, InetAddress dest,
-                                      int destPort, boolean mux) {
+                         InetAddress dest, int destPort, int rtcpPort,
+                         boolean mux) {
         stop();
         Context app = ctx.getApplicationContext();
-        sRtp = dest != null;
         sDest = dest;
         sDestPort = destPort;
+        sRtcpPort = rtcpPort > 0 ? rtcpPort : destPort + 1;
         sMux = mux;
         sSeq = new SecureRandom().nextInt() & 0xffff;
         sTs = new SecureRandom().nextInt();
@@ -80,17 +71,16 @@ final class JoanMedia {
         sSent = sRecv = sOctets = 0;
         sRtcpNext = System.currentTimeMillis() + 400;
         try {
-            if (sRtp) {
-                sSock = new DatagramSocket(null);
-                sSock.setReuseAddress(true);
-                if (net != null) {
-                    net.bindSocket(sSock);
-                }
-                sSock.bind(new InetSocketAddress(local, JoanSipUa.RTP_PORT));
-            } else {
-                sSock = new DatagramSocket();
+            sSock = new DatagramSocket(null);
+            sSock.setReuseAddress(true);
+            if (net != null) {
+                net.bindSocket(sSock);
             }
-            sSock.setSoTimeout(40);
+            sSock.bind(new InetSocketAddress(local, JoanSipUa.RTP_PORT));
+            /* Only needs to be short enough to notice sRun going false,
+             * and stop() closes the socket which unblocks receive anyway.
+             * 40 ms was 25 pointless wakeups a second on the audio thread. */
+            sSock.setSoTimeout(500);
         } catch (Exception e) {
             JoanTrace.note("media sock " + e.getClass().getSimpleName());
             return;
@@ -100,7 +90,8 @@ final class JoanMedia {
         sPlay = new Thread(() -> playback(app), "joan-ims-play");
         sCap.start();
         sPlay.start();
-        JoanTrace.note(sRtp ? "media start rtp mux=" + mux : "media start voice");
+        JoanTrace.note("media start rtp mux=" + mux
+                + " rtcp_port=" + (sMux ? sDestPort : sRtcpPort));
     }
 
     static void stop() {
@@ -127,6 +118,20 @@ final class JoanMedia {
         JoanTrace.note("media stop");
     }
 
+    /**
+     * Both media threads carry a 20 ms deadline. At default priority the
+     * scheduler is free to leave either of them behind a background task,
+     * which shows up as dropouts rather than as anything logged.
+     */
+    private static void audioPriority(String which) {
+        try {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO);
+        } catch (Throwable t) {
+            JoanTrace.note("media " + which + " priority "
+                    + t.getClass().getSimpleName());
+        }
+    }
+
     private static AudioAttributes voiceAttrs() {
         return new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -137,6 +142,13 @@ final class JoanMedia {
 
     private static void capture(Context app) {
         AudioRecord rec = null;
+        long ulSumSq = 0;
+        long ulSamples = 0;
+        long ulActSq = 0;
+        long ulActSamples = 0;
+        int ulPeak = 0;
+        boolean ulLogged = false;
+        audioPriority("cap");
         try {
             int minIn = AudioRecord.getMinBufferSize(SAMPLE_HZ,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
@@ -150,56 +162,107 @@ final class JoanMedia {
             if (sock == null) {
                 return;
             }
-            InetAddress dest = sRtp ? sDest : InetAddress.getByName("127.0.0.1");
-            int dport = sRtp ? sDestPort : NATIVE_PORT;
+            InetAddress dest = sDest;
+            int dport = sDestPort;
             short[] pcm = new short[PTIME_SAMPLES];
             byte[] ulaw = new byte[PTIME_SAMPLES];
             byte[] rtp = new byte[RTP_HDR + PTIME_SAMPLES];
             DatagramPacket out = new DatagramPacket(
-                    sRtp ? rtp : ulaw, sRtp ? rtp.length : ulaw.length, dest, dport);
+                    rtp, rtp.length, dest, dport);
+            double agcGain = 1.0;
+            AudioManager cam = app.getSystemService(AudioManager.class);
             JoanTrace.note("media cap rolling src=" + rec.getAudioSource()
-                    + " rtp=" + sRtp);
+                    + " mode=" + (cam == null ? -1 : cam.getMode()));
             while (sRun) {
                 int n = rec.read(pcm, 0, PTIME_SAMPLES);
                 if (n <= 0) {
                     continue;
                 }
                 int m = Math.min(n, PTIME_SAMPLES);
+                long rawSq = 0;
                 for (int i = 0; i < m; i++) {
-                    ulaw[i] = linearToUlaw(pcm[i]);
+                    int a = pcm[i] < 0 ? -pcm[i] : pcm[i];
+                    rawSq += (long) a * a;
                 }
-                if (sRtp) {
-                    rtp[0] = (byte) 0x80;
-                    rtp[1] = 0; /* PCMU */
-                    rtp[2] = (byte) (sSeq >> 8);
-                    rtp[3] = (byte) sSeq;
-                    sSeq = (sSeq + 1) & 0xffff;
-                    put32(rtp, 4, sTs);
-                    sTs += m;
-                    put32(rtp, 8, sSsrc);
-                    System.arraycopy(ulaw, 0, rtp, RTP_HDR, m);
-                    out.setData(rtp);
-                    out.setLength(RTP_HDR + m);
-                    sSent++;
-                    sOctets += m;
-                    if (System.currentTimeMillis() >= sRtcpNext) {
-                        sendRtcp(sock, dest, dport);
+                boolean speech = m > 0 && rawSq / m > ACTIVE_MEAN_SQ;
+                if (speech && !sPlatformAgc) {
+                    /* Adapt on speech only, so silence is never amplified
+                     * into audible noise. Come down fast to catch a shout,
+                     * go up slowly so the gain does not breathe. */
+                    double rms = Math.sqrt((double) rawSq / m);
+                    double want = Math.max(1.0, Math.min(AGC_MAX_GAIN,
+                            AGC_TARGET / Math.max(1.0, rms)));
+                    agcGain += (want - agcGain) * (want < agcGain ? 0.25 : 0.02);
+                }
+                long frameSq = 0;
+                for (int i = 0; i < m; i++) {
+                    int v = (int) (pcm[i] * agcGain);
+                    if (v > AGC_LIMIT) {
+                        v = AGC_LIMIT;
+                    } else if (v < -AGC_LIMIT) {
+                        v = -AGC_LIMIT;
                     }
-                } else {
-                    out.setLength(m);
+                    int a = v < 0 ? -v : v;
+                    frameSq += (long) a * a;
+                    if (a > ulPeak) {
+                        ulPeak = a;
+                    }
+                    ulaw[i] = linearToUlaw((short) v);
+                }
+                ulSumSq += frameSq;
+                ulSamples += m;
+                if (speech) {
+                    ulActSq += frameSq;
+                    ulActSamples += m;
+                }
+                if (!ulLogged && ulSamples >= SAMPLE_HZ * 5L) {
+                    JoanTrace.note("media ul level " + level(ulSumSq,
+                            ulSamples, ulPeak, ulActSq, ulActSamples)
+                            + String.format(java.util.Locale.US,
+                                    " agc=%+.1fdB", 20 * Math.log10(agcGain)));
+                    ulLogged = true;
+                }
+                rtp[0] = (byte) 0x80;
+                rtp[1] = 0; /* PCMU */
+                rtp[2] = (byte) (sSeq >> 8);
+                rtp[3] = (byte) sSeq;
+                sSeq = (sSeq + 1) & 0xffff;
+                put32(rtp, 4, sTs);
+                sTs += m;
+                put32(rtp, 8, sSsrc);
+                System.arraycopy(ulaw, 0, rtp, RTP_HDR, m);
+                out.setLength(RTP_HDR + m);
+                sSent++;
+                sOctets += m;
+                if (System.currentTimeMillis() >= sRtcpNext) {
+                    sendRtcp(sock, dest, dport);
                 }
                 sock.send(out);
             }
         } catch (Throwable t) {
-            JoanTrace.note("media cap fail " + t.getClass().getSimpleName());
-            Log.w(TAG, "media cap", t);
+            /* A closed socket during stop() is the normal way these threads
+             * end. Stack-tracing it twice per call buries real failures. */
+            if (sRun) {
+                JoanTrace.note("media cap fail " + t.getClass().getSimpleName());
+                Log.w(TAG, "media cap", t);
+            }
         } finally {
             try { if (rec != null) rec.release(); } catch (Throwable ignored) {}
+            JoanTrace.note("media ul stopped " + level(ulSumSq, ulSamples,
+                    ulPeak, ulActSq, ulActSamples));
         }
     }
 
     private static void playback(Context app) {
         AudioTrack trk = null;
+        int dl = 0;
+        long dlSumSq = 0;
+        long dlSamples = 0;
+        long dlActSq = 0;
+        long dlActSamples = 0;
+        int dlPeak = 0;
+        boolean dlLogged = false;
+        audioPriority("play");
         try {
             AudioManager am = app.getSystemService(AudioManager.class);
             int minOut = AudioTrack.getMinBufferSize(SAMPLE_HZ,
@@ -215,59 +278,88 @@ final class JoanMedia {
             if (sock == null) {
                 return;
             }
-            InetAddress loop = InetAddress.getByName("127.0.0.1");
-            if (!sRtp) {
-                byte[] prime = new byte[PTIME_SAMPLES];
-                sock.send(new DatagramPacket(prime, prime.length, loop, NATIVE_PORT));
-            }
             byte[] down = new byte[512];
             short[] pcm = new short[PTIME_SAMPLES];
             DatagramPacket in = new DatagramPacket(down, down.length);
-            int dl = 0;
             JoanTrace.note("media play rolling voice mode="
-                    + (am == null ? -1 : am.getMode()) + " rtp=" + sRtp);
+                    + (am == null ? -1 : am.getMode()));
             while (sRun) {
                 try {
                     sock.receive(in);
                 } catch (SocketTimeoutException e) {
                     continue;
                 }
-                int off = 0;
                 int m = in.getLength();
-                if (sRtp) {
-                    if (m < RTP_HDR) {
-                        continue;
-                    }
-                    int pt = down[1] & 0x7f;
-                    if (pt == 200 || pt == 201 || pt == 202) {
-                        continue; /* RTCP */
-                    }
-                    off = RTP_HDR;
-                    m -= RTP_HDR;
+                if (m < RTP_HDR) {
+                    continue;
                 }
+                /* RTCP packet types live in the whole second octet
+                 * (200..204). RTP's payload type is the low 7 bits of that
+                 * octet because bit 7 is the marker, so masking 0x7f before
+                 * the comparison folded an SR (200) to 72 and the test
+                 * could never be true -- every report the peer sent was
+                 * decoded as u-law and played. With a=rtcp-mux, which this
+                 * UA both offers and answers, those reports arrive on this
+                 * very socket. Version must be 2; anything else is not
+                 * ours. */
+                if ((down[0] & 0xc0) != 0x80) {
+                    continue;
+                }
+                int type = down[1] & 0xff;
+                if (type >= 200 && type <= 204) {
+                    continue; /* RTCP, not audio */
+                }
+                int off = RTP_HDR;
+                m -= RTP_HDR;
                 if (m > PTIME_SAMPLES) {
                     m = PTIME_SAMPLES;
                 }
                 if (m <= 0) {
                     continue;
                 }
+                long dFrameSq = 0;
                 for (int i = 0; i < m; i++) {
-                    pcm[i] = ulawToLinear(down[off + i]);
+                    short v = ulawToLinear(down[off + i]);
+                    int a = v < 0 ? -v : v;
+                    dFrameSq += (long) a * a;
+                    if (a > dlPeak) {
+                        dlPeak = a;
+                    }
+                    pcm[i] = v;
+                }
+                dlSumSq += dFrameSq;
+                dlSamples += m;
+                if (m > 0 && dFrameSq / m > ACTIVE_MEAN_SQ) {
+                    dlActSq += dFrameSq;
+                    dlActSamples += m;
+                }
+                if (!dlLogged && dlSamples >= SAMPLE_HZ * 5L) {
+                    JoanTrace.note("media dl level " + level(dlSumSq,
+                            dlSamples, dlPeak, dlActSq, dlActSamples));
+                    dlLogged = true;
                 }
                 int wr = trk.write(pcm, 0, m);
                 sRecv++;
                 dl++;
-                if (dl == 1 || (dl % 50) == 0) {
-                    JoanTrace.note("media dl frames=" + dl + " write=" + wr
+                if (dl == 1) {
+                    /* Downlink has started. Nothing else is traced from
+                     * this loop: JoanTrace.note() opens, writes and closes
+                     * a FileWriter under a process-global lock, and this
+                     * loop runs every 20 ms. */
+                    JoanTrace.note("media dl first frame write=" + wr
                             + " mode=" + (am == null ? -1 : am.getMode())
                             + " spk=" + (am != null && am.isSpeakerphoneOn()));
                 }
             }
         } catch (Throwable t) {
-            JoanTrace.note("media play fail " + t.getClass().getSimpleName());
-            Log.w(TAG, "media play", t);
+            if (sRun) {
+                JoanTrace.note("media play fail " + t.getClass().getSimpleName());
+                Log.w(TAG, "media play", t);
+            }
         } finally {
             try { if (trk != null) trk.release(); } catch (Throwable ignored) {}
+            JoanTrace.note("media dl stopped frames=" + dl + " "
+                    + level(dlSumSq, dlSamples, dlPeak, dlActSq, dlActSamples));
         }
     }
 
@@ -289,7 +381,9 @@ final class JoanMedia {
                         .setBufferSizeInBytes(inBuf)
                         .build();
                 if (rec.getState() == AudioRecord.STATE_INITIALIZED) {
-                    JoanTrace.note("media record ok src=" + src);
+                    attachEffects(rec.getAudioSessionId());
+                    JoanTrace.note("media record ok src=" + src
+                            + " platform_agc=" + sPlatformAgc);
                     return rec;
                 }
                 JoanTrace.note("media record uninit src=" + src);
@@ -302,6 +396,40 @@ final class JoanMedia {
             }
         }
         return null;
+    }
+
+    /**
+     * Use the platform's own preprocessing where a ROM offers it, and only
+     * fall back to the software AGC above when it does not. On stock
+     * LineageOS 22 for joan, AutomaticGainControl.isAvailable() is false:
+     * libaudiopreprocessing.so is on the device but nothing in
+     * audio_effects.xml points at it.
+     */
+    private static void attachEffects(int sessionId) {
+        sPlatformAgc = false;
+        try {
+            if (android.media.audiofx.AutomaticGainControl.isAvailable()) {
+                android.media.audiofx.AutomaticGainControl agc =
+                        android.media.audiofx.AutomaticGainControl.create(sessionId);
+                if (agc != null) {
+                    agc.setEnabled(true);
+                    sPlatformAgc = true;
+                }
+            }
+        } catch (Throwable t) {
+            JoanTrace.note("media agc " + t.getClass().getSimpleName());
+        }
+        try {
+            if (android.media.audiofx.AcousticEchoCanceler.isAvailable()) {
+                android.media.audiofx.AcousticEchoCanceler aec =
+                        android.media.audiofx.AcousticEchoCanceler.create(sessionId);
+                if (aec != null) {
+                    aec.setEnabled(true);
+                }
+            }
+        } catch (Throwable ignored) {
+            // platform default stands
+        }
     }
 
     private static AudioTrack openVoiceTrack(int outBuf) {
@@ -325,6 +453,59 @@ final class JoanMedia {
             JoanTrace.note("media voice " + t.getClass().getSimpleName());
         }
         return null;
+    }
+
+    /**
+     * Signal level of one direction of the call, as RMS and peak dBFS.
+     *
+     * There is no gain stage anywhere between AudioRecord and the u-law
+     * encoder, so the uplink level the far end hears is exactly the level
+     * the microphone delivered. When someone reports "they said I sounded
+     * quiet" this is the number that says whether the capture is low or
+     * the problem is downstream of us.
+     */
+    /**
+     * A frame whose mean square exceeds this counts as speech rather than
+     * silence. 10000 is about -50 dBFS, comfortably above the noise floor
+     * of an idle handset and well below any real talking.
+     */
+    private static final long ACTIVE_MEAN_SQ = 10000L;
+
+    /* Software AGC. This platform has no AGC effect: audio_effects.xml
+     * declares only Qualcomm's aec and ns, and LG's uplink conditioning
+     * lives in the ADSP voice topology (ACDB), which the AP VoIP path we
+     * use does not reach. Measured uplink speech swung between -24 and
+     * -45 dBFS across calls while the far end arrived at -16 to -23,
+     * because nothing between AudioRecord and the encoder touches level. */
+    private static final double AGC_TARGET = 32768.0 * 0.1;   /* -20 dBFS */
+    private static final double AGC_MAX_GAIN = 16.0;          /* +24 dB */
+    private static final int AGC_LIMIT = 23197;               /* -3 dBFS */
+    private static volatile boolean sPlatformAgc;
+
+    private static String level(long sumSq, long samples, int peak,
+                                long actSq, long actSamples) {
+        if (samples <= 0) {
+            return "no samples";
+        }
+        double rms = Math.sqrt((double) sumSq / (double) samples);
+        double rmsDb = rms > 0 ? 20.0 * Math.log10(rms / 32768.0) : -99.0;
+        double peakDb = peak > 0 ? 20.0 * Math.log10(peak / 32768.0) : -99.0;
+        /* Whole-call RMS is dominated by however long nobody was talking,
+         * so it cannot be compared between the two directions. The level
+         * over speech-active frames can be. */
+        String speech;
+        if (actSamples > 0) {
+            double a = Math.sqrt((double) actSq / (double) actSamples);
+            speech = String.format(java.util.Locale.US,
+                    " speech=%.1fdBFS active=%d%%",
+                    a > 0 ? 20.0 * Math.log10(a / 32768.0) : -99.0,
+                    (int) (100L * actSamples / samples));
+        } else {
+            speech = " speech=silent";
+        }
+        return String.format(java.util.Locale.US,
+                "rms=%.1fdBFS peak=%.1fdBFS n=%d", rmsDb, peakDb, samples)
+                + speech;
     }
 
     private static void put32(byte[] b, int off, int v) {
@@ -355,9 +536,24 @@ final class JoanMedia {
             pkt[37] = 8;
             byte[] cname = "joan.ims".getBytes("US-ASCII");
             System.arraycopy(cname, 0, pkt, 38, 8);
-            sock.send(new DatagramPacket(pkt, pkt.length, dest, rtpPort));
-            if (!sMux) {
-                sock.send(new DatagramPacket(pkt, pkt.length, dest, rtpPort + 1));
+            /* RFC 5761: with rtcp-mux, RTCP shares the RTP port.
+             * Otherwise it belongs on the peer's a=rtcp: port, which
+             * parseSdp parses and which we now honour instead of assuming
+             * RTP+1. */
+            int port = sMux ? rtpPort : sRtcpPort;
+            sock.send(new DatagramPacket(pkt, pkt.length, dest, port));
+            if (!sMux && port != rtpPort) {
+                /* And also on the RTP 5-tuple. This is load-bearing, not
+                 * a leftover probe: e7783f8 added it because this core
+                 * answers mux=0 with no a=rtcp:, and sending the SR only
+                 * to RTP+1 froze the downlink at ~16s and lost the call at
+                 * ~32s. The SBC keeps the media path bound to the RTP
+                 * 5-tuple. Removing it reproduced exactly that failure --
+                 * an answered inbound call with frames=0 downlink -- so it
+                 * stays until something proves the SBC no longer needs it.
+                 * The cost is a non-audio packet in the peer's RTP stream
+                 * every five seconds, which their jitter buffer discards. */
+                sock.send(new DatagramPacket(pkt, pkt.length, dest, rtpPort));
             }
             sRtcpNext = now + 5000;
         } catch (Exception ignored) {
