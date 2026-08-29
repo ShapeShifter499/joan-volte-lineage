@@ -428,6 +428,10 @@ final class JoanSipUa {
             JoanMedia.stop();
             return;
         }
+        if ("CANCEL".equals(method)) {
+            handleCancel(rx);
+            return;
+        }
         if (!"INVITE".equals(method)) {
             return;
         }
@@ -459,6 +463,54 @@ final class JoanSipUa {
         if (sApp != null) {
             JoanMmTelFeature.onIncomingCall(sApp, cli.uri, cli.name);
         }
+    }
+
+    /**
+     * The caller gave up while we were ringing.
+     *
+     * CANCEL used to fall off the end of handleInbound, which had two
+     * consequences. Telecom was never told, so the dialer went on ringing
+     * for a call the network had already abandoned. And sHeldInvite --
+     * cleared only by answer() and reject() -- stayed set forever, so the
+     * busy guard above answered 486 to every later inbound INVITE and the
+     * phone silently stopped receiving calls until the process restarted.
+     *
+     * Answer the CANCEL, 487 the INVITE it names, and let go of the dialog.
+     */
+    private static void handleCancel(String rx) {
+        String held;
+        synchronized (LOCK) {
+            held = sHeldInvite;
+        }
+        String callId = JoanSipBuilder.header(rx, "Call-ID");
+        boolean mine = held != null && callId != null
+                && callId.equals(JoanSipBuilder.header(held, "Call-ID"));
+        String tag = sOurToTag != null ? sOurToTag : "x";
+        /* A UAS answers the CANCEL transaction either way. */
+        try {
+            sendReply(buildResponse(rx, 200, "OK", sId, tag, null)
+                    .getBytes(StandardCharsets.US_ASCII));
+        } catch (Exception ignored) {
+            // ignore
+        }
+        JoanTrace.note("app inbound CANCEL held=" + (held != null)
+                + " matched=" + mine);
+        if (!mine) {
+            return;
+        }
+        try {
+            sendReply(buildResponse(held, 487, "Request Terminated",
+                    sId, tag, null).getBytes(StandardCharsets.US_ASCII));
+        } catch (Exception ignored) {
+            // ignore
+        }
+        synchronized (LOCK) {
+            if (sHeldInvite == held) {
+                sHeldInvite = null;
+            }
+        }
+        sOurToTag = null;
+        JoanMmTelFeature.onCallEndedRemotely();
     }
 
     private static FileDescriptor tcpListen(int port, IpSecTransform inXf,
