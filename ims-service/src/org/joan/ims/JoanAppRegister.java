@@ -24,9 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * REGISTER 200 from the app over {@code IpSecTransform}, with the native
- * daemon stopped. This is the gate for deleting the unauthenticated
- * loopback listener.
+ * REGISTER 200 from the app over {@code IpSecTransform}.
  *
  * Crypto is not T-Mobile-shaped: Security-Client offers the 3GPP set
  * (hmac-sha-1-96 / hmac-md5-96 × aes-cbc / null); Security-Server picks;
@@ -48,12 +46,6 @@ final class JoanAppRegister {
     private JoanAppRegister() {}
 
     static String run(Context ctx) {
-        String daemon = JoanCtl.txn("STATUS");
-        if (daemon != null && (daemon.startsWith("STATE")
-                || daemon.startsWith("OK") || daemon.startsWith("ERR"))) {
-            return "FAIL: daemon still up; stop joan-ims first";
-        }
-
         Net n;
         try {
             n = findIms(ctx);

@@ -9,12 +9,10 @@ import java.lang.reflect.Method;
 import java.util.Locale;
 
 /**
- * Drives the two-stage REGISTER with the native UA over the ctl socket:
- *   REG1 -> CHALLENGE <nonce> ; ISIM AKA on-device ; REG2 res ck ik.
- * Identity (ID) and network (NET) are pushed once per cycle. The device
- * itself computes AKA, so no key material ever leaves the SIM except the
- * derived RES/CK/IK handed to this app by the framework API and then to
- * the native UA in the same kernel. Never logged.
+ * ISIM AKA on the device: run AUTHENTICATE against the ISIM and hand the
+ * derived RES/CK/IK back to JoanAppRegister, which builds the Digest AKA
+ * response and the ESP keys from them. No key material leaves the process.
+ * Never logged.
  */
 final class JoanAka {
     private static final String TAG = "JoanIms";
@@ -23,94 +21,6 @@ final class JoanAka {
     private static final String ISIM_AID = "A0000000871004FFFFFFFF8907030000";
 
     private JoanAka() {}
-
-    /** Full registration cycle. Returns true iff final state registered. */
-    static boolean registerCycle(Context ctx, String impi, String impu,
-                                 String domain, String imei,
-                                 String localIp, int localPort,
-                                 String pcscf, int pcscfPort,
-                                 String iface) {
-        JoanTrace.akaStage("push ID");
-        if (!pushId(impi, impu, domain, imei)) {
-            JoanTrace.akaStage("ID failed");
-            return false;
-        }
-        JoanTrace.akaStage("push NET");
-        if (!pushNet(localIp, localPort, pcscf, pcscfPort, iface)) {
-            JoanTrace.akaStage("NET failed");
-            return false;
-        }
-        JoanTrace.akaStage("REG1 send");
-        String r1 = JoanCtl.txn("REG1");
-        if (r1 == null || !r1.startsWith("CHALLENGE ")) {
-            JoanTrace.akaStage("REG1 failed");
-            Log.w(TAG, "reg1 no challenge");
-            return false;
-        }
-        JoanTrace.akaStage("REG1 challenged");
-        String nonce = r1.substring("CHALLENGE ".length()).trim();
-        if (nonce.isEmpty()) {
-            Log.w(TAG, "reg1 empty nonce");
-            return false;
-        }
-
-        JoanTrace.akaStage("AKA request");
-        String authHex = runIccAuth(ctx, nonce);
-        if (authHex == null) {
-            JoanTrace.akaStage("AKA unavailable");
-            Log.e(TAG, "icc auth unavailable");
-            return false;
-        }
-        // Response is "RES=... CK=... IK=..." hex triple (framework format).
-        JoanTrace.akaStage("AKA parse");
-        String[] parts = parseAuthResponse(authHex);
-        if (parts == null) {
-            JoanTrace.akaStage("AKA parse failed");
-            Log.e(TAG, "icc auth parse failed");
-            return false;
-        }
-        JoanTrace.akaStage("REG2 send");
-        String r2 = JoanCtl.txn("REG2 " + parts[0] + " " + parts[1]
-                + " " + parts[2]);
-        if (r2 == null || !r2.startsWith("STATE")) {
-            JoanTrace.akaStage("REG2 failed");
-            // Reply text is an error code, never key material.
-            Log.w(TAG, "reg2 not registered: "
-                    + (r2 == null ? "timeout" : r2));
-            JoanTrace.note("reg2 reply: "
-                    + (r2 == null ? "null" : r2));
-            return false;
-        }
-        JoanTrace.akaStage("registered");
-        Log.i(TAG, "IMS registered via native UA");
-        return true;
-    }
-
-    private static boolean pushId(String impi, String impu, String domain,
-                                  String imei) {
-        StringBuilder sb = new StringBuilder("ID ").append(safe(impi));
-        if (impu != null && !impu.isEmpty()) {
-            sb.append(' ').append(safe(impu));
-            if (domain != null && !domain.isEmpty()) {
-                sb.append(' ').append(safe(domain));
-                if (imei != null && !imei.isEmpty()) {
-                    sb.append(' ').append(safe(imei));
-                }
-            }
-        }
-        String r = JoanCtl.txn(sb.toString());
-        return r != null && r.startsWith("OK");
-    }
-
-    private static boolean pushNet(String localIp, int localPort,
-                                   String pcscf, int pcscfPort,
-                                   String iface) {
-        String r = JoanCtl.txn(String.format(
-                "NET %s %d %s %d %s",
-                safe(localIp), localPort, safe(pcscf), pcscfPort,
-                safe(iface)));
-        return r != null && r.startsWith("OK");
-    }
 
     /**
      * Runs ISIM AKA. Tries, in order:

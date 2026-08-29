@@ -20,7 +20,7 @@ import java.net.SocketTimeoutException;
 import java.security.SecureRandom;
 
 /**
- * 8 kHz PCMU between AudioFlinger and the native RTP UA.
+ * 8 kHz PCMU between AudioFlinger and the peer's RTP.
  *
  * Capture and playback run on separate threads (a single loop that
  * blocked on mic read then UDP receive sent uplink every ~40 ms).
@@ -35,7 +35,6 @@ final class JoanMedia {
     private static final String TAG = "JoanIms";
     private static final int SAMPLE_HZ = 8000;
     private static final int PTIME_SAMPLES = 160;
-    private static final int NATIVE_PORT = 15091;
 
     private static volatile boolean sRun;
     private static Thread sCap;
@@ -43,7 +42,6 @@ final class JoanMedia {
     private static DatagramSocket sSock;
 
     private static final int RTP_HDR = 12;
-    private static volatile boolean sRtp;
     private static volatile InetAddress sDest;
     private static volatile int sDestPort;
     private static volatile boolean sMux;
@@ -57,21 +55,10 @@ final class JoanMedia {
 
     private JoanMedia() {}
 
-    static void start(Context ctx) {
-        startInternal(ctx, null, null, null, 0, false);
-    }
-
     static void startRtp(Context ctx, Network net, InetAddress local,
                          InetAddress dest, int destPort, boolean mux) {
-        startInternal(ctx, net, local, dest, destPort, mux);
-    }
-
-    private static void startInternal(Context ctx, Network net,
-                                      InetAddress local, InetAddress dest,
-                                      int destPort, boolean mux) {
         stop();
         Context app = ctx.getApplicationContext();
-        sRtp = dest != null;
         sDest = dest;
         sDestPort = destPort;
         sMux = mux;
@@ -81,16 +68,12 @@ final class JoanMedia {
         sSent = sRecv = sOctets = 0;
         sRtcpNext = System.currentTimeMillis() + 400;
         try {
-            if (sRtp) {
-                sSock = new DatagramSocket(null);
-                sSock.setReuseAddress(true);
-                if (net != null) {
-                    net.bindSocket(sSock);
-                }
-                sSock.bind(new InetSocketAddress(local, JoanSipUa.RTP_PORT));
-            } else {
-                sSock = new DatagramSocket();
+            sSock = new DatagramSocket(null);
+            sSock.setReuseAddress(true);
+            if (net != null) {
+                net.bindSocket(sSock);
             }
+            sSock.bind(new InetSocketAddress(local, JoanSipUa.RTP_PORT));
             sSock.setSoTimeout(40);
         } catch (Exception e) {
             JoanTrace.note("media sock " + e.getClass().getSimpleName());
@@ -101,7 +84,7 @@ final class JoanMedia {
         sPlay = new Thread(() -> playback(app), "joan-ims-play");
         sCap.start();
         sPlay.start();
-        JoanTrace.note(sRtp ? "media start rtp mux=" + mux : "media start voice");
+        JoanTrace.note("media start rtp mux=" + mux);
     }
 
     static void stop() {
@@ -166,15 +149,14 @@ final class JoanMedia {
             if (sock == null) {
                 return;
             }
-            InetAddress dest = sRtp ? sDest : InetAddress.getByName("127.0.0.1");
-            int dport = sRtp ? sDestPort : NATIVE_PORT;
+            InetAddress dest = sDest;
+            int dport = sDestPort;
             short[] pcm = new short[PTIME_SAMPLES];
             byte[] ulaw = new byte[PTIME_SAMPLES];
             byte[] rtp = new byte[RTP_HDR + PTIME_SAMPLES];
             DatagramPacket out = new DatagramPacket(
-                    sRtp ? rtp : ulaw, sRtp ? rtp.length : ulaw.length, dest, dport);
-            JoanTrace.note("media cap rolling src=" + rec.getAudioSource()
-                    + " rtp=" + sRtp);
+                    rtp, rtp.length, dest, dport);
+            JoanTrace.note("media cap rolling src=" + rec.getAudioSource());
             while (sRun) {
                 int n = rec.read(pcm, 0, PTIME_SAMPLES);
                 if (n <= 0) {
@@ -184,25 +166,20 @@ final class JoanMedia {
                 for (int i = 0; i < m; i++) {
                     ulaw[i] = linearToUlaw(pcm[i]);
                 }
-                if (sRtp) {
-                    rtp[0] = (byte) 0x80;
-                    rtp[1] = 0; /* PCMU */
-                    rtp[2] = (byte) (sSeq >> 8);
-                    rtp[3] = (byte) sSeq;
-                    sSeq = (sSeq + 1) & 0xffff;
-                    put32(rtp, 4, sTs);
-                    sTs += m;
-                    put32(rtp, 8, sSsrc);
-                    System.arraycopy(ulaw, 0, rtp, RTP_HDR, m);
-                    out.setData(rtp);
-                    out.setLength(RTP_HDR + m);
-                    sSent++;
-                    sOctets += m;
-                    if (System.currentTimeMillis() >= sRtcpNext) {
-                        sendRtcp(sock, dest, dport);
-                    }
-                } else {
-                    out.setLength(m);
+                rtp[0] = (byte) 0x80;
+                rtp[1] = 0; /* PCMU */
+                rtp[2] = (byte) (sSeq >> 8);
+                rtp[3] = (byte) sSeq;
+                sSeq = (sSeq + 1) & 0xffff;
+                put32(rtp, 4, sTs);
+                sTs += m;
+                put32(rtp, 8, sSsrc);
+                System.arraycopy(ulaw, 0, rtp, RTP_HDR, m);
+                out.setLength(RTP_HDR + m);
+                sSent++;
+                sOctets += m;
+                if (System.currentTimeMillis() >= sRtcpNext) {
+                    sendRtcp(sock, dest, dport);
                 }
                 sock.send(out);
             }
@@ -233,47 +210,39 @@ final class JoanMedia {
             if (sock == null) {
                 return;
             }
-            InetAddress loop = InetAddress.getByName("127.0.0.1");
-            if (!sRtp) {
-                byte[] prime = new byte[PTIME_SAMPLES];
-                sock.send(new DatagramPacket(prime, prime.length, loop, NATIVE_PORT));
-            }
             byte[] down = new byte[512];
             short[] pcm = new short[PTIME_SAMPLES];
             DatagramPacket in = new DatagramPacket(down, down.length);
             JoanTrace.note("media play rolling voice mode="
-                    + (am == null ? -1 : am.getMode()) + " rtp=" + sRtp);
+                    + (am == null ? -1 : am.getMode()));
             while (sRun) {
                 try {
                     sock.receive(in);
                 } catch (SocketTimeoutException e) {
                     continue;
                 }
-                int off = 0;
                 int m = in.getLength();
-                if (sRtp) {
-                    if (m < RTP_HDR) {
-                        continue;
-                    }
-                    /* RTCP packet types live in the whole second octet
-                     * (200..204). RTP's payload type is the low 7 bits of
-                     * that octet because bit 7 is the marker, so masking
-                     * 0x7f before the comparison folded an SR (200) to 72
-                     * and the test could never be true -- every report the
-                     * peer sent was decoded as u-law and played. With
-                     * a=rtcp-mux, which this UA both offers and answers,
-                     * those reports arrive on this very socket.
-                     * Version must be 2; anything else is not ours. */
-                    if ((down[0] & 0xc0) != 0x80) {
-                        continue;
-                    }
-                    int type = down[1] & 0xff;
-                    if (type >= 200 && type <= 204) {
-                        continue; /* RTCP, not audio */
-                    }
-                    off = RTP_HDR;
-                    m -= RTP_HDR;
+                if (m < RTP_HDR) {
+                    continue;
                 }
+                /* RTCP packet types live in the whole second octet
+                 * (200..204). RTP's payload type is the low 7 bits of that
+                 * octet because bit 7 is the marker, so masking 0x7f before
+                 * the comparison folded an SR (200) to 72 and the test
+                 * could never be true -- every report the peer sent was
+                 * decoded as u-law and played. With a=rtcp-mux, which this
+                 * UA both offers and answers, those reports arrive on this
+                 * very socket. Version must be 2; anything else is not
+                 * ours. */
+                if ((down[0] & 0xc0) != 0x80) {
+                    continue;
+                }
+                int type = down[1] & 0xff;
+                if (type >= 200 && type <= 204) {
+                    continue; /* RTCP, not audio */
+                }
+                int off = RTP_HDR;
+                m -= RTP_HDR;
                 if (m > PTIME_SAMPLES) {
                     m = PTIME_SAMPLES;
                 }

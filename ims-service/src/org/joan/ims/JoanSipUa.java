@@ -17,9 +17,8 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 
 /**
- * In-app SIP UA: keeps the IPsec sockets after REGISTER 200 so INVITE
- * and inbound requests can use them. Replaces JoanCtl when the native
- * daemon is stopped. Never logs identities or SIP request-URIs.
+ * In-app SIP UA: keeps the IPsec sockets after REGISTER 200 so INVITE and
+ * inbound requests can use them. Never logs identities or request-URIs.
  */
 final class JoanSipUa {
     static final int RTP_PORT = 40000;

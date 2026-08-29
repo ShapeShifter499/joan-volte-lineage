@@ -31,8 +31,6 @@ public class JoanStateProvider extends ContentProvider {
 
     private static volatile String sProbeResult = "";
     private static volatile boolean sProbeRunning = false;
-    private static volatile String sIpsecResult = "";
-    private static volatile boolean sIpsecRunning = false;
     private static volatile String sAppRegResult = "";
     private static volatile boolean sAppRegRunning = false;
 
@@ -41,8 +39,8 @@ public class JoanStateProvider extends ContentProvider {
      * for bring-up, but only the platform, root and the shell may call it.
      *
      * The rows themselves are coarse by design. The side effects are not:
-     * the akaprobe/ipsecspike/appregister paths drive ISIM AUTHENTICATE,
-     * allocate SPIs and run a whole REGISTER cycle. Exported with no
+     * the akaprobe and appregister paths drive ISIM AUTHENTICATE and
+     * run a whole REGISTER cycle against the SIM. Exported with no
      * permission, any installed app could spin SIM authentication and IPsec
      * setup at will, and read the subscription debug row while doing it.
      */
@@ -62,7 +60,6 @@ public class JoanStateProvider extends ContentProvider {
         Context ctx = getContext();
         boolean probe = uri != null && (
                 "akaprobe".equals(uri.getLastPathSegment())
-                        || "ipsecspike".equals(uri.getLastPathSegment())
                         || "appregister".equals(uri.getLastPathSegment()));
         if (ctx != null) {
             JoanTrace.init(ctx);
@@ -91,28 +88,6 @@ public class JoanStateProvider extends ContentProvider {
             }
             return c;
         }
-        if (uri != null && "ipsecspike".equals(uri.getLastPathSegment())) {
-            /* Decides whether the native daemon can be removed: see
-             * JoanIpsecSpike. Runs off the binder thread. */
-            c.addRow(new Object[] { "ipsec_spike_running",
-                    String.valueOf(sIpsecRunning) });
-            c.addRow(new Object[] { "ipsec_spike_result", sIpsecResult });
-            if (!sIpsecRunning && ctx != null) {
-                sIpsecRunning = true;
-                final Context app = ctx.getApplicationContext();
-                new Thread(() -> {
-                    try {
-                        sIpsecResult = JoanIpsecSpike.run(app);
-                    } catch (Throwable t) {
-                        sIpsecResult = "spike error "
-                                + t.getClass().getSimpleName();
-                    } finally {
-                        sIpsecRunning = false;
-                    }
-                }, "joan-ipsec-spike").start();
-            }
-            return c;
-        }
         if (uri != null && "appregister".equals(uri.getLastPathSegment())) {
             /* REGISTER 200 from the app over IpSecTransform. Refuses
              * if the native daemon is still answering STATUS. */
@@ -135,14 +110,12 @@ public class JoanStateProvider extends ContentProvider {
             }
             return c;
         }
-        c.addRow(new Object[] { "build", "2026-08-27-apdu-aka-v14" });
+        c.addRow(new Object[] { "build", "2026-08-29-imsservice-only" });
         c.addRow(new Object[] { "driver_started", String.valueOf(JoanDriver.isRunning()) });
         c.addRow(new Object[] { "registered", String.valueOf(JoanRegistration.isRegistered()) });
         c.addRow(new Object[] { "ims_requested", String.valueOf(JoanDriver.imsRequested()) });
         c.addRow(new Object[] { "last_state", JoanDriver.lastState() });
         c.addRow(new Object[] { "aka_stage", JoanTrace.akaStage() });
-        c.addRow(new Object[] { "ctl_last", JoanCtl.lastError() });
-        c.addRow(new Object[] { "native_status", safeNativeStatus() });
         c.addRow(new Object[] { "sub_debug", JoanDriver.subscriptionDebug(ctx) });
         return c;
     }
@@ -150,15 +123,6 @@ public class JoanStateProvider extends ContentProvider {
     @Override
     public String getType(Uri uri) {
         return "vnd.android.cursor.item/vnd.org.joan.ims.state";
-    }
-
-    private static String safeNativeStatus() {
-        String r = JoanCtl.txn("STATUS");
-        if (r == null || r.isEmpty()) {
-            return "unavailable";
-        }
-        // Keep stage/error visible but never expose the selected P-CSCF IP.
-        return r.replaceAll("PCSCF=\\S+", "PCSCF=[redacted]");
     }
 
     @Override
