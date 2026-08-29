@@ -77,6 +77,11 @@ typedef struct {
     char call_id[64];
     int cseq;                         /* CSeq number; 0 if absent */
     char cseq_method[16];             /* CSeq method, e.g. "INVITE" */
+    /* Verbatim To/From. A dialog request must echo these exactly: the core
+     * rewrites the To URI (tel: -> sip:...@ims.mnc...), so rebuilding it
+     * from the dialled URI yields an ACK the far end cannot match. */
+    char to_hdr[320];
+    char from_hdr[320];
 } sip_response_t;
 
 void txn_new(sip_txn_t *t, const sip_identity_t *id, sec_params_t mine);
@@ -173,7 +178,9 @@ int build_bye(char *out, size_t outlen,
               const char *route,
               const char *sec_verify,
               const sip_dialog_t *dlg,
-              const char *to_tag);
+              const char *to_tag,
+                const char *to_hdr,
+                const char *from_hdr);
 
 /* ACK for a 2xx, routed to the same target. */
 int build_ack(char *out, size_t outlen,
@@ -183,7 +190,9 @@ int build_ack(char *out, size_t outlen,
               const char *route,
               const char *sec_verify,
               const sip_dialog_t *dlg,
-              const char *to_tag);
+              const char *to_tag,
+              const char *to_hdr,    /* verbatim To from the 2xx, or NULL */
+              const char *from_hdr); /* verbatim From from the 2xx, or NULL */
 
 /* RFC 4028 session refresh. CSeq is dlg->cseq+1. No SDP. */
 int build_update(char *out, size_t outlen,
@@ -194,7 +203,9 @@ int build_update(char *out, size_t outlen,
                  const char *sec_verify,
                  const sip_dialog_t *dlg,
                  const char *to_tag,
-                 int session_expires);
+                 int session_expires,
+                const char *to_hdr,
+                const char *from_hdr);
 
 /* RFC 3262 PRACK for a reliable 1xx (RSeq). CSeq is dlg->cseq+1. */
 int build_prack(char *out, size_t outlen,
@@ -205,7 +216,9 @@ int build_prack(char *out, size_t outlen,
                 const char *sec_verify,
                 const sip_dialog_t *dlg,
                 const char *to_tag,
-                int rseq);
+                int rseq,
+                const char *to_hdr,
+                const char *from_hdr);
 
 /* Digest response per RFC 3310 (AKAv1-MD5 password=RES, res_len exact). */
 int aka_digest_response_hex(

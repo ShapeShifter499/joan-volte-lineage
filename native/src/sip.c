@@ -302,12 +302,13 @@ static int header_value(const char *msg, const char *name,
 
 /* RFC 3261 12.1.2: a UAC's route set is every Record-Route URI carried by
  * the response, taken in REVERSE order. Proxies prepend as the request goes
- * out, so the response lists them far-end first, and an in-dialog request
- * has to leave here with our own P-CSCF on top.
+ * out, so the response lists them far-end first, and the ACK has to leave
+ * here with our own P-CSCF on top.
  *
  * header_value() returns only the first matching header, so the route set
- * was both truncated and unreversed. A response carrying a proxy chain
- * would route the ACK past our own P-CSCF.
+ * was both truncated and unreversed: the ACK was addressed past the P-CSCF
+ * and the far end never saw it. It then retransmitted its 200 every 4s (T2)
+ * and tore the call down on timer H at ~32s -- the "Google drops it" symptom.
  *
  * Commas inside <> or "" belong to a URI and are not separators. Returns the
  * length written and reports the number of URIs seen through *count. */
@@ -425,6 +426,8 @@ int parse_response(const char *msg, size_t len, sip_response_t *r)
                                             r->p_associated_uri,
                                             sizeof(r->p_associated_uri)) >= 0;
     header_value(msg, "Call-ID", r->call_id, sizeof(r->call_id));
+    header_value(msg, "To", r->to_hdr, sizeof(r->to_hdr));
+    header_value(msg, "From", r->from_hdr, sizeof(r->from_hdr));
     char cseq_raw[64];
     if (header_value(msg, "CSeq", cseq_raw, sizeof(cseq_raw)) >= 0) {
         r->cseq = atoi(cseq_raw);
@@ -582,6 +585,32 @@ int build_invite(char *out, size_t outlen,
     return (int)(outlen - a.left);
 }
 
+/* RFC 3261 12.2.1.1: in a request within a dialog the To and From URIs are
+ * the dialog's remote and local URI, established by the response that
+ * created the dialog -- not the URI we dialled. Rebuilding them loses
+ * whatever the far end actually put there, and the peer then cannot match
+ * the request to its dialog: a rebuilt ACK left Google retransmitting its
+ * 200 until timer H, and a rebuilt BYE was answered 481 Call/Transaction
+ * Does Not Exist. Echo the dialog-creating response's own header fields
+ * whenever we have them, and fall back only when we do not. */
+static void app_dialog_to_from(appender_t *a, const char *aor,
+                               const sip_dialog_t *dlg,
+                               const char *to_uri, const char *to_tag,
+                               const char *to_hdr, const char *from_hdr)
+{
+    if (from_hdr && from_hdr[0])
+        app(a, "From: %s\r\n", from_hdr);
+    else
+        app(a, "From: <%s>;tag=%s\r\n", aor, dlg->from_tag);
+
+    if (to_hdr && to_hdr[0])
+        app(a, "To: %s\r\n", to_hdr);
+    else if (to_tag && to_tag[0])
+        app(a, "To: <%s>;tag=%s\r\n", to_uri, to_tag);
+    else
+        app(a, "To: <%s>\r\n", to_uri);
+}
+
 int build_ack(char *out, size_t outlen,
               const sip_identity_t *id,
               const char *target,     /* Request-URI: remote target */
@@ -589,7 +618,9 @@ int build_ack(char *out, size_t outlen,
               const char *route,
               const char *sec_verify,
               const sip_dialog_t *dlg,
-              const char *to_tag)
+              const char *to_tag,
+              const char *to_hdr,
+              const char *from_hdr)
 {
     const char *public_id = id->impu[0] ? id->impu : id->impi;
     char aor[300];
@@ -610,11 +641,13 @@ int build_ack(char *out, size_t outlen,
     app(&a, "Max-Forwards: 70\r\n");
     if (route && route[0])
         app(&a, "Route: %s\r\n", route);
-    app(&a, "From: <%s>;tag=%s\r\n", aor, dlg->from_tag);
-    if (to_tag && to_tag[0])
-        app(&a, "To: <%s>;tag=%s\r\n", to_uri, to_tag);
-    else
-        app(&a, "To: <%s>\r\n", to_uri);
+    /* RFC 3261 12.2.1.1: in a dialog request the To/From URIs are the
+     * dialog's remote/local URI, which were established by the 2xx -- not
+     * the URI we dialled. IMS rewrites the request URI on the way through
+     * the core, so a rebuilt To fails to match the dialog at the far end,
+     * which then retransmits its 200 until timer H and hangs up. Echo the
+     * response's own header fields whenever we have them. */
+    app_dialog_to_from(&a, aor, dlg, to_uri, to_tag, to_hdr, from_hdr);
     app(&a, "Call-ID: %s\r\n", dlg->call_id);
     app(&a, "CSeq: %d ACK\r\n", dlg->cseq);
     if (sec_verify && sec_verify[0])
@@ -632,7 +665,9 @@ int build_prack(char *out, size_t outlen,
                 const char *sec_verify,
                 const sip_dialog_t *dlg,
                 const char *to_tag,
-                int rseq)
+                int rseq,
+                const char *to_hdr,
+                const char *from_hdr)
 {
     const char *public_id = id->impu[0] ? id->impu : id->impi;
     char aor[300];
@@ -653,11 +688,7 @@ int build_prack(char *out, size_t outlen,
     app(&a, "Max-Forwards: 70\r\n");
     if (route && route[0])
         app(&a, "Route: %s\r\n", route);
-    app(&a, "From: <%s>;tag=%s\r\n", aor, dlg->from_tag);
-    if (to_tag && to_tag[0])
-        app(&a, "To: <%s>;tag=%s\r\n", to_uri, to_tag);
-    else
-        app(&a, "To: <%s>\r\n", to_uri);
+    app_dialog_to_from(&a, aor, dlg, to_uri, to_tag, to_hdr, from_hdr);
     app(&a, "Call-ID: %s\r\n", dlg->call_id);
     app(&a, "CSeq: %d PRACK\r\n", dlg->cseq + 1);
     app(&a, "RAck: %d %d INVITE\r\n", rseq, dlg->cseq);
@@ -677,7 +708,9 @@ int build_update(char *out, size_t outlen,
                  const char *sec_verify,
                  const sip_dialog_t *dlg,
                  const char *to_tag,
-                 int session_expires)
+                 int session_expires,
+                const char *to_hdr,
+                const char *from_hdr)
 {
     const char *public_id = id->impu[0] ? id->impu : id->impi;
     char aor[300];
@@ -698,11 +731,7 @@ int build_update(char *out, size_t outlen,
     app(&a, "Max-Forwards: 70\r\n");
     if (route && route[0])
         app(&a, "Route: %s\r\n", route);
-    app(&a, "From: <%s>;tag=%s\r\n", aor, dlg->from_tag);
-    if (to_tag && to_tag[0])
-        app(&a, "To: <%s>;tag=%s\r\n", to_uri, to_tag);
-    else
-        app(&a, "To: <%s>\r\n", to_uri);
+    app_dialog_to_from(&a, aor, dlg, to_uri, to_tag, to_hdr, from_hdr);
     app(&a, "Call-ID: %s\r\n", dlg->call_id);
     app(&a, "CSeq: %d UPDATE\r\n", dlg->cseq + 1);
     if (session_expires > 0)
@@ -722,7 +751,9 @@ int build_bye(char *out, size_t outlen,
               const char *route,
               const char *sec_verify,
               const sip_dialog_t *dlg,
-              const char *to_tag)
+              const char *to_tag,
+                const char *to_hdr,
+                const char *from_hdr)
 {
     const char *public_id = id->impu[0] ? id->impu : id->impi;
     char aor[300];
@@ -743,11 +774,7 @@ int build_bye(char *out, size_t outlen,
     app(&a, "Max-Forwards: 70\r\n");
     if (route && route[0])
         app(&a, "Route: %s\r\n", route);
-    app(&a, "From: <%s>;tag=%s\r\n", aor, dlg->from_tag);
-    if (to_tag && to_tag[0])
-        app(&a, "To: <%s>;tag=%s\r\n", to_uri, to_tag);
-    else
-        app(&a, "To: <%s>\r\n", to_uri);
+    app_dialog_to_from(&a, aor, dlg, to_uri, to_tag, to_hdr, from_hdr);
     app(&a, "Call-ID: %s\r\n", dlg->call_id);
     app(&a, "CSeq: %d BYE\r\n", dlg->cseq + 1);
     if (sec_verify && sec_verify[0])

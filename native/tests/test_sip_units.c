@@ -319,7 +319,8 @@ static void test_sdp_and_tcp_frame(void)
 
     char upd[SIP_MAX_MSG];
     int nu = build_update(upd, sizeof(upd), &id, "sip:peer@ims.example.net",
-                          "tel:+15551212", NULL, NULL, &dlg, "totag", 90);
+                          "tel:+15551212", NULL, NULL, &dlg, "totag", 90,
+                          NULL, NULL);
     CHECK(nu > 0 && strstr(upd, "UPDATE ") == upd, "update builds");
     CHECK(strstr(upd, "Session-Expires: 90;refresher=uac") != NULL,
           "update carries session-expires");
@@ -392,6 +393,94 @@ static void test_route_set(void)
     CHECK(!r.have_record_route && r.record_route_n == 0, "no rr reported");
 }
 
+/* RFC 3261 12.2.1.1: a dialog request carries the dialog's remote/local URI,
+ * established by the 2xx. IMS rewrites the To URI in transit (tel: becomes
+ * sip:...@ims.mnc...), so an ACK rebuilt from the dialled URI never matches
+ * the dialog: the far end retransmits its 200 to timer H and hangs up. */
+static void test_ack_echoes_dialog_uris(void)
+{
+    sip_identity_t id;
+    sip_identity_t_maker(&id);
+    sip_dialog_t dlg;
+    memset(&dlg, 0, sizeof(dlg));
+    snprintf(dlg.call_id, sizeof(dlg.call_id), "callid-1");
+    snprintf(dlg.from_tag, sizeof(dlg.from_tag), "fromtag1");
+    dlg.cseq = 1;
+
+    const char *to_hdr = "<sip:+15550001111@ims.mnc260.mcc310.3gppnetwork.org>;tag=farend9";
+    const char *from_hdr = "<sip:user@msg.pc.t-mobile.com>;tag=fromtag1";
+
+    char ack[SIP_MAX_MSG];
+    int n = build_ack(ack, sizeof(ack), &id,
+                      "sip:sbc.example.net", "tel:+15550001111",
+                      "<sip:pcscf.example.net;lr>", "", &dlg, "farend9",
+                      to_hdr, from_hdr);
+    CHECK(n > 0, "ack builds");
+    CHECK(strstr(ack, "ACK sip:sbc.example.net SIP/2.0\r\n") != NULL,
+          "ack request-uri is the 2xx Contact");
+    CHECK(strstr(ack,
+                 "To: <sip:+15550001111@ims.mnc260.mcc310.3gppnetwork.org>"
+                 ";tag=farend9\r\n") != NULL,
+          "ack echoes the rewritten To verbatim");
+    CHECK(strstr(ack, "To: <tel:+15550001111>") == NULL,
+          "ack does not rebuild To from the dialled URI");
+    CHECK(strstr(ack, "From: <sip:user@msg.pc.t-mobile.com>;tag=fromtag1\r\n")
+          != NULL, "ack echoes From verbatim");
+    CHECK(strstr(ack, "CSeq: 1 ACK\r\n") != NULL, "ack reuses INVITE CSeq");
+
+    /* Without the response headers it must still build a usable ACK. */
+    n = build_ack(ack, sizeof(ack), &id, "sip:sbc.example.net",
+                  "tel:+15550001111", "", "", &dlg, "farend9", NULL, NULL);
+    CHECK(n > 0 && strstr(ack, "To: <tel:+15550001111>;tag=farend9\r\n") != NULL,
+          "ack falls back to dialled URI when 2xx headers absent");
+}
+
+/* A BYE that rebuilt To/From from the dialled URI was answered
+ * 481 Call/Transaction Does Not Exist by Google Voice (measured), leaving
+ * the far end's leg up. Same defect the ACK had. */
+static void test_bye_echoes_dialog_uris(void)
+{
+    sip_identity_t id;
+    sip_identity_t_maker(&id);
+    sip_dialog_t dlg;
+    memset(&dlg, 0, sizeof(dlg));
+    snprintf(dlg.call_id, sizeof(dlg.call_id), "callid-2");
+    snprintf(dlg.from_tag, sizeof(dlg.from_tag), "fromtag2");
+    dlg.cseq = 1;
+
+    const char *to_hdr = "<tel:+15550001111>;tag=farend7";
+    const char *from_hdr = "\"Joan\" <sip:user@msg.pc.t-mobile.com>;tag=fromtag2";
+
+    char bye[SIP_MAX_MSG];
+    int n = build_bye(bye, sizeof(bye), &id, "sip:sbc.example.net",
+                      "tel:+15550001111", "", "", &dlg, "farend7",
+                      to_hdr, from_hdr);
+    CHECK(n > 0, "bye builds");
+    CHECK(strstr(bye, "To: <tel:+15550001111>;tag=farend7\r\n") != NULL,
+          "bye echoes To verbatim");
+    CHECK(strstr(bye, "From: \"Joan\" <sip:user@msg.pc.t-mobile.com>"
+                      ";tag=fromtag2\r\n") != NULL,
+          "bye keeps a display name the rebuild would have dropped");
+    CHECK(strstr(bye, "CSeq: 2 BYE\r\n") != NULL, "bye increments CSeq");
+
+    n = build_bye(bye, sizeof(bye), &id, "sip:sbc.example.net",
+                  "tel:+15550001111", "", "", &dlg, "farend7", NULL, NULL);
+    CHECK(n > 0 && strstr(bye, "To: <tel:+15550001111>;tag=farend7\r\n") != NULL,
+          "bye falls back when dialog headers absent");
+
+    /* RFC 3261 puts no upper bound on a To-tag. Google Voice via T-Mobile
+     * returns 81 characters; a 64-byte tag buffer truncated that to 63 and
+     * the far end could no longer match the dialog. */
+    char longtag[82];
+    memset(longtag, 'a', sizeof(longtag) - 1);
+    longtag[sizeof(longtag) - 1] = '\0';
+    CHECK(strlen(longtag) == 81, "81-char tag fixture");
+    n = build_bye(bye, sizeof(bye), &id, "sip:sbc.example.net",
+                  "tel:+15550001111", "", "", &dlg, longtag, NULL, NULL);
+    CHECK(n > 0 && strstr(bye, longtag) != NULL,
+          "an 81-char To-tag survives intact");
+}
+
 int main(void)
 {
     test_md5();
@@ -402,6 +491,8 @@ int main(void)
     test_response_parse();
     test_sdp_and_tcp_frame();
     test_route_set();
+    test_ack_echoes_dialog_uris();
+    test_bye_echoes_dialog_uris();
     if (g_fail) {
         printf("\n%d TEST(S) FAILED\n", g_fail);
         return 1;

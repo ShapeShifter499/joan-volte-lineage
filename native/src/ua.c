@@ -64,7 +64,11 @@ static struct {
     char dest[300];        /* original request URI */
     char target[300];      /* remote target from the 2xx Contact */
     char route[1024];      /* route set: Record-Route reversed, RFC 3261 12.1.2 */
-    char to_tag[64];
+    /* A To-tag has no length bound in RFC 3261. Google Voice via T-Mobile
+     * returns 81 characters; a 64-byte buffer silently truncated it to 63,
+     * so the reconstructed To could not match the dialog -- the far end
+     * retransmitted its 200 to timer H, and BYE was answered 481. */
+    char to_tag[192];
     int  active;
     int  se_sec;           /* RFC 4028 Session-Expires; 0 = none */
     int  se_uac;           /* 1 if we are the refresher */
@@ -72,6 +76,10 @@ static struct {
      * retransmitted 2xx, so it has to outlive ua_call_invite(). */
     char ack[SIP_MAX_MSG];
     int  ack_len;
+    /* To/From exactly as the 2xx carried them. Every later in-dialog
+     * request must echo these or the far end answers 481. */
+    char to_hdr[320];
+    char from_hdr[320];
     long refresh_at;
 } g_call;
 static ua_state_t g_state;
@@ -773,6 +781,56 @@ static void extract_to_tag(const char *msg, char *dst, size_t n)
     dst[i] = '\0';
 }
 
+/* Host[:port] of a SIP URI, with any user part dropped. Used only for
+ * diagnostics: a Record-Route or Contact host is carrier topology, never
+ * subscriber identity, so it is safe to log where a URI is not. */
+static void uri_host_only(const char *uri, char *dst, size_t n)
+{
+    dst[0] = '\0';
+    if (!uri || !n)
+        return;
+    const char *p = uri;
+    while (*p == ' ' || *p == '<')
+        p++;
+    if (!strncasecmp(p, "sip:", 4))
+        p += 4;
+    else if (!strncasecmp(p, "sips:", 5))
+        p += 5;
+    else if (!strncasecmp(p, "tel:", 4))
+        p += 4;
+    /* Skip a user part only if the '@' really belongs to this URI. */
+    const char *at = p;
+    while (*at && *at != '@' && *at != '>' && *at != ';' && *at != ',')
+        at++;
+    if (*at == '@')
+        p = at + 1;
+    size_t i = 0;
+    while (p[i] && p[i] != '>' && p[i] != ';' && p[i] != ',' && i + 1 < n) {
+        dst[i] = p[i];
+        i++;
+    }
+    dst[i] = '\0';
+}
+
+/* URI inside the first <...> of a header value, else the whole value. */
+static void hdr_uri(const char *val, char *dst, size_t n)
+{
+    dst[0] = '\0';
+    if (!val)
+        return;
+    const char *lt = strchr(val, '<');
+    const char *gt = lt ? strchr(lt, '>') : NULL;
+    if (lt && gt) {
+        size_t l = (size_t)(gt - lt - 1);
+        if (l >= n)
+            l = n - 1;
+        memcpy(dst, lt + 1, l);
+        dst[l] = '\0';
+        return;
+    }
+    snprintf(dst, n, "%s", val);
+}
+
 int ua_call_invite(const char *dest)
 {
     if (g_state != UA_STATE_REGISTERED || !g_reg.valid) {
@@ -823,7 +881,7 @@ int ua_call_invite(const char *dest)
     /* Provisional responses (100/180/183) precede the answer, so keep
      * reading until a final one arrives or the call setup timer runs out. */
     char rx[4096];
-    char to_tag[64] = "";
+    char to_tag[192] = "";
     int rc = -45;
     long deadline = now_ms() + 30000;
     while (now_ms() < deadline) {
@@ -846,7 +904,8 @@ int ua_call_invite(const char *dest)
                 char prack[SIP_MAX_MSG];
                 int pn = build_prack(prack, sizeof(prack), &id, tgt, dest,
                                      g_reg.service_route, g_reg.sec_verify,
-                                     &dlg, to_tag, resp.rseq);
+                                     &dlg, to_tag, resp.rseq,
+                                     resp.to_hdr, resp.from_hdr);
                 if (pn > 0 && sip_sendto(s, g_reg.pcscf_port_s, prack,
                                          (size_t)pn) == 0)
                     klog(LOG_INFO, "PRACK sent for 1xx rseq=%d", resp.rseq);
@@ -859,6 +918,9 @@ int ua_call_invite(const char *dest)
             extract_to_tag(rx, to_tag, sizeof(to_tag));
             snprintf(g_call.dest, sizeof(g_call.dest), "%s", dest);
             snprintf(g_call.to_tag, sizeof(g_call.to_tag), "%s", to_tag);
+            snprintf(g_call.to_hdr, sizeof(g_call.to_hdr), "%s", resp.to_hdr);
+            snprintf(g_call.from_hdr, sizeof(g_call.from_hdr), "%s",
+                     resp.from_hdr);
             /* RFC 3261: an in-dialog request goes to the remote target,
              * which is the Contact of the 2xx -- not the URI we originally
              * dialled. Sending BYE to the dialled AOR gets 481 Call/
@@ -916,7 +978,63 @@ int ua_call_invite(const char *dest)
                                g_call.target[0] ? g_call.target : dest,
                                dest, g_call.route[0] ? g_call.route
                                                      : g_reg.service_route,
-                               g_reg.sec_verify, &dlg, to_tag);
+                               g_reg.sec_verify, &dlg, to_tag,
+                               resp.to_hdr, resp.from_hdr);
+            {
+                /* Why is the far end not accepting this ACK? Log the
+                 * routing shape (hosts only, no identities) so the next
+                 * call answers it instead of another guess. */
+                char rhost[96], thost[96], dhost[96];
+                uri_host_only(g_call.route, rhost, sizeof(rhost));
+                uri_host_only(g_call.target[0] ? g_call.target : dest,
+                              thost, sizeof(thost));
+                uri_host_only(dest, dhost, sizeof(dhost));
+                klog(LOG_INFO,
+                     "ack diag route_host=%s ruri_host=%s dest_host=%s "
+                     "pcscf=%s route_is_pcscf=%d rr_n=%d",
+                     rhost[0] ? rhost : "-", thost[0] ? thost : "-",
+                     dhost[0] ? dhost : "-", g_cfg->id.pcscf,
+                     strstr(rhost, g_cfg->id.pcscf) != NULL ? 1 : 0,
+                     resp.record_route_n);
+                /* Did the core rewrite the To URI? If so, the ACK we used
+                 * to build could never have matched the dialog. */
+                char to_uri_resp[300], to_host[96];
+                hdr_uri(resp.to_hdr, to_uri_resp, sizeof(to_uri_resp));
+                uri_host_only(to_uri_resp, to_host, sizeof(to_host));
+                klog(LOG_INFO, "ack diag to_rewritten=%d to_host=%s "
+                     "have_to_hdr=%d have_from_hdr=%d",
+                     (to_uri_resp[0] && strcmp(to_uri_resp, dest)) ? 1 : 0,
+                     to_host[0] ? to_host : "-",
+                     resp.to_hdr[0] ? 1 : 0, resp.from_hdr[0] ? 1 : 0);
+                /* Exactly which header did the old rebuild get wrong?
+                 * Compare against what it would have produced. Lengths and
+                 * booleans only -- these headers carry identities. */
+                {
+                    const char *pid = id.impu[0] ? id.impu : id.impi;
+                    char aor2[300], reb_to[400], reb_from[400];
+                    if (!strncmp(pid, "tel:", 4) || !strncmp(pid, "sip:", 4))
+                        snprintf(aor2, sizeof(aor2), "%s", pid);
+                    else
+                        snprintf(aor2, sizeof(aor2), "sip:%s", pid);
+                    if (to_tag[0])
+                        snprintf(reb_to, sizeof(reb_to), "<%s>;tag=%s",
+                                 dest, to_tag);
+                    else
+                        snprintf(reb_to, sizeof(reb_to), "<%s>", dest);
+                    snprintf(reb_from, sizeof(reb_from), "<%s>;tag=%s",
+                             aor2, dlg.from_tag);
+                    klog(LOG_INFO,
+                         "ack diag to_differs=%d from_differs=%d "
+                         "to_len=%d/%d from_len=%d/%d "
+                         "to_display=%d from_display=%d",
+                         strcmp(resp.to_hdr, reb_to) ? 1 : 0,
+                         strcmp(resp.from_hdr, reb_from) ? 1 : 0,
+                         (int)strlen(resp.to_hdr), (int)strlen(reb_to),
+                         (int)strlen(resp.from_hdr), (int)strlen(reb_from),
+                         resp.to_hdr[0] && resp.to_hdr[0] != '<' ? 1 : 0,
+                         resp.from_hdr[0] && resp.from_hdr[0] != '<' ? 1 : 0);
+                }
+            }
             if (an > 0 && (size_t)an <= sizeof(g_call.ack)) {
                 memcpy(g_call.ack, ack, (size_t)an);
                 g_call.ack_len = an;
@@ -970,7 +1088,8 @@ int ua_call_hangup(void)
     char msg[SIP_MAX_MSG];
     int n = build_bye(msg, sizeof(msg), &id, g_call.target, g_call.dest,
                       g_call.route, g_reg.sec_verify,
-                      &g_call.dlg, g_call.to_tag);
+                      &g_call.dlg, g_call.to_tag,
+                      g_call.to_hdr, g_call.from_hdr);
     if (n <= 0) {
         g_call.active = 0;
         return -1;
@@ -1024,7 +1143,8 @@ void ua_media_tick(void)
     int n = build_update(msg, sizeof(msg), &id,
                          g_call.target[0] ? g_call.target : g_call.dest,
                          g_call.dest, g_call.route, g_reg.sec_verify,
-                         &g_call.dlg, g_call.to_tag, g_call.se_sec);
+                         &g_call.dlg, g_call.to_tag, g_call.se_sec,
+                         g_call.to_hdr, g_call.from_hdr);
     if (n <= 0 || g_port_c_fd < 0) {
         klog(LOG_WARN, "session UPDATE build failed");
         g_call.refresh_at = now_ms() + 5000;
@@ -1066,8 +1186,8 @@ static void handle_sip_request(char *rx, size_t r)
         if (!strncmp(rx, "SIP/2.0", 7))
             code = atoi(rx + 8);
         klog(LOG_INFO, "inbound datagram (%zu B): response %d", r, code);
-        /* A 2xx repeating on the INVITE means the far end never accepted
-         * our ACK; it will tear the call down on timer H if we stay quiet.
+        /* A 2xx repeating on the INVITE means the far end never saw our
+         * ACK; it will tear the call down on timer H if we stay quiet.
          * RFC 3261 13.2.2.4: answer every retransmission. */
         if (code >= 200 && code < 300 && g_call.active && g_call.ack_len > 0) {
             sip_response_t rr;
@@ -1075,6 +1195,17 @@ static void handle_sip_request(char *rx, size_t r)
                 !strcasecmp(rr.cseq_method, "INVITE") &&
                 rr.call_id[0] &&
                 !strcmp(rr.call_id, g_call.dlg.call_id)) {
+                /* Google Voice forks to several endpoints. A 2xx from a
+                 * second fork carries a different To-tag, and the stored
+                 * ACK -- built for the first fork -- can never satisfy it. */
+                char rtag[192];
+                extract_to_tag(rx, rtag, sizeof(rtag));
+                int same_fork = rtag[0] && !strcmp(rtag, g_call.to_tag);
+                char ctc[300], chost[96];
+                hdr_uri(rr.contact, ctc, sizeof(ctc));
+                uri_host_only(ctc, chost, sizeof(chost));
+                klog(LOG_INFO, "2xx retransmit: same_fork=%d contact_host=%s",
+                     same_fork, chost[0] ? chost : "-");
                 if (sip_sendto(g_port_c_fd, g_reg.pcscf_port_s,
                                g_call.ack, (size_t)g_call.ack_len) == 0)
                     klog(LOG_INFO, "2xx retransmit: ACK re-sent %d B",
