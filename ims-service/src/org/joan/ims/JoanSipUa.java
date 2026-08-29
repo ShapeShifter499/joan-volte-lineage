@@ -89,9 +89,8 @@ final class JoanSipUa {
         if (!sReg) {
             return 0;
         }
-        long grantMs = sExpiresSec > 0 ? sExpiresSec * 1000L : REFRESH_CAP_MS;
-        long lead = Math.max(REFRESH_FLOOR_MS,
-                Math.min(REFRESH_CAP_MS, grantMs / 5 * 4));
+        long lead = JoanSipBuilder.refreshLeadMs(sExpiresSec,
+                REFRESH_CAP_MS, REFRESH_FLOOR_MS);
         long left = sRegisteredAtMs + lead - System.currentTimeMillis();
         return left > 0 ? left : 0;
     }

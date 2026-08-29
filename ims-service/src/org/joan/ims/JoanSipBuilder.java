@@ -450,6 +450,33 @@ final class JoanSipBuilder {
         return -1;
     }
 
+    /**
+     * How long to wait before refreshing a registration the registrar
+     * granted for {@code grantedSec}.
+     *
+     * The lifetime is the registrar's to choose and carriers differ widely
+     * -- this handset's core grants 3600s against the 600000s we ask for,
+     * and others use 600 or 1800. So aim at 80% of whatever came back,
+     * capped so a very long grant is still re-validated periodically, and
+     * rate-limited so a very short one cannot spin.
+     *
+     * The rate limit must never win outright: a floor applied on top of a
+     * short grant would schedule the refresh at or after expiry, which is
+     * the failure it was supposed to prevent. Clamp it to half the grant.
+     *
+     * @param grantedSec seconds granted, or <= 0 when the registrar said
+     *                   nothing, in which case the cap is used
+     */
+    static long refreshLeadMs(int grantedSec, long capMs, long floorMs) {
+        if (grantedSec <= 0) {
+            return capMs;
+        }
+        long grantMs = grantedSec * 1000L;
+        long lead = Math.min(grantMs / 5 * 4, capMs);
+        long floor = Math.min(floorMs, grantMs / 2);
+        return Math.max(lead, floor);
+    }
+
     private static int expiresParam(String contact) {
         int i = indexOfIgnoreCase(contact, "expires=");
         if (i < 0) {

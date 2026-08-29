@@ -12,6 +12,7 @@ public final class TestJoanSip {
         testRegisterOffer();
         testImei();
         testGrantedExpires();
+        testRefreshLead();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -308,6 +309,32 @@ public final class TestJoanSip {
                 "headers returns every occurrence in order");
         check(JoanSipBuilder.headers(withBody, "Contact").isEmpty(),
                 "headers stops at the body");
+    }
+
+    private static void testRefreshLead() {
+        final long CAP = 30 * 60_000L;
+        final long FLOOR = 60_000L;
+        /* Whatever the registrar grants, the refresh must land strictly
+         * inside it. A 60s floor used to override the 80% rule below a 75s
+         * grant and schedule the refresh at or after expiry. */
+        int[] grants = { 10, 30, 60, 75, 120, 600, 1800, 3600, 86400, 600000 };
+        boolean allInside = true;
+        for (int g : grants) {
+            long lead = JoanSipBuilder.refreshLeadMs(g, CAP, FLOOR);
+            if (lead >= g * 1000L) {
+                allInside = false;
+                System.out.println("     granted=" + g + "s lead=" + lead + "ms");
+            }
+        }
+        check(allInside, "refresh always lands inside the granted lifetime");
+        check(JoanSipBuilder.refreshLeadMs(3600, CAP, FLOOR) == CAP,
+                "long grant is capped so the binding is re-validated");
+        check(JoanSipBuilder.refreshLeadMs(600, CAP, FLOOR) == 480_000L,
+                "ordinary grant refreshes at 80%");
+        check(JoanSipBuilder.refreshLeadMs(30, CAP, FLOOR) == 24_000L,
+                "short grant beats the floor rather than expiring");
+        check(JoanSipBuilder.refreshLeadMs(-1, CAP, FLOOR) == CAP,
+                "silent registrar falls back to the cap");
     }
 
     private static void testImei() {
