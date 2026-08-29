@@ -208,6 +208,18 @@ public final class TestJoanSip {
         check(JoanSipBuilder.pickPublicId(
                 "<sip:a@ims>; <tel:+15555550100>").equals("tel:+15555550100"),
                 "public id prefers tel:");
+        String ans = JoanSipBuilder.sdpAnswer("2001:db8::2", 40000,
+                "m=audio 20000 RTP/AVP 0 96\r\na=rtpmap:0 PCMU/8000\r\na=rtcp-mux\r\n");
+        check(ans.contains("m=audio 40000 RTP/AVP 0") && ans.contains("PCMU")
+                        && !ans.contains("AMR") && ans.contains("a=rtcp-mux"),
+                "sdp answer is PCMU-only with mux");
+        StringBuilder acc = new StringBuilder(
+                "OPTIONS sip:x SIP/2.0\r\nContent-Length: 0\r\n\r\nINVITE sip:y SIP/2.0\r\nContent-Length: 0\r\n\r\n");
+        check("OPTIONS sip:x SIP/2.0\r\nContent-Length: 0\r\n\r\n"
+                        .equals(JoanSipBuilder.extractOne(acc)),
+                "tcp extract one");
+        check(JoanSipBuilder.extractOne(acc).startsWith("INVITE"),
+                "tcp extract remainder");
     }
 
     private static void testImei() {

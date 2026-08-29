@@ -445,6 +445,51 @@ final class JoanSipBuilder {
                 + "a=sendrecv\r\n";
     }
 
+    /** PCMU-only answer, matching native sdp_answer. */
+    static String sdpAnswer(String ip, int rtpPort, String offer) {
+        boolean v6 = ip != null && ip.indexOf(':') >= 0;
+        String fam = v6 ? "IP6" : "IP4";
+        long sess = System.currentTimeMillis() / 1000;
+        boolean mux = offer == null || offer.contains("a=rtcp-mux");
+        return "v=0\r\n"
+                + "o=- " + sess + " 1 IN " + fam + " " + ip + "\r\n"
+                + "s=-\r\n"
+                + "c=IN " + fam + " " + ip + "\r\n"
+                + "t=0 0\r\n"
+                + "m=audio " + rtpPort + " RTP/AVP 0\r\n"
+                + "a=rtpmap:0 PCMU/8000\r\n"
+                + "a=ptime:20\r\n"
+                + "a=rtcp:" + (rtpPort + 1) + "\r\n"
+                + (mux ? "a=rtcp-mux\r\n" : "")
+                + "a=sendrecv\r\n";
+    }
+
+    /** Pull one SIP message off a TCP accumulator. */
+    static String extractOne(StringBuilder acc) {
+        String s = acc.toString();
+        int sep = s.indexOf("\r\n\r\n");
+        if (sep < 0) {
+            return null;
+        }
+        int cl = 0;
+        String clh = header(s, "Content-Length");
+        if (clh != null) {
+            try {
+                int sp = clh.indexOf(' ');
+                cl = Integer.parseInt((sp < 0 ? clh : clh.substring(0, sp)).trim());
+            } catch (NumberFormatException e) {
+                cl = 0;
+            }
+        }
+        int total = sep + 4 + cl;
+        if (s.length() < total) {
+            return null;
+        }
+        String msg = s.substring(0, total);
+        acc.delete(0, total);
+        return msg;
+    }
+
     static String buildInvite(Id id, Dialog dlg, String dest, String route,
                               String secVerify, int rtpPort, String pani) {
         if (id.impu == null || id.impu.isEmpty()) {

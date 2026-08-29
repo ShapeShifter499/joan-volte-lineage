@@ -4,9 +4,14 @@ import android.content.Context;
 import android.net.IpSecManager;
 import android.net.IpSecTransform;
 import android.net.Network;
+import android.system.Os;
+import android.system.OsConstants;
+import android.system.StructPollfd;
 
+import java.io.FileDescriptor;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -30,6 +35,10 @@ final class JoanSipUa {
     private static DatagramSocket sSockS;
     private static IpSecManager sIpsec;
     private static AutoCloseable[] sHeld;
+    private static IpSecTransform sOutC, sInC, sOutS, sInS;
+    private static FileDescriptor sTcpS, sTcpC, sTcpPeer;
+    private static final StringBuilder sTcpAcc = new StringBuilder();
+    private static volatile boolean sReplyTcp;
     private static JoanSipBuilder.Id sId;
     private static String sPani;
     private static String sSecVerify;
@@ -111,13 +120,25 @@ final class JoanSipUa {
             sSockS = sockS;
             sIpsec = ipsec;
             sHeld = held;
+            if (held != null && held.length >= 4) {
+                sOutC = held[0] instanceof IpSecTransform ? (IpSecTransform) held[0] : null;
+                sInC = held[1] instanceof IpSecTransform ? (IpSecTransform) held[1] : null;
+                sOutS = held[2] instanceof IpSecTransform ? (IpSecTransform) held[2] : null;
+                sInS = held[3] instanceof IpSecTransform ? (IpSecTransform) held[3] : null;
+            }
             sReg = sPublicId != null && !sPublicId.isEmpty();
             sCall = false;
+            sReplyTcp = false;
         }
         if (sReg) {
+            /* Same as native hold_protected_ports: TCP listen on port-s
+             * and port-c. P-CSCF delivers inbound INVITE over TCP. */
+            sTcpS = tcpListen(id.contactPort, sInS, sOutS);
+            sTcpC = tcpListen(id.viaPort, sInC, sOutC);
             JoanRegistration.setRegistered(true, null);
             startListen();
-            JoanTrace.note("app UA registered public=yes");
+            JoanTrace.note("app UA registered public=yes tcp_s="
+                    + (sTcpS != null) + " tcp_c=" + (sTcpC != null));
         } else {
             JoanTrace.note("app UA REGISTER 200 but no public identity");
         }
@@ -269,7 +290,7 @@ final class JoanSipUa {
         JoanSipBuilder.Id id = new JoanSipBuilder.Id(
                 sId.impi, sPublicId, sId.realm, sId.localIp,
                 sId.viaPort, sId.contactPort, sId.imei);
-        String sdp = JoanSipBuilder.sdpOffer(sId.localIp, RTP_PORT);
+        String sdp = JoanSipBuilder.sdpAnswer(sId.localIp, RTP_PORT, invite);
         String tag = sOurToTag;
         if (tag == null || tag.isEmpty()) {
             tag = String.format("%012x",
@@ -278,8 +299,7 @@ final class JoanSipUa {
         }
         String resp = buildResponse(invite, 200, "OK", id, tag, sdp);
         try {
-            send(sSockC, sPcscf, sPcscfPortS,
-                    resp.getBytes(StandardCharsets.US_ASCII));
+            sendReply(resp.getBytes(StandardCharsets.US_ASCII));
         } catch (Exception e) {
             return "ERR answer send";
         }
@@ -314,8 +334,7 @@ final class JoanSipUa {
         String resp = buildResponse(invite, code,
                 code == 603 ? "Decline" : "Busy Here", sId, tag, null);
         try {
-            send(sSockC, sPcscf, sPcscfPortS,
-                    resp.getBytes(StandardCharsets.US_ASCII));
+            sendReply(resp.getBytes(StandardCharsets.US_ASCII));
         } catch (Exception ignored) {
             return "ERR reject send";
         }
@@ -332,85 +351,230 @@ final class JoanSipUa {
     }
 
     private static void listenLoop() {
-        byte[] buf = new byte[4096];
         while (sReg) {
-            String rx = recvEither(500);
-            if (rx == null) {
-                continue;
-            }
-            String method = JoanSipBuilder.requestMethod(rx);
-            if (method.isEmpty()) {
-                JoanSipBuilder.Reply p = JoanSipBuilder.parseReply(rx);
-                if (p != null && p.status >= 200 && p.status < 300 && sCall
-                        && sDlg != null) {
-                    /* retransmitted 2xx: re-ACK */
-                    try {
-                        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
-                                sId.impi, sPublicId, sId.realm, sId.localIp,
-                                sId.viaPort, sId.contactPort, sId.imei);
-                        String ack = JoanSipBuilder.buildAck(id, sDlg, sTarget,
-                                sRoute, sSecVerify, sToHdr, sFromHdr);
-                        send(sSockC, sPcscf, sPcscfPortS,
-                                ack.getBytes(StandardCharsets.US_ASCII));
-                    } catch (Exception ignored) {
-                        // ignore
-                    }
+            try {
+                String rx = pollTcp();
+                if (rx == null) {
+                    rx = recvEither(80);
                 }
-                continue;
-            }
-            if ("BYE".equals(method)) {
-                JoanTrace.note("app inbound BYE");
-                String tag = sOurToTag != null ? sOurToTag : "x";
-                String resp = buildResponse(rx, 200, "OK", sId, tag, null);
-                try {
-                    send(sSockC, sPcscf, sPcscfPortS,
-                            resp.getBytes(StandardCharsets.US_ASCII));
-                } catch (Exception ignored) {
-                    // ignore
-                }
-                sCall = false;
-                JoanMmTelFeature featureWait = null;
-                JoanMedia.stop();
-                continue;
-            }
-            if ("INVITE".equals(method)) {
-                if (sCall || sHeldInvite != null) {
-                    String busy = buildResponse(rx, 486, "Busy Here", sId,
-                            "busy", null);
-                    try {
-                        send(sSockC, sPcscf, sPcscfPortS,
-                                busy.getBytes(StandardCharsets.US_ASCII));
-                    } catch (Exception ignored) {
-                        // ignore
-                    }
+                if (rx == null) {
                     continue;
                 }
-                sOurToTag = String.format("%012x",
-                        new java.security.SecureRandom().nextLong()
-                                & 0xffffffffffffL);
-                sHeldInvite = rx;
-                try {
-                    send(sSockC, sPcscf, sPcscfPortS,
-                            buildResponse(rx, 100, "Trying", sId, sOurToTag, null)
-                                    .getBytes(StandardCharsets.US_ASCII));
-                    send(sSockC, sPcscf, sPcscfPortS,
-                            buildResponse(rx, 180, "Ringing", sId, sOurToTag, null)
-                                    .getBytes(StandardCharsets.US_ASCII));
-                } catch (Exception e) {
-                    JoanTrace.note("app 180 send fail");
-                }
-                String from = JoanSipBuilder.header(rx, "From");
-                String pai = JoanSipBuilder.header(rx, "P-Asserted-Identity");
-                String uri = pai != null ? JoanSipBuilder.contactUri("<" + pai + ">")
-                        : (from != null ? JoanSipBuilder.contactUri(from) : "");
-                JoanTrace.note("app inbound INVITE number="
-                        + (uri.isEmpty() ? "no" : "yes"));
-                if (sApp != null) {
-                    JoanMmTelFeature.onIncomingCall(sApp, uri, "");
-                }
+                handleInbound(rx);
+            } catch (Throwable t) {
+                JoanTrace.note("listen " + t.getClass().getSimpleName());
             }
         }
     }
+
+    private static void handleInbound(String rx) {
+        String method = JoanSipBuilder.requestMethod(rx);
+        if (method.isEmpty()) {
+            JoanSipBuilder.Reply p = JoanSipBuilder.parseReply(rx);
+            if (p != null && p.status >= 200 && p.status < 300 && sCall
+                    && sDlg != null) {
+                try {
+                    JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                            sId.impi, sPublicId, sId.realm, sId.localIp,
+                            sId.viaPort, sId.contactPort, sId.imei);
+                    String ack = JoanSipBuilder.buildAck(id, sDlg, sTarget,
+                            sRoute, sSecVerify, sToHdr, sFromHdr);
+                    send(sSockC, sPcscf, sPcscfPortS,
+                            ack.getBytes(StandardCharsets.US_ASCII));
+                } catch (Exception ignored) {
+                    // ignore
+                }
+            }
+            return;
+        }
+        if ("BYE".equals(method)) {
+            JoanTrace.note("app inbound BYE");
+            String tag = sOurToTag != null ? sOurToTag : "x";
+            try {
+                sendReply(buildResponse(rx, 200, "OK", sId, tag, null)
+                        .getBytes(StandardCharsets.US_ASCII));
+            } catch (Exception ignored) {
+                // ignore
+            }
+            sCall = false;
+            JoanMedia.stop();
+            return;
+        }
+        if (!"INVITE".equals(method)) {
+            return;
+        }
+        if (sCall || sHeldInvite != null) {
+            try {
+                sendReply(buildResponse(rx, 486, "Busy Here", sId, "busy", null)
+                        .getBytes(StandardCharsets.US_ASCII));
+            } catch (Exception ignored) {
+                // ignore
+            }
+            JoanTrace.note("app inbound INVITE busy");
+            return;
+        }
+        sOurToTag = String.format("%012x",
+                new java.security.SecureRandom().nextLong() & 0xffffffffffffL);
+        sHeldInvite = rx;
+        try {
+            sendReply(buildResponse(rx, 100, "Trying", sId, null, null)
+                    .getBytes(StandardCharsets.US_ASCII));
+            sendReply(buildResponse(rx, 180, "Ringing", sId, sOurToTag, null)
+                    .getBytes(StandardCharsets.US_ASCII));
+        } catch (Exception e) {
+            JoanTrace.note("app 180 send fail");
+        }
+        String from = JoanSipBuilder.header(rx, "From");
+        String pai = JoanSipBuilder.header(rx, "P-Asserted-Identity");
+        String uri = pai != null ? JoanSipBuilder.contactUri("<" + pai + ">")
+                : (from != null ? JoanSipBuilder.contactUri(from) : "");
+        JoanTrace.note("app inbound INVITE tcp=" + sReplyTcp
+                + " number=" + (uri.isEmpty() ? "no" : "yes"));
+        if (sApp != null) {
+            JoanMmTelFeature.onIncomingCall(sApp, uri, "");
+        }
+    }
+
+    private static FileDescriptor tcpListen(int port, IpSecTransform inXf,
+                                            IpSecTransform outXf) {
+        try {
+            int af = (sLocal instanceof Inet6Address)
+                    ? OsConstants.AF_INET6 : OsConstants.AF_INET;
+            FileDescriptor fd = Os.socket(af, OsConstants.SOCK_STREAM,
+                    OsConstants.IPPROTO_TCP);
+            Os.setsockoptInt(fd, OsConstants.SOL_SOCKET,
+                    OsConstants.SO_REUSEADDR, 1);
+            if (sNet != null) {
+                sNet.bindSocket(fd);
+            }
+            Os.bind(fd, sLocal, port);
+            applyXf(fd, inXf, outXf);
+            Os.listen(fd, 4);
+            JoanTrace.note("tcp listen port=" + port);
+            return fd;
+        } catch (Exception e) {
+            JoanTrace.note("tcp listen fail " + e.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    private static void applyXf(FileDescriptor fd, IpSecTransform inXf,
+                                IpSecTransform outXf) {
+        if (sIpsec == null || fd == null) {
+            return;
+        }
+        if (inXf != null) {
+            try {
+                sIpsec.applyTransportModeTransform(fd,
+                        IpSecManager.DIRECTION_IN, inXf);
+            } catch (Exception e) {
+                JoanTrace.note("tcp in xf " + e.getClass().getSimpleName());
+            }
+        }
+        if (outXf != null) {
+            try {
+                sIpsec.applyTransportModeTransform(fd,
+                        IpSecManager.DIRECTION_OUT, outXf);
+            } catch (Exception e) {
+                JoanTrace.note("tcp out xf " + e.getClass().getSimpleName());
+            }
+        }
+    }
+
+    private static String pollTcp() {
+        FileDescriptor got = acceptOne(sTcpS, sInS, sOutS);
+        if (got == null) {
+            got = acceptOne(sTcpC, sInC, sOutC);
+        }
+        FileDescriptor peer = sTcpPeer;
+        if (got == null && peer == null) {
+            return null;
+        }
+        if (got != null) {
+            closeFd(sTcpPeer);
+            sTcpPeer = got;
+            sTcpAcc.setLength(0);
+            sReplyTcp = true;
+            JoanTrace.note("tcp accept");
+        }
+        peer = sTcpPeer;
+        if (peer == null) {
+            return null;
+        }
+        try {
+            StructPollfd p = new StructPollfd();
+            p.fd = peer;
+            p.events = (short) OsConstants.POLLIN;
+            if (Os.poll(new StructPollfd[] { p }, 40) <= 0) {
+                return null;
+            }
+            byte[] buf = new byte[4096];
+            int n = Os.read(peer, buf, 0, buf.length);
+            if (n <= 0) {
+                closeFd(sTcpPeer);
+                sTcpPeer = null;
+                sReplyTcp = false;
+                return null;
+            }
+            sTcpAcc.append(new String(buf, 0, n, StandardCharsets.US_ASCII));
+            return JoanSipBuilder.extractOne(sTcpAcc);
+        } catch (Exception e) {
+            JoanTrace.note("tcp read " + e.getClass().getSimpleName());
+            closeFd(sTcpPeer);
+            sTcpPeer = null;
+            sReplyTcp = false;
+            return null;
+        }
+    }
+
+    private static FileDescriptor acceptOne(FileDescriptor ls,
+                                            IpSecTransform inXf,
+                                            IpSecTransform outXf) {
+        if (ls == null) {
+            return null;
+        }
+        try {
+            StructPollfd p = new StructPollfd();
+            p.fd = ls;
+            p.events = (short) OsConstants.POLLIN;
+            if (Os.poll(new StructPollfd[] { p }, 0) <= 0) {
+                return null;
+            }
+            InetSocketAddress peer = new InetSocketAddress(0);
+            FileDescriptor c = Os.accept(ls, peer);
+            applyXf(c, inXf, outXf);
+            return c;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static void sendReply(byte[] pkt) throws Exception {
+        if (sReplyTcp && sTcpPeer != null) {
+            int off = 0;
+            while (off < pkt.length) {
+                int n = Os.write(sTcpPeer, pkt, off, pkt.length - off);
+                if (n <= 0) {
+                    throw new java.io.IOException("tcp write");
+                }
+                off += n;
+            }
+            return;
+        }
+        send(sSockC, sPcscf, sPcscfPortS, pkt);
+    }
+
+    private static void closeFd(FileDescriptor fd) {
+        if (fd == null) {
+            return;
+        }
+        try {
+            Os.close(fd);
+        } catch (Exception ignored) {
+            // ignore
+        }
+    }
+
 
     private static String buildResponse(String req, int code, String reason,
                                         JoanSipBuilder.Id id, String toTag,
@@ -506,6 +670,11 @@ final class JoanSipUa {
     private static void releaseLocked() {
         sReg = false;
         sCall = false;
+        closeFd(sTcpPeer);
+        closeFd(sTcpS);
+        closeFd(sTcpC);
+        sTcpPeer = sTcpS = sTcpC = null;
+        sReplyTcp = false;
         if (sListen != null) {
             sListen.interrupt();
             sListen = null;
