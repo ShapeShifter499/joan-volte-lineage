@@ -18,6 +18,7 @@
 #include <sys/select.h>
 #include <sys/time.h>
 #include <stddef.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,8 +34,70 @@ static ua_config_t *g_cfg;
 static char g_last_error[192];
 static int g_registering;
 
+/* Connections parked on EVENTS, waiting to be pushed to. */
+static int g_evt[CTL_EVT_MAX];
+
+static void evt_init(void)
+{
+    for (int i = 0; i < CTL_EVT_MAX; i++)
+        g_evt[i] = -1;
+}
+
+static int evt_add(int fd)
+{
+    for (int i = 0; i < CTL_EVT_MAX; i++) {
+        if (g_evt[i] < 0) {
+            g_evt[i] = fd;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static void evt_drop(int i)
+{
+    if (g_evt[i] >= 0) {
+        close(g_evt[i]);
+        g_evt[i] = -1;
+    }
+}
+
+void ctl_emit_event(const char *fmt, ...)
+{
+    char line[CTL_MAX_LINE];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(line, sizeof(line) - 2, fmt, ap);
+    va_end(ap);
+    if (n < 0)
+        return;
+    size_t len = strlen(line);
+    line[len++] = '\n';
+    line[len] = '\0';
+
+    int sent = 0;
+    for (int i = 0; i < CTL_EVT_MAX; i++) {
+        if (g_evt[i] < 0)
+            continue;
+        ssize_t w = send(g_evt[i], line, len, MSG_NOSIGNAL);
+        if (w != (ssize_t)len)
+            evt_drop(i);      /* peer gone; it will reconnect */
+        else
+            sent++;
+    }
+    if (!sent) {
+        /* Never echo the line: an INCOMING event carries the caller's
+         * number, and this log is not the place for it. */
+        char verb[24] = "";
+        sscanf(line, "EVENT %23[A-Z]", verb);
+        klog(LOG_WARN, "event with no subscriber: %s",
+             verb[0] ? verb : "(unparsed)");
+    }
+}
+
 void ctl_init(ua_config_t *cfg)
 {
+    evt_init();
     g_cfg = cfg;
     g_last_error[0] = '\0';
 }
@@ -181,6 +244,31 @@ static void handle_line(int fd, char *line)
             respond(fd, "STATE", "registered");
         } else
             respond(fd, "ERR", ua_errstr());
+        return;
+    }
+
+    /* Park this connection as an event subscriber instead of answering
+     * and closing. Returns a sentinel so handle_client keeps the fd. */
+    if (!strcmp(verb, "EVENTS")) {
+        if (evt_add(fd) != 0) {
+            respond(fd, "ERR", "too many subscribers");
+            return;
+        }
+        respond(fd, "OK", "events");
+        klog(LOG_INFO, "ctl event subscriber attached");
+        return;
+    }
+
+    if (!strcmp(verb, "ANSWER")) {
+        respond(fd, ua_call_answer() == 0 ? "OK" : "ERR", "answer");
+        return;
+    }
+
+    if (!strcmp(verb, "REJECT")) {
+        int code = (nf >= 2) ? atoi(fields[1]) : 486;
+        if (code < 400 || code > 699)
+            code = 486;
+        respond(fd, ua_call_reject(code) == 0 ? "OK" : "ERR", "reject");
         return;
     }
 
@@ -344,6 +432,14 @@ static int listen_tcp_loopback(void)
 }
 #endif
 
+static int evt_holds(int fd)
+{
+    for (int i = 0; i < CTL_EVT_MAX; i++)
+        if (g_evt[i] == fd)
+            return 1;
+    return 0;
+}
+
 static void handle_client(int c)
 {
     char buf[CTL_MAX_LINE + 1];
@@ -355,7 +451,9 @@ static void handle_client(int c)
                 buf[i] = '\0';
         handle_line(c, buf);
     }
-    close(c);
+    /* An EVENTS connection stays open so the daemon can push to it. */
+    if (!evt_holds(c))
+        close(c);
 }
 
 int ctl_serve(void)
@@ -380,6 +478,12 @@ int ctl_serve(void)
             FD_SET(tcp_ls, &rfds);
             if (tcp_ls > maxfd) maxfd = tcp_ls;
         }
+        for (int i = 0; i < CTL_EVT_MAX; i++) {
+            if (g_evt[i] >= 0) {
+                FD_SET(g_evt[i], &rfds);
+                if (g_evt[i] > maxfd) maxfd = g_evt[i];
+            }
+        }
         /* SIP (UDP+TCP on both protected ports) and RTP. */
         maxfd = ua_select_prep(&rfds, maxfd);
         struct timeval tv, *ptv = NULL;
@@ -397,6 +501,19 @@ int ctl_serve(void)
         }
         ua_select_handle(&rfds);
         ua_media_tick();
+        /* Readable on a subscriber means it spoke or hung up. Either way
+         * it is not a command channel, so drop it and let it reconnect. */
+        for (int i = 0; i < CTL_EVT_MAX; i++) {
+            if (g_evt[i] >= 0 && FD_ISSET(g_evt[i], &rfds)) {
+                char scratch[64];
+                ssize_t n = recv(g_evt[i], scratch, sizeof(scratch),
+                                 MSG_DONTWAIT);
+                if (n <= 0) {
+                    klog(LOG_INFO, "ctl event subscriber detached");
+                    evt_drop(i);
+                }
+            }
+        }
         if (unix_ls >= 0 && FD_ISSET(unix_ls, &rfds)) {
             int c = accept4(unix_ls, NULL, NULL, SOCK_CLOEXEC);
             if (c >= 0) {

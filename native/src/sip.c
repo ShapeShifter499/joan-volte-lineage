@@ -312,8 +312,8 @@ static int header_value(const char *msg, const char *name,
  *
  * Commas inside <> or "" belong to a URI and are not separators. Returns the
  * length written and reports the number of URIs seen through *count. */
-static int route_set_reversed(const char *msg, char *dst, size_t dstlen,
-                              int *count)
+static int route_set_collect(const char *msg, char *dst, size_t dstlen,
+                             int *count, int reverse)
 {
     const char *ent[16];
     size_t elen[16];
@@ -371,11 +371,12 @@ static int route_set_reversed(const char *msg, char *dst, size_t dstlen,
         return -1;
     }
 
-    /* Emit reversed. Build from the nearest hop outwards so that a set too
-     * long for the buffer loses its tail, never the top hop. */
+    /* Build from the nearest hop outwards so that a set too long for the
+     * buffer loses its tail, never the top hop. */
     size_t off = 0;
     dst[0] = '\0';
-    for (int i = n - 1; i >= 0; i--) {
+    for (int k = 0; k < n; k++) {
+        int i = reverse ? (n - 1 - k) : k;
         size_t sep = off ? 2 : 0;
         if (off + sep + elen[i] + 1 > dstlen)
             break;
@@ -390,6 +391,144 @@ static int route_set_reversed(const char *msg, char *dst, size_t dstlen,
     }
     return (int)off;
 }
+
+/* RFC 3261 12.1.2: a UAC reverses the Record-Route list. */
+static int route_set_reversed(const char *msg, char *dst, size_t dstlen,
+                              int *count)
+{
+    return route_set_collect(msg, dst, dstlen, count, 1);
+}
+
+/* RFC 3261 12.1.1: a UAS does NOT. It takes the list in the order the
+ * request carried it. Getting this backwards sends in-dialog requests --
+ * the BYE that ends an inbound call, most visibly -- the wrong way through
+ * the proxy chain. */
+int sip_route_set_uas(const char *msg, char *dst, size_t dstlen, int *count)
+{
+    return route_set_collect(msg, dst, dstlen, count, 0);
+}
+
+/* One header field, verbatim, for callers outside this file. */
+int sip_header_copy(const char *msg, const char *name, char *dst, size_t n)
+{
+    return header_value(msg, name, dst, n);
+}
+
+/* Strip surrounding quotes and anything a log or a UI should not see.
+ * A display name is attacker-controlled text: it arrives from the far end
+ * and ends up on a lock screen, so it does not get to carry control
+ * characters or unbounded length. */
+static void clean_display_name(char *s)
+{
+    size_t l = strlen(s);
+    while (l && (s[l - 1] == ' ' || s[l - 1] == '\t'))
+        s[--l] = '\0';
+    if (l >= 2 && s[0] == '"' && s[l - 1] == '"') {
+        memmove(s, s + 1, l - 2);
+        s[l - 2] = '\0';
+        l -= 2;
+    }
+    for (size_t i = 0; i < l; i++)
+        if ((unsigned char)s[i] < 0x20 || s[i] == 0x7f)
+            s[i] = ' ';
+    /* Leading/trailing space again after the substitution. */
+    size_t b = 0;
+    while (s[b] == ' ')
+        b++;
+    if (b)
+        memmove(s, s + b, strlen(s + b) + 1);
+    l = strlen(s);
+    while (l && s[l - 1] == ' ')
+        s[--l] = '\0';
+}
+
+/* Pull "Display Name" <uri> out of one header value. */
+static void split_name_addr(const char *val, char *uri, size_t urilen,
+                            char *name, size_t namelen)
+{
+    uri[0] = '\0';
+    name[0] = '\0';
+    const char *lt = strchr(val, '<');
+    const char *gt = lt ? strchr(lt, '>') : NULL;
+    if (lt && gt) {
+        size_t l = (size_t)(gt - lt - 1);
+        if (l >= urilen)
+            l = urilen - 1;
+        memcpy(uri, lt + 1, l);
+        uri[l] = '\0';
+        size_t nl = (size_t)(lt - val);
+        if (nl >= namelen)
+            nl = namelen - 1;
+        memcpy(name, val, nl);
+        name[nl] = '\0';
+        clean_display_name(name);
+    } else {
+        /* Bare URI with no angle brackets; parameters are not part of it. */
+        size_t i = 0;
+        while (val[i] && val[i] != ';' && val[i] != ',' && i + 1 < urilen) {
+            uri[i] = val[i];
+            i++;
+        }
+        uri[i] = '\0';
+        clean_display_name(uri);
+    }
+}
+
+/* The calling party, for caller ID.
+ *
+ * IMS asserts the real identity in P-Asserted-Identity; From is only what
+ * the caller claims and may be anonymous. Prefer the asserted one for the
+ * number. A P-Asserted-Identity often carries both a sip: and a tel: form,
+ * comma separated -- the tel: form is the one worth displaying.
+ *
+ * The display name usually rides on From even when P-Asserted-Identity
+ * supplies the number, so they are collected independently.
+ *
+ * Returns 1 if a number was found, 0 if the caller withheld it. `name` may
+ * be empty either way.
+ */
+int sip_calling_identity(const char *msg, char *uri, size_t urilen,
+                         char *name, size_t namelen)
+{
+    uri[0] = '\0';
+    name[0] = '\0';
+
+    char pai[512], from[512];
+    int have_pai = header_value(msg, "P-Asserted-Identity", pai,
+                                sizeof(pai)) >= 0;
+    int have_from = header_value(msg, "From", from, sizeof(from)) >= 0;
+
+    char u[300], n[200];
+    if (have_pai) {
+        /* Prefer a tel: entry when the header lists several. */
+        const char *pick = pai;
+        const char *tel = strcasestr(pai, "<tel:");
+        if (tel)
+            pick = tel;
+        split_name_addr(pick, u, sizeof(u), n, sizeof(n));
+        snprintf(uri, urilen, "%s", u);
+        if (n[0])
+            snprintf(name, namelen, "%s", n);
+    }
+    if (have_from) {
+        split_name_addr(from, u, sizeof(u), n, sizeof(n));
+        if (!uri[0])
+            snprintf(uri, urilen, "%s", u);
+        if (!name[0] && n[0])
+            snprintf(name, namelen, "%s", n);
+    }
+
+    if (!uri[0] || strcasestr(uri, "anonymous") != NULL) {
+        uri[0] = '\0';
+        /* A withheld number should not leak a name either. */
+        name[0] = '\0';
+        return 0;
+    }
+    if (strcasestr(name, "anonymous") != NULL)
+        name[0] = '\0';
+    return 1;
+}
+
 
 int parse_response(const char *msg, size_t len, sip_response_t *r)
 {

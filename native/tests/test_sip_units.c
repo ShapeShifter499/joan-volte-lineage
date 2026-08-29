@@ -515,6 +515,53 @@ static void test_pcscf_candidates(void)
           "pcscf single address unchanged");
 }
 
+/* Caller ID. P-Asserted-Identity is the network's assertion; From is only
+ * what the caller claims. A withheld number must not leak a name either. */
+static void test_calling_identity(void)
+{
+    char uri[300], name[200];
+
+    const char *pai =
+        "INVITE sip:me@example.net SIP/2.0\r\n"
+        "From: \"Alice Smith\" <sip:spoofed@evil.example>;tag=a1\r\n"
+        "P-Asserted-Identity: <sip:+15551234567@ims.example.net>, "
+        "<tel:+15551234567>\r\n"
+        "Content-Length: 0\r\n\r\n";
+    CHECK(sip_calling_identity(pai, uri, sizeof(uri), name, sizeof(name)) == 1,
+          "cli found");
+    CHECK(!strcmp(uri, "tel:+15551234567"),
+          "cli prefers the asserted tel: over the claimed From");
+    CHECK(!strcmp(name, "Alice Smith"), "cli takes display name from From");
+
+    const char *fromonly =
+        "INVITE sip:me SIP/2.0\r\n"
+        "From: \"Bob\" <tel:+15559998888>;tag=b2\r\n"
+        "Content-Length: 0\r\n\r\n";
+    CHECK(sip_calling_identity(fromonly, uri, sizeof(uri),
+                               name, sizeof(name)) == 1, "cli from From");
+    CHECK(!strcmp(uri, "tel:+15559998888") && !strcmp(name, "Bob"),
+          "cli falls back to From when no P-Asserted-Identity");
+
+    const char *anon =
+        "INVITE sip:me SIP/2.0\r\n"
+        "From: \"Anonymous\" <sip:anonymous@anonymous.invalid>;tag=c3\r\n"
+        "Content-Length: 0\r\n\r\n";
+    CHECK(sip_calling_identity(anon, uri, sizeof(uri),
+                               name, sizeof(name)) == 0, "cli withheld");
+    CHECK(uri[0] == '\0' && name[0] == '\0',
+          "withheld number leaks neither number nor name");
+
+    /* A display name is far-end text and reaches a lock screen. */
+    const char *nasty =
+        "INVITE sip:me SIP/2.0\r\n"
+        "From: \"bad\tname\" <tel:+15551110000>;tag=d4\r\n"
+        "Content-Length: 0\r\n\r\n";
+    CHECK(sip_calling_identity(nasty, uri, sizeof(uri),
+                               name, sizeof(name)) == 1, "cli control char");
+    CHECK(strchr(name, '\t') == NULL && strchr(name, '"') == NULL,
+          "display name is stripped of control characters and quotes");
+}
+
 int main(void)
 {
     test_md5();
@@ -528,6 +575,7 @@ int main(void)
     test_ack_echoes_dialog_uris();
     test_bye_echoes_dialog_uris();
     test_pcscf_candidates();
+    test_calling_identity();
     if (g_fail) {
         printf("\n%d TEST(S) FAILED\n", g_fail);
         return 1;

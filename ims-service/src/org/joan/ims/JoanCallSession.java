@@ -29,12 +29,37 @@ public class JoanCallSession extends ImsCallSessionImplBase {
     private volatile int state = STATE_IDLE;
     private final String callId;
     private volatile boolean watchHangup;
+    /* An inbound call the daemon is holding at 180. accept() and reject()
+     * must drive the daemon rather than just telling Telecom, because the
+     * INVITE has not been answered yet. */
+    private final boolean incoming;
 
     JoanCallSession(Context app, JoanMmTelFeature feature, ImsCallProfile profile) {
+        this(app, feature, profile, false);
+    }
+
+    private JoanCallSession(Context app, JoanMmTelFeature feature,
+                            ImsCallProfile profile, boolean incoming) {
         this.app = app.getApplicationContext();
         this.feature = feature;
         this.profile = profile;
+        this.incoming = incoming;
         this.callId = "joan-" + Long.toHexString(System.nanoTime());
+    }
+
+    static JoanCallSession incoming(Context app, JoanMmTelFeature feature,
+                                    ImsCallProfile profile) {
+        JoanCallSession s = new JoanCallSession(app, feature, profile, true);
+        s.state = STATE_ESTABLISHING;
+        return s;
+    }
+
+    /** The caller gave up, or the far end hung up. */
+    void onRemoteEnded() {
+        watchHangup = false;
+        JoanMedia.stop();
+        state = STATE_TERMINATED;
+        notifyTerminated(0);
     }
 
     @Override
@@ -97,14 +122,44 @@ public class JoanCallSession extends ImsCallSessionImplBase {
     @Override
     public void accept(int callType, ImsStreamMediaProfile media) {
         Log.i(TAG, "call session accept");
-        state = STATE_ESTABLISHED;
-        notifyStarted(profile);
-        feature.useAndroidAudioHandler();
-        JoanMedia.start(this.app);
+        if (!incoming) {
+            state = STATE_ESTABLISHED;
+            notifyStarted(profile);
+            feature.useAndroidAudioHandler();
+            JoanMedia.start(this.app);
+            return;
+        }
+        /* The INVITE is still unanswered: the daemon must send the 200 OK
+         * before we can claim the call is up. Off the binder thread. */
+        new Thread(() -> {
+            String resp = JoanCtl.txn("ANSWER");
+            if (resp != null && resp.startsWith("OK")) {
+                state = STATE_ESTABLISHED;
+                notifyStarted(profile);
+                feature.useAndroidAudioHandler();
+                JoanMedia.start(this.app);
+                watchRemoteHangup();
+                JoanTrace.note("incoming call answered");
+            } else {
+                Log.w(TAG, "ANSWER refused by daemon");
+                JoanTrace.note("incoming answer failed");
+                state = STATE_TERMINATED;
+                notifyTerminated(0);
+            }
+        }, "joan-ims-answer").start();
     }
 
     @Override
     public void reject(int reason) {
+        if (incoming) {
+            /* 603 Decline says the user refused; 486 would claim we are
+             * busy, which sends some callers to a different treatment. */
+            state = STATE_TERMINATED;
+            new Thread(() -> JoanCtl.txn("REJECT 603"),
+                    "joan-ims-reject").start();
+            notifyTerminated(reason);
+            return;
+        }
         hangupAsync();
         state = STATE_TERMINATED;
         notifyTerminated(reason);

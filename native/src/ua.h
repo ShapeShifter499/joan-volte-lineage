@@ -40,6 +40,11 @@ int ua_register_stage1(char *nonce_out, size_t nonce_len);
  * and ACKed. */
 int ua_call_invite(const char *dest);
 
+/* Accept or decline an inbound call the daemon is holding while the dialer
+ * rings. Returns 0 on success, -1 if nothing is ringing. */
+int ua_call_answer(void);
+int ua_call_reject(int code);
+
 /* End the call established by ua_call_invite(). Returns 0 if a BYE was
  * sent, -1 if no call is up. */
 int ua_call_hangup(void);

@@ -15,5 +15,8 @@ public class ImsCallProfile {
 
     public void setCallExtra(String name, String value) {}
 
+    /* Caller-ID presentation is carried as an int extra (oir). */
+    public void setCallExtraInt(String name, int value) {}
+
     public String getCallExtra(String name) { return null; }
 }

@@ -100,6 +100,19 @@ int build_register(
 
 int parse_response(const char *msg, size_t len, sip_response_t *r);
 
+/* Route set for a UAS: Record-Route in the order received (RFC 3261
+ * 12.1.1), unlike a UAC which reverses it. */
+int sip_route_set_uas(const char *msg, char *dst, size_t dstlen, int *count);
+
+/* One header field, verbatim. */
+int sip_header_copy(const char *msg, const char *name, char *dst, size_t n);
+
+/* Calling party URI and display name for caller ID, preferring
+ * P-Asserted-Identity over the caller-supplied From. Returns 0 and empties
+ * both if withheld. `name` may be empty even when a number is present. */
+int sip_calling_identity(const char *msg, char *uri, size_t urilen,
+                         char *name, size_t namelen);
+
 /* Method of an inbound request ("INVITE", "BYE", ...), or "" if `msg` is a
  * response rather than a request. */
 int sip_request_method(const char *msg, char *out, size_t outlen);

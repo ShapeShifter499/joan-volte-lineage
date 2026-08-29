@@ -1,7 +1,10 @@
-/* stub_xfrm_ctl.c — host-test stand-in for the device-only xfrm module.
- * Records the install request so tests can assert on it later. */
+/* stub_xfrm_ctl.c — host-test stand-in for the device-only xfrm and ctl
+ * modules. Records the install request so tests can assert on it later,
+ * and swallows pushed events so ua.c links without the control server. */
+#include <stdarg.h>
 #include <string.h>
 
+#include "ctl.h"
 #include "xfrm.h"
 
 static xfrm_status_t g_last_stub_status;
@@ -35,4 +38,19 @@ int xfrm_install(
 int stub_xfrm_calls(void)
 {
     return g_stub_install_calls;
+}
+
+/* ua.c pushes call events to whatever app holds an EVENTS connection.
+ * There is no control server in the host tests, so record the count only. */
+static int g_stub_events;
+
+void ctl_emit_event(const char *fmt, ...)
+{
+    (void)fmt;
+    g_stub_events++;
+}
+
+int stub_ctl_events(void)
+{
+    return g_stub_events;
 }

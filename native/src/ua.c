@@ -3,6 +3,8 @@
 
 #include "ua.h"
 
+#include "ctl.h"
+
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -55,6 +57,21 @@ static struct {
     char public_id[300];   /* IMPU from P-Associated-URI; NEVER the IMPI */
     int  valid;
 } g_reg;
+
+/* An inbound INVITE we have answered 180 to and are holding while the
+ * dialer rings. The daemon used to answer these itself, which meant a call
+ * connected with nobody told: the phone never rang, there was no session to
+ * route audio through, and the user could not decline. */
+static struct {
+    int  active;
+    char invite[SIP_MAX_MSG];   /* the request, for building the answer */
+    size_t invite_len;
+    char to_tag[64];            /* our tag, already sent in the 180 */
+    int  reply_fd;
+    int  reply_tcp;
+    struct sockaddr_storage peer;
+    socklen_t peerlen;
+} g_mt;
 
 /* The dialog of the call currently up. ua_call_invite() left its dialog on
  * the stack, so once it returned there was no way to send a BYE and the
@@ -1257,6 +1274,132 @@ static void inbound_send(const char *pkt, size_t len)
              w, len, errno, g_reply_tcp);
 }
 
+/* ---- MT: answer / decline the held INVITE ------------------------------ */
+
+/* Reply into the transaction the INVITE arrived on. handle_sip_request()
+ * uses the live g_reply_* for this; by the time the user answers, those
+ * have moved on, so the held copy is restored first. */
+static void mt_send(const char *pkt, size_t len)
+{
+    int save_fd = g_reply_fd;
+    int save_tcp = g_reply_tcp;
+    struct sockaddr_storage save_peer = g_reply_peer;
+    socklen_t save_len = g_reply_plen;
+
+    g_reply_fd = g_mt.reply_fd;
+    g_reply_tcp = g_mt.reply_tcp;
+    g_reply_peer = g_mt.peer;
+    g_reply_plen = g_mt.peerlen;
+    inbound_send(pkt, len);
+
+    g_reply_fd = save_fd;
+    g_reply_tcp = save_tcp;
+    g_reply_peer = save_peer;
+    g_reply_plen = save_len;
+}
+
+int ua_call_answer(void)
+{
+    if (!g_mt.active) {
+        klog(LOG_WARN, "answer with no call ringing");
+        return -1;
+    }
+    sip_identity_t id = g_cfg->id;
+    id.local_port = g_reg.port_c;
+    id.contact_port = g_reg.port_s;
+    id.pcscf_port = g_reg.pcscf_port_s;
+    snprintf(id.impu, sizeof(id.impu), "%s", g_reg.public_id);
+
+    const char *body = strstr(g_mt.invite, "\r\n\r\n");
+    char sdp[768];
+    int sl = sdp_answer(sdp, sizeof(sdp), g_cfg->id.local_ip,
+                        40000, body ? body + 4 : NULL);
+    if (sl <= 0) {
+        klog(LOG_WARN, "answer: no SDP answer from offer");
+        return -1;
+    }
+    char resp[SIP_MAX_MSG];
+    int n = build_response(resp, sizeof(resp), g_mt.invite, 200, "OK",
+                           &id, g_mt.to_tag, sdp);
+    if (n <= 0) {
+        klog(LOG_WARN, "answer: 200 build failed");
+        return -1;
+    }
+    mt_send(resp, (size_t)n);
+    klog(LOG_INFO, "inbound call answered by dialer (200 OK sent)");
+    media_from_sip(g_mt.invite);
+
+    /* Adopt the inbound dialog so we can end the call. Without this the
+     * BYE was built from an empty dialog, the far end ignored it, and the
+     * call sat up on their side until their own timer dropped it.
+     *
+     * The roles are mirrored from an outgoing call: our tag is the one we
+     * put in the 180/200, and the remote tag is the caller's From tag. So
+     * the From of anything we send in this dialog is the INVITE's To plus
+     * our tag, and the To is the INVITE's From exactly as it arrived. */
+    memset(&g_call.dlg, 0, sizeof(g_call.dlg));
+    sip_header_copy(g_mt.invite, "Call-ID", g_call.dlg.call_id,
+                    sizeof(g_call.dlg.call_id));
+    g_call.dlg.cseq = 0;          /* BYE takes cseq+1 */
+
+    char inv_to[320], inv_from[320];
+    inv_to[0] = inv_from[0] = '\0';
+    sip_header_copy(g_mt.invite, "To", inv_to, sizeof(inv_to));
+    sip_header_copy(g_mt.invite, "From", inv_from, sizeof(inv_from));
+    snprintf(g_call.from_hdr, sizeof(g_call.from_hdr), "%s;tag=%s",
+             inv_to, g_mt.to_tag);
+    snprintf(g_call.to_hdr, sizeof(g_call.to_hdr), "%s", inv_from);
+    snprintf(g_call.to_tag, sizeof(g_call.to_tag), "%s", "");
+
+    /* Remote target is the caller's Contact; a UAS keeps the Record-Route
+     * in the order it arrived (RFC 3261 12.1.1), unlike a UAC. */
+    char contact[320];
+    if (sip_header_copy(g_mt.invite, "Contact", contact,
+                        sizeof(contact)) >= 0) {
+        const char *lt = strchr(contact, '<');
+        const char *gt = lt ? strchr(lt, '>') : NULL;
+        if (lt && gt && (size_t)(gt - lt - 1) < sizeof(g_call.target)) {
+            size_t tl = (size_t)(gt - lt - 1);
+            memcpy(g_call.target, lt + 1, tl);
+            g_call.target[tl] = '\0';
+        } else {
+            snprintf(g_call.target, sizeof(g_call.target), "%s", contact);
+        }
+    }
+    int rr_n = 0;
+    if (sip_route_set_uas(g_mt.invite, g_call.route, sizeof(g_call.route),
+                          &rr_n) < 0)
+        g_call.route[0] = '\0';
+    klog(LOG_INFO, "inbound dialog adopted (rr=%d)", rr_n);
+
+    g_call.active = 1;
+    g_mt.active = 0;
+    return 0;
+}
+
+int ua_call_reject(int code)
+{
+    if (!g_mt.active) {
+        klog(LOG_WARN, "reject with no call ringing");
+        return -1;
+    }
+    sip_identity_t id = g_cfg->id;
+    id.local_port = g_reg.port_c;
+    id.contact_port = g_reg.port_s;
+    id.pcscf_port = g_reg.pcscf_port_s;
+    snprintf(id.impu, sizeof(id.impu), "%s", g_reg.public_id);
+
+    char resp[SIP_MAX_MSG];
+    const char *reason = (code == 603) ? "Decline" : "Busy Here";
+    int n = build_response(resp, sizeof(resp), g_mt.invite, code, reason,
+                           &id, g_mt.to_tag, NULL);
+    if (n > 0)
+        mt_send(resp, (size_t)n);
+    klog(LOG_INFO, "inbound call declined by dialer (%d sent)", code);
+    g_mt.active = 0;
+    return n > 0 ? 0 : -1;
+}
+
 static void handle_sip_request(char *rx, size_t r)
 {
     /* Never log the request line: it carries the public identity. */
@@ -1309,6 +1452,16 @@ static void handle_sip_request(char *rx, size_t r)
 
     if (!strcasecmp(method, "INVITE")) {
         klog(LOG_INFO, "inbound INVITE");
+        if (g_mt.active || g_call.active) {
+            /* One call at a time: tell the caller rather than silently
+             * dropping the second INVITE. */
+            n = build_response(resp, sizeof(resp), rx, 486, "Busy Here",
+                               &id, NULL, NULL);
+            if (n > 0) inbound_send(resp, (size_t)n);
+            klog(LOG_INFO, "inbound INVITE while busy: 486 sent");
+            return;
+        }
+
         char tag[16];
         mk_tag_public(tag, sizeof(tag));
 
@@ -1319,18 +1472,44 @@ static void handle_sip_request(char *rx, size_t r)
         if (n > 0) inbound_send(resp, (size_t)n);
         klog(LOG_INFO, "sent 100 + 180");
 
-        const char *body = strstr(rx, "\r\n\r\n");
-        char sdp[768];
-        int sl = sdp_answer(sdp, sizeof(sdp), g_cfg->id.local_ip,
-                            40000, body ? body + 4 : NULL);
-        if (sl <= 0)
+        /* Hold it. The app decides: the dialer has to ring, and the user
+         * has to be able to decline. Answering here would connect a call
+         * nobody was told about. */
+        memset(&g_mt, 0, sizeof(g_mt));
+        size_t rl = strlen(rx);
+        if (rl >= sizeof(g_mt.invite)) {
+            n = build_response(resp, sizeof(resp), rx, 500,
+                               "Server Internal Error", &id, tag, NULL);
+            if (n > 0) inbound_send(resp, (size_t)n);
+            klog(LOG_WARN, "inbound INVITE too large to hold (%zu B)", rl);
             return;
-        n = build_response(resp, sizeof(resp), rx, 200, "OK", &id, tag, sdp);
-        if (n > 0) {
-            inbound_send(resp, (size_t)n);
-            klog(LOG_INFO, "inbound call answered (200 OK sent)");
-            media_from_sip(rx);
         }
+        memcpy(g_mt.invite, rx, rl);
+        g_mt.invite[rl] = '\0';
+        g_mt.invite_len = rl;
+        snprintf(g_mt.to_tag, sizeof(g_mt.to_tag), "%s", tag);
+        g_mt.reply_fd = g_reply_fd;
+        g_mt.reply_tcp = g_reply_tcp;
+        g_mt.peer = g_reply_peer;
+        g_mt.peerlen = g_reply_plen;
+        g_mt.active = 1;
+
+        /* The caller's number has to reach the dialer or the call shows as
+         * "unknown". Passing it over the control socket is not logging it:
+         * it goes to the app that is about to display it, and no klog here
+         * ever carries it. Withheld numbers stay withheld -- an anonymous
+         * caller yields an empty field and Telecom shows unknown. */
+        char cli[300], cna[200];
+        int have_cli = sip_calling_identity(g_mt.invite, cli, sizeof(cli),
+                                            cna, sizeof(cna));
+        /* "-" for a withheld number keeps the name field unambiguous when
+         * the app splits the line. A display name may contain spaces, so
+         * it goes last and the app takes the remainder. */
+        ctl_emit_event("EVENT INCOMING %s %s",
+                       have_cli ? cli : "-", cna);
+        klog(LOG_INFO, "inbound call held; dialer notified "
+             "(number=%s name=%s)",
+             have_cli ? "yes" : "withheld", cna[0] ? "yes" : "none");
         return;
     }
 
@@ -1346,6 +1525,8 @@ static void handle_sip_request(char *rx, size_t r)
         }
         rtp_stop();
         g_call.active = 0;
+        g_mt.active = 0;
+        ctl_emit_event("EVENT ENDED");
         return;
     }
 
@@ -1353,6 +1534,17 @@ static void handle_sip_request(char *rx, size_t r)
         klog(LOG_INFO, "inbound CANCEL");
         n = build_response(resp, sizeof(resp), rx, 200, "OK", &id, NULL, NULL);
         if (n > 0) inbound_send(resp, (size_t)n);
+        if (g_mt.active) {
+            /* RFC 3261 9.2: the INVITE transaction still owes a final
+             * response, and the dialer must stop ringing. */
+            n = build_response(resp, sizeof(resp), g_mt.invite, 487,
+                               "Request Terminated", &id, g_mt.to_tag, NULL);
+            if (n > 0)
+                mt_send(resp, (size_t)n);
+            g_mt.active = 0;
+            ctl_emit_event("EVENT CANCELLED");
+            klog(LOG_INFO, "ringing call cancelled by caller (487 sent)");
+        }
         return;
     }
 
