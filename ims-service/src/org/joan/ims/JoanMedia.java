@@ -141,6 +141,8 @@ final class JoanMedia {
         AudioRecord rec = null;
         long ulSumSq = 0;
         long ulSamples = 0;
+        long ulActSq = 0;
+        long ulActSamples = 0;
         int ulPeak = 0;
         boolean ulLogged = false;
         audioPriority("cap");
@@ -173,19 +175,25 @@ final class JoanMedia {
                     continue;
                 }
                 int m = Math.min(n, PTIME_SAMPLES);
+                long frameSq = 0;
                 for (int i = 0; i < m; i++) {
                     short v = pcm[i];
                     int a = v < 0 ? -v : v;
-                    ulSumSq += (long) a * a;
+                    frameSq += (long) a * a;
                     if (a > ulPeak) {
                         ulPeak = a;
                     }
                     ulaw[i] = linearToUlaw(v);
                 }
+                ulSumSq += frameSq;
                 ulSamples += m;
+                if (m > 0 && frameSq / m > ACTIVE_MEAN_SQ) {
+                    ulActSq += frameSq;
+                    ulActSamples += m;
+                }
                 if (!ulLogged && ulSamples >= SAMPLE_HZ * 5L) {
-                    JoanTrace.note("media ul level "
-                            + level(ulSumSq, ulSamples, ulPeak));
+                    JoanTrace.note("media ul level " + level(ulSumSq,
+                            ulSamples, ulPeak, ulActSq, ulActSamples));
                     ulLogged = true;
                 }
                 rtp[0] = (byte) 0x80;
@@ -210,8 +218,8 @@ final class JoanMedia {
             Log.w(TAG, "media cap", t);
         } finally {
             try { if (rec != null) rec.release(); } catch (Throwable ignored) {}
-            JoanTrace.note("media ul stopped "
-                    + level(ulSumSq, ulSamples, ulPeak));
+            JoanTrace.note("media ul stopped " + level(ulSumSq, ulSamples,
+                    ulPeak, ulActSq, ulActSamples));
         }
     }
 
@@ -220,6 +228,8 @@ final class JoanMedia {
         int dl = 0;
         long dlSumSq = 0;
         long dlSamples = 0;
+        long dlActSq = 0;
+        long dlActSamples = 0;
         int dlPeak = 0;
         boolean dlLogged = false;
         audioPriority("play");
@@ -277,19 +287,25 @@ final class JoanMedia {
                 if (m <= 0) {
                     continue;
                 }
+                long dFrameSq = 0;
                 for (int i = 0; i < m; i++) {
                     short v = ulawToLinear(down[off + i]);
                     int a = v < 0 ? -v : v;
-                    dlSumSq += (long) a * a;
+                    dFrameSq += (long) a * a;
                     if (a > dlPeak) {
                         dlPeak = a;
                     }
                     pcm[i] = v;
                 }
+                dlSumSq += dFrameSq;
                 dlSamples += m;
+                if (m > 0 && dFrameSq / m > ACTIVE_MEAN_SQ) {
+                    dlActSq += dFrameSq;
+                    dlActSamples += m;
+                }
                 if (!dlLogged && dlSamples >= SAMPLE_HZ * 5L) {
-                    JoanTrace.note("media dl level "
-                            + level(dlSumSq, dlSamples, dlPeak));
+                    JoanTrace.note("media dl level " + level(dlSumSq,
+                            dlSamples, dlPeak, dlActSq, dlActSamples));
                     dlLogged = true;
                 }
                 int wr = trk.write(pcm, 0, m);
@@ -311,7 +327,7 @@ final class JoanMedia {
         } finally {
             try { if (trk != null) trk.release(); } catch (Throwable ignored) {}
             JoanTrace.note("media dl stopped frames=" + dl + " "
-                    + level(dlSumSq, dlSamples, dlPeak));
+                    + level(dlSumSq, dlSamples, dlPeak, dlActSq, dlActSamples));
         }
     }
 
@@ -380,15 +396,37 @@ final class JoanMedia {
      * quiet" this is the number that says whether the capture is low or
      * the problem is downstream of us.
      */
-    private static String level(long sumSq, long samples, int peak) {
+    /**
+     * A frame whose mean square exceeds this counts as speech rather than
+     * silence. 10000 is about -50 dBFS, comfortably above the noise floor
+     * of an idle handset and well below any real talking.
+     */
+    private static final long ACTIVE_MEAN_SQ = 10000L;
+
+    private static String level(long sumSq, long samples, int peak,
+                                long actSq, long actSamples) {
         if (samples <= 0) {
             return "no samples";
         }
         double rms = Math.sqrt((double) sumSq / (double) samples);
         double rmsDb = rms > 0 ? 20.0 * Math.log10(rms / 32768.0) : -99.0;
         double peakDb = peak > 0 ? 20.0 * Math.log10(peak / 32768.0) : -99.0;
+        /* Whole-call RMS is dominated by however long nobody was talking,
+         * so it cannot be compared between the two directions. The level
+         * over speech-active frames can be. */
+        String speech;
+        if (actSamples > 0) {
+            double a = Math.sqrt((double) actSq / (double) actSamples);
+            speech = String.format(java.util.Locale.US,
+                    " speech=%.1fdBFS active=%d%%",
+                    a > 0 ? 20.0 * Math.log10(a / 32768.0) : -99.0,
+                    (int) (100L * actSamples / samples));
+        } else {
+            speech = " speech=silent";
+        }
         return String.format(java.util.Locale.US,
-                "rms=%.1fdBFS peak=%.1fdBFS n=%d", rmsDb, peakDb, samples);
+                "rms=%.1fdBFS peak=%.1fdBFS n=%d", rmsDb, peakDb, samples)
+                + speech;
     }
 
     private static void put32(byte[] b, int off, int v) {

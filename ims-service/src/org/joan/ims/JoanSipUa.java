@@ -527,7 +527,11 @@ final class JoanSipUa {
              * to deliver SMS here as a SIP MESSAGE -- which would land
              * exactly here and vanish. Log the method, never the message:
              * a MESSAGE body is the text of someone's SMS. */
-            JoanTrace.note("app inbound unhandled method=" + method);
+            if (!"ACK".equals(method)) {
+                /* ACK needs no response and ignoring it is correct;
+                 * calling that "unhandled" in the log is misleading. */
+                JoanTrace.note("app inbound unhandled method=" + method);
+            }
             return;
         }
         if (sCall || sHeldInvite != null) {
