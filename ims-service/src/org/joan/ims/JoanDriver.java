@@ -95,30 +95,42 @@ final class JoanDriver {
                 }
 
                 Cycle c = d.cycle;
-                if (JoanSipUa.isRegistered()) {
-                    logState("app UA still registered; refresh in 30m");
-                    Thread.sleep(30 * 60_000L);
-                    continue;
+                boolean refreshing = JoanSipUa.isRegistered();
+                if (refreshing) {
+                    long wait = JoanSipUa.msUntilRefresh();
+                    if (wait > 0) {
+                        logState("registered via app UA; refresh in "
+                                + (wait / 60_000L) + "m");
+                        Thread.sleep(wait);
+                        continue;
+                    }
                 }
                 if (daemonDown()) {
-                    logState("attempt REGISTER via app UA");
+                    logState(refreshing ? "refreshing REGISTER via app UA"
+                            : "attempt REGISTER via app UA");
                     String r = JoanSipUa.register(app);
                     boolean ok = r != null && r.contains("reg2=200");
                     JoanTrace.note("app register: "
                             + (r == null ? "null" : r));
                     if (ok && JoanSipUa.isRegistered()) {
                         JoanRegistration.setRegistered(true, c.pcscf);
-                        logState("registered via app UA; re-register in 30m");
                         registerBackoff = REG_RETRY_MIN_MS;
-                        Thread.sleep(30 * 60_000L);
-                    } else {
-                        JoanRegistration.setRegistered(false, null);
-                        logState("app REGISTER failed; backoff "
-                                + (registerBackoff / 1000) + "s");
-                        Thread.sleep(registerBackoff);
-                        registerBackoff = Math.min(REG_RETRY_MAX_MS,
-                                registerBackoff * 2);
+                        /* The next pass reads the granted lifetime and
+                         * sleeps until the refresh is due. */
+                        continue;
                     }
+                    if (refreshing) {
+                        /* A failed refresh leaves the old binding in place
+                         * but unrenewed, and isRegistered() would send us
+                         * straight back to sleep instead of retrying. */
+                        JoanSipUa.release();
+                    }
+                    JoanRegistration.setRegistered(false, null);
+                    logState("app REGISTER failed; backoff "
+                            + (registerBackoff / 1000) + "s");
+                    Thread.sleep(registerBackoff);
+                    registerBackoff = Math.min(REG_RETRY_MAX_MS,
+                            registerBackoff * 2);
                     continue;
                 }
                 logState("attempt REGISTER via native UA");

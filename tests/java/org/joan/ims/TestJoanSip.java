@@ -11,6 +11,7 @@ public final class TestJoanSip {
         testSecAgreeSelect();
         testRegisterOffer();
         testImei();
+        testGrantedExpires();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -260,6 +261,53 @@ public final class TestJoanSip {
         check(c.uri.startsWith("sip:+") && c.uri.indexOf('<') < 0,
                 "cli uri has no leftover angle bracket");
         check("Alice".equals(c.name), "cli name from PAI/From display");
+    }
+
+    private static void testGrantedExpires() {
+        /* Two contacts registered against the same IMPU: ours is the one
+         * on our own contact port, and it is not the first. */
+        String twoContacts = "SIP/2.0 200 OK\r\n"
+                + "Contact: <sip:+15555550100@[2600:1:2::9]:5060>;expires=3600\r\n"
+                + "Contact: <sip:+15555550100@[2600:1:2::5]:12345>;expires=600\r\n"
+                + "Expires: 999999\r\n"
+                + "Content-Length: 0\r\n\r\n";
+        check(JoanSipBuilder.grantedExpiresSeconds(twoContacts, 12345) == 600,
+                "granted expiry prefers our own contact port");
+        check(JoanSipBuilder.grantedExpiresSeconds(twoContacts, 40000) == 3600,
+                "granted expiry falls back to the first contact");
+
+        /* A port that is a prefix of ours must not match. */
+        String prefix = "SIP/2.0 200 OK\r\n"
+                + "Contact: <sip:u@[2600::5]:1234567>;expires=77\r\n"
+                + "Contact: <sip:u@[2600::5]:1234>;expires=88\r\n"
+                + "Content-Length: 0\r\n\r\n";
+        check(JoanSipBuilder.grantedExpiresSeconds(prefix, 1234) == 88,
+                "granted expiry does not match a longer port");
+
+        String headerOnly = "SIP/2.0 200 OK\r\n"
+                + "Contact: <sip:u@[2600::5]:1234>\r\n"
+                + "Expires: 1800\r\n"
+                + "Content-Length: 0\r\n\r\n";
+        check(JoanSipBuilder.grantedExpiresSeconds(headerOnly, 1234) == 1800,
+                "granted expiry falls back to the Expires header");
+
+        String silent = "SIP/2.0 200 OK\r\n"
+                + "Contact: <sip:u@[2600::5]:1234>\r\n"
+                + "Content-Length: 0\r\n\r\n";
+        check(JoanSipBuilder.grantedExpiresSeconds(silent, 1234) == -1,
+                "granted expiry is -1 when the registrar says nothing");
+
+        /* headers() must stop at the blank line, not walk into the body. */
+        String withBody = "SIP/2.0 200 OK\r\n"
+                + "Record-Route: <sip:a;lr>\r\n"
+                + "Record-Route: <sip:b;lr>\r\n"
+                + "Content-Type: application/sdp\r\n"
+                + "Content-Length: 12\r\n\r\n"
+                + "Contact: nope\r\n";
+        check(JoanSipBuilder.headers(withBody, "Record-Route").size() == 2,
+                "headers returns every occurrence in order");
+        check(JoanSipBuilder.headers(withBody, "Contact").isEmpty(),
+                "headers stops at the body");
     }
 
     private static void testImei() {

@@ -24,6 +24,10 @@ import java.nio.charset.StandardCharsets;
 final class JoanSipUa {
     static final int RTP_PORT = 40000;
 
+    /** Refresh at 80% of the granted lifetime, within these bounds. */
+    private static final long REFRESH_FLOOR_MS = 60_000L;
+    private static final long REFRESH_CAP_MS = 30 * 60_000L;
+
     private static final Object LOCK = new Object();
     private static volatile boolean sReg;
     private static volatile boolean sCall;
@@ -39,6 +43,8 @@ final class JoanSipUa {
     private static FileDescriptor sTcpS, sTcpC, sTcpPeer;
     private static final StringBuilder sTcpAcc = new StringBuilder();
     private static volatile boolean sReplyTcp;
+    private static volatile long sRegisteredAtMs;
+    private static volatile int sExpiresSec;
     private static JoanSipBuilder.Id sId;
     private static String sPani;
     private static String sSecVerify;
@@ -67,6 +73,37 @@ final class JoanSipUa {
 
     static boolean callActive() {
         return sCall;
+    }
+
+    /**
+     * Milliseconds until this registration must be refreshed, 0 when it is
+     * due now or there is nothing registered.
+     *
+     * The registrar is free to grant less than the Expires we asked for,
+     * and when its grant lapses the binding is gone while this side still
+     * believes it is registered: MO calls fail and MT calls never arrive.
+     * The cap re-validates the binding periodically even when the grant is
+     * long, which is what the driver's old "re-register in 30m" comment
+     * intended before the app path stopped re-registering at all.
+     */
+    static long msUntilRefresh() {
+        if (!sReg) {
+            return 0;
+        }
+        long grantMs = sExpiresSec > 0 ? sExpiresSec * 1000L : REFRESH_CAP_MS;
+        long lead = Math.max(REFRESH_FLOOR_MS,
+                Math.min(REFRESH_CAP_MS, grantMs / 5 * 4));
+        long left = sRegisteredAtMs + lead - System.currentTimeMillis();
+        return left > 0 ? left : 0;
+    }
+
+    /** Tear the binding down so the driver's backoff path takes over. */
+    static void release() {
+        synchronized (LOCK) {
+            releaseLocked();
+        }
+        JoanRegistration.setRegistered(false, null);
+        JoanTrace.note("app UA released");
     }
 
     static InetAddress mediaIp() {
@@ -129,6 +166,9 @@ final class JoanSipUa {
             sReg = sPublicId != null && !sPublicId.isEmpty();
             sCall = false;
             sReplyTcp = false;
+            sExpiresSec = JoanSipBuilder.grantedExpiresSeconds(
+                    reg2Msg, id.contactPort);
+            sRegisteredAtMs = System.currentTimeMillis();
         }
         if (sReg) {
             /* Same as native hold_protected_ports: TCP listen on port-s
@@ -138,7 +178,9 @@ final class JoanSipUa {
             JoanRegistration.setRegistered(true, null);
             startListen();
             JoanTrace.note("app UA registered public=yes tcp_s="
-                    + (sTcpS != null) + " tcp_c=" + (sTcpC != null));
+                    + (sTcpS != null) + " tcp_c=" + (sTcpC != null)
+                    + " granted=" + sExpiresSec + "s refresh_in="
+                    + (msUntilRefresh() / 1000) + "s");
         } else {
             JoanTrace.note("app UA REGISTER 200 but no public identity");
         }
@@ -748,6 +790,8 @@ final class JoanSipUa {
     private static void releaseLocked() {
         sReg = false;
         sCall = false;
+        sExpiresSec = 0;
+        sRegisteredAtMs = 0;
         closeFd(sTcpPeer);
         closeFd(sTcpS);
         closeFd(sTcpC);

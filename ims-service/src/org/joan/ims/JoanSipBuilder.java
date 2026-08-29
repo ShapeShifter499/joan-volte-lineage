@@ -384,6 +384,96 @@ final class JoanSipBuilder {
         return null;
     }
 
+    /** Every header line with this name, in message order. */
+    static java.util.List<String> headers(String msg, String name) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        int i = 0;
+        while (i < msg.length()) {
+            int eol = eol(msg, i);
+            if (eol == i) {
+                break; /* blank line: headers end, body begins */
+            }
+            String line = msg.substring(i, eol);
+            int colon = line.indexOf(':');
+            if (colon > 0 && line.substring(0, colon).equalsIgnoreCase(name)) {
+                out.add(line.substring(colon + 1).trim());
+            }
+            i = skipEol(msg, eol);
+            if (i == eol) {
+                break;
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Seconds the registrar actually granted, or -1 when it said nothing.
+     *
+     * A REGISTER 200 carries the granted lifetime as an expires= parameter
+     * on the returned Contact, or as an Expires header. Several contacts
+     * can come back when the same IMPU is registered from more than one
+     * device, so prefer the one bound to our own contact port and only
+     * then fall back.
+     */
+    static int grantedExpiresSeconds(String reg200, int contactPort) {
+        java.util.List<String> contacts = headers(reg200, "Contact");
+        String portMark = ":" + contactPort;
+        int fallback = -1;
+        for (String c : contacts) {
+            int e = expiresParam(c);
+            if (e < 0) {
+                continue;
+            }
+            int at = c.indexOf(portMark);
+            if (at >= 0) {
+                char after = at + portMark.length() < c.length()
+                        ? c.charAt(at + portMark.length()) : '>';
+                if (after < '0' || after > '9') {
+                    return e;
+                }
+            }
+            if (fallback < 0) {
+                fallback = e;
+            }
+        }
+        if (fallback >= 0) {
+            return fallback;
+        }
+        String h = header(reg200, "Expires");
+        if (h != null) {
+            try {
+                return Integer.parseInt(h.trim());
+            } catch (NumberFormatException ignored) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    private static int expiresParam(String contact) {
+        int i = indexOfIgnoreCase(contact, "expires=");
+        if (i < 0) {
+            return -1;
+        }
+        int v = i + "expires=".length();
+        int e = v;
+        while (e < contact.length()) {
+            char c = contact.charAt(e);
+            if (c < '0' || c > '9') {
+                break;
+            }
+            e++;
+        }
+        if (e == v) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(contact.substring(v, e));
+        } catch (NumberFormatException ignored) {
+            return -1;
+        }
+    }
+
     private static int eol(String msg, int from) {
         int r = msg.indexOf('\r', from);
         int n = msg.indexOf('\n', from);
