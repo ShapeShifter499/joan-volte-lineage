@@ -29,6 +29,8 @@ public class JoanStateProvider extends ContentProvider {
 
     private static volatile String sProbeResult = "";
     private static volatile boolean sProbeRunning = false;
+    private static volatile String sIpsecResult = "";
+    private static volatile boolean sIpsecRunning = false;
 
     @Override
     public Cursor query(Uri uri, String[] projection, String selection,
@@ -56,6 +58,28 @@ public class JoanStateProvider extends ContentProvider {
                         sProbeRunning = false;
                     }
                 }, "joan-aka-probe").start();
+            }
+            return c;
+        }
+        if (uri != null && "ipsecspike".equals(uri.getLastPathSegment())) {
+            /* Decides whether the native daemon can be removed: see
+             * JoanIpsecSpike. Runs off the binder thread. */
+            c.addRow(new Object[] { "ipsec_spike_running",
+                    String.valueOf(sIpsecRunning) });
+            c.addRow(new Object[] { "ipsec_spike_result", sIpsecResult });
+            if (!sIpsecRunning && ctx != null) {
+                sIpsecRunning = true;
+                final Context app = ctx.getApplicationContext();
+                new Thread(() -> {
+                    try {
+                        sIpsecResult = JoanIpsecSpike.run(app);
+                    } catch (Throwable t) {
+                        sIpsecResult = "spike error "
+                                + t.getClass().getSimpleName();
+                    } finally {
+                        sIpsecRunning = false;
+                    }
+                }, "joan-ipsec-spike").start();
             }
             return c;
         }
