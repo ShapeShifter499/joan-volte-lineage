@@ -170,15 +170,20 @@ final class JoanAka {
                         resp = get;
                     }
                 }
-                // Shape-only trace (lengths and SW), never key material.
+                /* Shape-only trace: the status word, the total length,
+                 * the AKA tag (0xdb success / 0xdc sync failure) and the
+                 * length byte that follows it. Everything after those two
+                 * bytes is RES, and RES is key material -- the previous
+                 * form logged the first eight bytes, so six bytes of RES
+                 * went into a plaintext log on every registration. */
                 String swf = resp.substring(resp.length() - 4);
-                StringBuilder shape = new StringBuilder();
                 byte[] dd = hexBytes(resp);
-                for (int k = 0; k < Math.min(8, dd.length); k++) {
-                    shape.append(String.format(Locale.ROOT, "%02x", dd[k]));
-                }
+                String shape = (dd == null || dd.length < 2)
+                        ? "tag=none"
+                        : String.format(Locale.ROOT, "tag=%02x field_len=%d",
+                                dd[0] & 0xff, dd[1] & 0xff);
                 JoanTrace.note("apdu: len=" + resp.length()
-                        + " sw=" + swf + " head=" + shape);
+                        + " sw=" + swf + " " + shape);
                 return parseApduAka(resp);
             } finally {
                 if (owned) {
