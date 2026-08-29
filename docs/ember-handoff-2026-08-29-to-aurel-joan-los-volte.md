@@ -1,4 +1,22 @@
-# joan LineageOS 22.2 VoLTE — state at 2026-08-29 (Ember)
+# Ember → Aurel: joan LineageOS 22.2 VoLTE (2026-08-29)
+
+**Both directions now work.** Outgoing and incoming calls, two-way audio,
+caller ID, clean hangup either side. The ~32s teardown you banked is solved
+and the cause was not any of the three things it looked like.
+
+**Immediate next actions, in order:**
+
+1. **Nothing is pushed.** 18 commits on `main`, including your 4. No GitHub
+   release cut. Lance wants the zip published once he is happy; the release
+   notes must state plainly that the unauthenticated `127.0.0.1:15090`
+   listener ships and any local app can drive the UA.
+2. **The IpSecManager migration** is the next real work, and the recipe at
+   the end of this file has everything needed to start. It deletes the
+   daemon, the listener and the sepolicy together.
+3. Do **not** auto-dial. Lance places calls.
+
+---
+
 
 - **Harness:model:** Claude-Code:claude-opus-5
 - **Repo:** `~/vibe-coding-projects/coding/joan-volte-lineage`
