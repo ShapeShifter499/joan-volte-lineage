@@ -323,8 +323,10 @@ static int media_from_sip(const char *msg)
         return -1;
     }
     int pt = m.have_pcmu ? 0 : m.pt;
+    klog(LOG_INFO, "sdp media port=%d mux=%d rtcp=%d",
+         m.port, m.have_rtcp_mux, m.rtcp_port);
     return rtp_start(g_cfg->id.local_ip, g_cfg->id.iface,
-                     40000, m.ip, m.port, pt, m.have_rtcp_mux);
+                     40000, m.ip, m.port, pt, m.have_rtcp_mux, m.rtcp_port);
 }
 
 static int sip_sendto(int s, int dport, const char *pkt, size_t len);
@@ -1031,13 +1033,19 @@ void ua_media_tick(void)
 
 static void inbound_send(const char *pkt, size_t len)
 {
-    if (g_reply_fd < 0)
+    if (g_reply_fd < 0) {
+        klog(LOG_WARN, "inbound_send no reply fd");
         return;
+    }
+    ssize_t w;
     if (g_reply_tcp)
-        send(g_reply_fd, pkt, len, MSG_NOSIGNAL);
+        w = send(g_reply_fd, pkt, len, MSG_NOSIGNAL);
     else
-        sendto(g_reply_fd, pkt, len, 0,
-               (const struct sockaddr *)&g_reply_peer, g_reply_plen);
+        w = sendto(g_reply_fd, pkt, len, 0,
+                   (const struct sockaddr *)&g_reply_peer, g_reply_plen);
+    if (w < 0 || (size_t)w != len)
+        klog(LOG_WARN, "inbound_send w=%zd len=%zu errno=%d tcp=%d",
+             w, len, errno, g_reply_tcp);
 }
 
 static void handle_sip_request(char *rx, size_t r)
@@ -1091,9 +1099,15 @@ static void handle_sip_request(char *rx, size_t r)
 
     if (!strcasecmp(method, "BYE")) {
         klog(LOG_INFO, "inbound BYE");
-        rtp_stop();
         n = build_response(resp, sizeof(resp), rx, 200, "OK", &id, NULL, NULL);
-        if (n > 0) inbound_send(resp, (size_t)n);
+        if (n > 0) {
+            inbound_send(resp, (size_t)n);
+            klog(LOG_INFO, "BYE 200 sent %d B fd=%d tcp=%d",
+                 n, g_reply_fd, g_reply_tcp);
+        } else {
+            klog(LOG_WARN, "BYE 200 build failed");
+        }
+        rtp_stop();
         g_call.active = 0;
         return;
     }

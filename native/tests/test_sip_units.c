@@ -266,6 +266,18 @@ static void test_sdp_and_tcp_frame(void)
     CHECK(m.pt == 0, "sdp parse pt 0");
     CHECK(m.have_rtcp_mux == 1, "sdp parse rtcp-mux");
 
+    static const char sdp_rtcp[] =
+        "v=0\r\n"
+        "c=IN IP6 2001:db8::9\r\n"
+        "m=audio 22900 RTP/AVP 0\r\n"
+        "a=rtpmap:0 PCMU/8000\r\n"
+        "a=rtcp:23000\r\n";
+    sdp_media_t m2;
+    CHECK(sdp_parse_media(sdp_rtcp, &m2) == 0, "sdp parse a=rtcp body");
+    CHECK(m2.have_rtcp_mux == 0, "sdp parse no mux");
+    CHECK(m2.rtcp_port == 23000, "sdp parse a=rtcp port");
+    CHECK(m2.port == 22900, "sdp parse rtp port with a=rtcp");
+
     char ans[512];
     int n = sdp_answer(ans, sizeof(ans), "2001:db8::2", 40000, sdp);
     CHECK(n > 40, "sdp answer size");

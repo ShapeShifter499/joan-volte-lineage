@@ -5,9 +5,11 @@
  * live voicemail this way. AMR is advertised in SDP but not implemented
  * here; rtp_start() refuses a session whose payload type is not PCMU.
  *
- * RTCP SR+SDES is sent as the media-plane keepalive (RFC 3550 / RFC 4028
- * §1). A Dialer MO that sent RTP but no RTCP froze downlink at ~16s and
- * then the far end BYE'd.
+ * RTCP SR+RR+SDES follows RFC 3550 §6.1 (compound) / §6.4.1 / §6.5.
+ * Same compound AOSP ImsMedia builds (RtpSession::formSrList,
+ * krazey/ImsMedia a8f065b). That C++ encoder is not imported; PJSIP's
+ * pjmedia_rtcp_build_rtcp is GPL-2.0 and is not copied. Mux is SDP-only
+ * (RFC 5761). a=rtcp: (RFC 3605) sets the non-mux destination port.
  */
 #ifndef JOAN_IMS_RTP_H
 #define JOAN_IMS_RTP_H
@@ -17,7 +19,7 @@
 int rtp_start(const char *local_ip, const char *iface,
               int local_port,
               const char *remote_ip, int remote_port,
-              int pt, int rtcp_mux);
+              int pt, int rtcp_mux, int remote_rtcp_port);
 
 void rtp_stop(void);
 int rtp_active(void);

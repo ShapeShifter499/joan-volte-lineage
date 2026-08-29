@@ -895,6 +895,10 @@ int sdp_parse_media(const char *msg, sdp_media_t *out)
                 out->pt = rpt;
         } else if (n >= 10 && !strncmp(p, "a=rtcp-mux", 10)) {
             out->have_rtcp_mux = 1;
+        } else if (n >= 7 && !strncmp(p, "a=rtcp:", 7)) {
+            int rp = atoi(p + 7);
+            if (rp > 0)
+                out->rtcp_port = rp;
         }
         if (!eol)
             break;

@@ -118,6 +118,7 @@ typedef struct {
     int pt;          /* first payload type on m=audio */
     int have_pcmu;   /* 1 if PT 0 or an rtpmap names PCMU */
     int have_rtcp_mux;
+    int rtcp_port;   /* RFC 3605 a=rtcp:; 0 => RTP+1 */
 } sdp_media_t;
 
 /* Parse c=/m=audio from a SIP message (headers + body) or a bare SDP

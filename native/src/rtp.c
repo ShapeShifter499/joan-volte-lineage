@@ -23,6 +23,9 @@ static int g_rtcp_fd = -1;
 static int g_active;
 static int g_pt;
 static int g_rtcp_mux;
+static uint16_t g_rtcp_remote_port;
+static uint32_t g_lsr;
+static long g_lsr_at_ms;
 static uint16_t g_seq;
 static uint32_t g_ts;
 static uint32_t g_ssrc;
@@ -180,6 +183,12 @@ static void put32(unsigned char *p, uint32_t v)
     p[3] = (unsigned char)v;
 }
 
+static uint32_t get32(const unsigned char *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | p[3];
+}
+
 static int is_rtcp(const unsigned char *buf, ssize_t r)
 {
     /* RTP PT is 0..127 in the low 7 bits of byte 1. RTCP PT is the
@@ -193,22 +202,28 @@ static void rtcp_dest(struct sockaddr_storage *ss, socklen_t *len)
     *len = g_dlen;
     if (g_rtcp_mux)
         return;
-    if (ss->ss_family == AF_INET6) {
-        struct sockaddr_in6 *a = (struct sockaddr_in6 *)ss;
-        a->sin6_port = htons((uint16_t)(ntohs(a->sin6_port) + 1));
-    } else if (ss->ss_family == AF_INET) {
-        struct sockaddr_in *a = (struct sockaddr_in *)ss;
-        a->sin_port = htons((uint16_t)(ntohs(a->sin_port) + 1));
+    uint16_t port = g_rtcp_remote_port;
+    if (!port) {
+        if (ss->ss_family == AF_INET6)
+            port = (uint16_t)(ntohs(((struct sockaddr_in6 *)ss)->sin6_port) + 1);
+        else
+            port = (uint16_t)(ntohs(((struct sockaddr_in *)ss)->sin_port) + 1);
     }
+    if (ss->ss_family == AF_INET6)
+        ((struct sockaddr_in6 *)ss)->sin6_port = htons(port);
+    else if (ss->ss_family == AF_INET)
+        ((struct sockaddr_in *)ss)->sin_port = htons(port);
 }
 
-/* Compound RTCP as used by PJSIP pjmedia (pjmedia_rtcp_build_rtcp +
- * send_rtcp with_sdes): SR with one RR block, then SDES CNAME.
- * PJMEDIA_RTCP_INTERVAL is 5000 ms. RFC 3550 §6.1: a compound packet
- * MUST include a report (SR/RR) and an SDES CNAME. RFC 5761: mux only
- * when the SDP answer carried a=rtcp-mux — never because a stray
- * packet arrived on the RTP socket. RFC 4028 §1: RTCP is the audio
- * liveness signal. */
+/* rtp.c — PCMU RTP plus compound RTCP.
+ *
+ * Compound layout is RFC 3550 §6.1 / §6.4.1 (SR) + §6.5 (SDES CNAME),
+ * the same SR+RR+SDES AOSP ImsMedia builds in RtpSession::formSrList
+ * and populateSdes (packages/modules/ImsMedia, Android 17; krazey/ImsMedia
+ * a8f065b). That encoder is C++ (RtcpSrPacket.cpp and friends) and is
+ * not byte-identical to this C, so the file is not imported. PJSIP
+ * pjmedia_rtcp_build_rtcp is GPL-2.0 and is not copied.
+ */
 static void rtp_send_rtcp(void)
 {
     if (g_fd < 0)
@@ -241,8 +256,16 @@ static void rtp_send_rtcp(void)
         pkt[33] = pkt[34] = pkt[35] = 0; /* cumul lost */
         put32(pkt + 36, g_remote_seq); /* extended highest seq */
         put32(pkt + 40, 0); /* jitter */
-        put32(pkt + 44, 0); /* LSR */
-        put32(pkt + 48, 0); /* DLSR */
+        put32(pkt + 44, g_lsr);
+        uint32_t dlsr = 0;
+        if (g_lsr && g_lsr_at_ms) {
+            long delay = now_ms() - g_lsr_at_ms;
+            if (delay < 0)
+                delay = 0;
+            /* RFC 3550: DLSR is delay in 1/65536 s. */
+            dlsr = (uint32_t)((delay << 16) / 1000);
+        }
+        put32(pkt + 48, dlsr);
     }
 
     unsigned char *sdes = pkt + sr_bytes;
@@ -280,7 +303,7 @@ static void rtp_send_rtcp(void)
 int rtp_start(const char *local_ip, const char *iface,
               int local_port,
               const char *remote_ip, int remote_port,
-              int pt, int rtcp_mux)
+              int pt, int rtcp_mux, int remote_rtcp_port)
 {
     rtp_stop();
     if (!local_ip || !remote_ip || remote_port <= 0)
@@ -316,6 +339,9 @@ int rtp_start(const char *local_ip, const char *iface,
 
     g_fd = s;
     g_rtcp_mux = rtcp_mux ? 1 : 0;
+    g_rtcp_remote_port = (uint16_t)(remote_rtcp_port > 0 ? remote_rtcp_port : 0);
+    g_lsr = 0;
+    g_lsr_at_ms = 0;
     g_rtcp_fd = udp_bind(local_ip, iface, local_port + 1);
     if (g_rtcp_fd < 0)
         klog(LOG_WARN, "rtcp bind %d failed; mux=%d", local_port + 1, g_rtcp_mux);
@@ -339,8 +365,10 @@ int rtp_start(const char *local_ip, const char *iface,
     if (g_media_fd >= 0)
         close(g_media_fd);
     g_media_fd = media_bind();
-    klog(LOG_INFO, "rtp start PCMU %d -> %d mux=%d", local_port, remote_port,
-         g_rtcp_mux);
+    klog(LOG_INFO, "rtp start PCMU %d -> %d mux=%d rtcp=%d",
+         local_port, remote_port, g_rtcp_mux,
+         g_rtcp_mux ? remote_port : (g_rtcp_remote_port ? g_rtcp_remote_port
+                                                       : remote_port + 1));
     return 0;
 }
 
@@ -423,15 +451,27 @@ static void rtp_send_one(void)
     }
 }
 
+static void rtcp_take(const unsigned char *buf, ssize_t r)
+{
+    /* RFC 3550 §6.4.1: LSR is the middle 32 bits of the last SR NTP. */
+    if (!is_rtcp(buf, r) || buf[1] != 200 || r < 28)
+        return;
+    uint32_t ntp_sec = get32(buf + 8);
+    uint32_t ntp_frac = get32(buf + 12);
+    g_lsr = (ntp_sec << 16) | (ntp_frac >> 16);
+    g_lsr_at_ms = now_ms();
+}
+
 static void rtp_take(const unsigned char *buf, ssize_t r)
 {
     if (r <= 0)
         return;
     /* RFC 5761 §4: RTCP PT is 200-204. Do not decode as PCMU.
-     * Mux is SDP-only (RFC 5761 §5.1.3) — PJSIP/Asterisk set
-     * remote_rtcp_mux from a=rtcp-mux, never from a stray packet. */
-    if (is_rtcp(buf, r))
+     * Mux is SDP-only (RFC 5761 §5.1.3) — never from a stray packet. */
+    if (is_rtcp(buf, r)) {
+        rtcp_take(buf, r);
         return;
+    }
     if (r < RTP_HDR || (buf[0] & 0xc0) != 0x80)
         return;
     g_recv++;
@@ -466,7 +506,7 @@ static void rtp_drain(void)
             ssize_t r = recv(g_rtcp_fd, buf, sizeof(buf), 0);
             if (r <= 0)
                 break;
-            /* Inbound RR/SR: we don't need the numbers, just drain. */
+            rtcp_take(buf, r);
         }
     }
 }
