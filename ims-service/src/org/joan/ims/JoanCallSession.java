@@ -299,7 +299,7 @@ public class JoanCallSession extends ImsCallSessionImplBase {
     private void startMedia() {
         JoanMedia.startRtp(app, JoanSipUa.network(), JoanSipUa.localAddr(),
                 JoanSipUa.mediaIp(), JoanSipUa.mediaPort(),
-                JoanSipUa.mediaMux());
+                JoanSipUa.mediaRtcpPort(), JoanSipUa.mediaMux());
     }
 
     private void failStart(String why) {

@@ -44,6 +44,7 @@ final class JoanMedia {
     private static final int RTP_HDR = 12;
     private static volatile InetAddress sDest;
     private static volatile int sDestPort;
+    private static volatile int sRtcpPort;
     private static volatile boolean sMux;
     private static volatile int sSeq;
     private static volatile int sTs;
@@ -56,11 +57,13 @@ final class JoanMedia {
     private JoanMedia() {}
 
     static void startRtp(Context ctx, Network net, InetAddress local,
-                         InetAddress dest, int destPort, boolean mux) {
+                         InetAddress dest, int destPort, int rtcpPort,
+                         boolean mux) {
         stop();
         Context app = ctx.getApplicationContext();
         sDest = dest;
         sDestPort = destPort;
+        sRtcpPort = rtcpPort > 0 ? rtcpPort : destPort + 1;
         sMux = mux;
         sSeq = new SecureRandom().nextInt() & 0xffff;
         sTs = new SecureRandom().nextInt();
@@ -84,7 +87,8 @@ final class JoanMedia {
         sPlay = new Thread(() -> playback(app), "joan-ims-play");
         sCap.start();
         sPlay.start();
-        JoanTrace.note("media start rtp mux=" + mux);
+        JoanTrace.note("media start rtp mux=" + mux
+                + " rtcp_port=" + (sMux ? sDestPort : sRtcpPort));
     }
 
     static void stop() {
@@ -415,10 +419,15 @@ final class JoanMedia {
             pkt[37] = 8;
             byte[] cname = "joan.ims".getBytes("US-ASCII");
             System.arraycopy(cname, 0, pkt, 38, 8);
-            sock.send(new DatagramPacket(pkt, pkt.length, dest, rtpPort));
-            if (!sMux) {
-                sock.send(new DatagramPacket(pkt, pkt.length, dest, rtpPort + 1));
-            }
+            /* RFC 5761: RTCP shares the RTP port only when rtcp-mux was
+             * negotiated. Otherwise it goes to the port the peer named in
+             * a=rtcp:, which parseSdp has always parsed and nothing ever
+             * used. Sending to the RTP port unconditionally -- a bring-up
+             * probe from when the answer looked silent -- put an SR+SDES
+             * into the peer's audio stream every five seconds on every
+             * non-muxed call, which is every call this handset makes. */
+            int port = sMux ? rtpPort : sRtcpPort;
+            sock.send(new DatagramPacket(pkt, pkt.length, dest, port));
             sRtcpNext = now + 5000;
         } catch (Exception ignored) {
             sRtcpNext = System.currentTimeMillis() + 5000;

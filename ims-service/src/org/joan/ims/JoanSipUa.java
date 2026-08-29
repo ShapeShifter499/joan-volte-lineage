@@ -62,6 +62,7 @@ final class JoanSipUa {
     private static volatile String sOurToTag;
     private static volatile InetAddress sMediaIp;
     private static volatile int sMediaPort;
+    private static volatile int sMediaRtcpPort;
     private static volatile boolean sMediaMux;
 
     private JoanSipUa() {}
@@ -110,6 +111,11 @@ final class JoanSipUa {
 
     static int mediaPort() {
         return sMediaPort;
+    }
+
+    /** The peer's RTCP port from its a=rtcp:, or the RTP port + 1. */
+    static int mediaRtcpPort() {
+        return sMediaRtcpPort > 0 ? sMediaRtcpPort : sMediaPort + 1;
     }
 
     static boolean mediaMux() {
@@ -272,6 +278,7 @@ final class JoanSipUa {
                         try {
                             sMediaIp = InetAddress.getByName(media.ip);
                             sMediaPort = media.port;
+                            sMediaRtcpPort = media.rtcpPort;
                             sMediaMux = media.mux;
                         } catch (Exception e) {
                             sMediaIp = null;
@@ -379,6 +386,7 @@ final class JoanSipUa {
                 try {
                     sMediaIp = InetAddress.getByName(media.ip);
                     sMediaPort = media.port;
+                    sMediaRtcpPort = media.rtcpPort;
                     sMediaMux = media.mux;
                 } catch (Exception ignored) {
                     sMediaIp = null;
