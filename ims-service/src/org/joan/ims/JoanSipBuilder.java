@@ -8,6 +8,10 @@ import java.security.SecureRandom;
  * IMPI).
  */
 final class JoanSipBuilder {
+    /* One RNG. Constructing a SecureRandom per message seeds it afresh,
+     * and inDialog() runs for every ACK, BYE and PRACK. It is thread-safe. */
+    private static final SecureRandom RNG = new SecureRandom();
+
     static final int REG1_PORT = 15060;
 
     /**
@@ -173,7 +177,7 @@ final class JoanSipBuilder {
     static String buildRegister(Id id, Txn txn, int cseq,
                                 Challenge ch, byte[] res,
                                 byte[] ck, byte[] ik, String pani) {
-        txn.newBranch(new SecureRandom());
+        txn.newBranch(RNG);
         String publicId = id.impu;
         String aor;
         if (publicId.startsWith("tel:") || publicId.startsWith("sip:")) {
@@ -629,7 +633,7 @@ final class JoanSipBuilder {
         }
         String aor = aorOf(id.impu);
         String host = bracket(id.localIp);
-        SecureRandom rng = new SecureRandom();
+        SecureRandom rng = RNG;
         dlg.branch = String.format("z9hG4bK%08x%08x", rng.nextInt(), rng.nextInt());
         dlg.callId = String.format("%08x-%04x-%04x-%04x-%06x%04x",
                 rng.nextInt(), rng.nextInt() & 0xffff, rng.nextInt() & 0xffff,
@@ -812,7 +816,7 @@ final class JoanSipBuilder {
         String aor = aorOf(id.impu != null && !id.impu.isEmpty()
                 ? id.impu : id.impi);
         String host = bracket(id.localIp);
-        SecureRandom rng = new SecureRandom();
+        SecureRandom rng = RNG;
         String branch = String.format("z9hG4bK%08x%08x", rng.nextInt(), rng.nextInt());
         StringBuilder a = new StringBuilder(1200);
         a.append(method).append(' ').append(target).append(" SIP/2.0\r\n");
