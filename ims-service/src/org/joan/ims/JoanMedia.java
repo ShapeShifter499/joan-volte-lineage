@@ -67,6 +67,7 @@ final class JoanMedia {
     private static void loop(Context app) {
         AudioRecord rec = null;
         AudioTrack trk = null;
+        AudioTrack music = null;
         DatagramSocket sock = null;
         try {
             int minIn = AudioRecord.getMinBufferSize(SAMPLE_HZ,
@@ -92,6 +93,10 @@ final class JoanMedia {
                     if (max > 0) {
                         am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, max, 0);
                     }
+                    int maxm = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                    if (maxm > 0) {
+                        am.setStreamVolume(AudioManager.STREAM_MUSIC, maxm, 0);
+                    }
                 } catch (Throwable t) {
                     JoanTrace.note("media mode " + t.getClass().getSimpleName());
                 }
@@ -103,6 +108,12 @@ final class JoanMedia {
             }
             trk.setVolume(1.0f);
             trk.play();
+            music = openMusicTrack(outBuf);
+            if (music != null) {
+                music.setVolume(1.0f);
+                music.play();
+                JoanTrace.note("media music track on");
+            }
             JoanTrace.note("media rolling src=" + rec.getAudioSource());
 
             sock = new DatagramSocket();
@@ -133,10 +144,18 @@ final class JoanMedia {
                     for (int i = 0; i < m; i++) {
                         pcm[i] = ulawToLinear(down[i]);
                     }
-                    trk.write(pcm, 0, m);
+                    int wr = trk.write(pcm, 0, m);
+                    if (music != null) {
+                        music.write(pcm, 0, m);
+                    }
                     dl++;
                     if (dl == 1 || (dl % 50) == 0) {
-                        JoanTrace.note("media dl frames=" + dl);
+                        JoanTrace.note("media dl frames=" + dl + " write=" + wr);
+                        if (am != null) {
+                            try {
+                                am.setMode(AudioManager.MODE_IN_COMMUNICATION);
+                            } catch (Throwable ignored) {}
+                        }
                     }
                 } catch (java.net.SocketTimeoutException ignored) {
                     // no downlink this ptime
@@ -150,6 +169,7 @@ final class JoanMedia {
         } finally {
             try { if (rec != null) rec.release(); } catch (Throwable ignored) {}
             try { if (trk != null) trk.release(); } catch (Throwable ignored) {}
+            try { if (music != null) music.release(); } catch (Throwable ignored) {}
             try { if (sock != null) sock.close(); } catch (Throwable ignored) {}
         }
     }
@@ -223,6 +243,21 @@ final class JoanMedia {
             JoanTrace.note("media earpiece " + t.getClass().getSimpleName());
         }
         return trk;
+    }
+
+    private static AudioTrack openMusicTrack(int outBuf) {
+        try {
+            AudioTrack t = new AudioTrack(AudioManager.STREAM_MUSIC, SAMPLE_HZ,
+                    AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
+                    outBuf, AudioTrack.MODE_STREAM);
+            if (t.getState() == AudioTrack.STATE_INITIALIZED) {
+                return t;
+            }
+            t.release();
+        } catch (Throwable t) {
+            JoanTrace.note("media music " + t.getClass().getSimpleName());
+        }
+        return null;
     }
 
     private static byte linearToUlaw(short pcm) {
