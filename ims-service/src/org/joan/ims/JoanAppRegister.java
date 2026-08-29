@@ -77,27 +77,46 @@ final class JoanAppRegister {
                 id.impi, id.impu, id.realm, n.localHost,
                 JoanSipBuilder.REG1_PORT, JoanSipBuilder.REG1_PORT, id.imei);
 
-        InetAddress pcscf = n.pcscfs.get(0);
         StringBuilder sb = new StringBuilder();
         sb.append("addrs=ims pani=").append(pani)
                 .append(" pcscf_n=").append(n.pcscfs.size()).append(' ');
 
-        String reg1 = JoanSipBuilder.buildRegister(sipId, txn, 1, null, null,
-                null, null, pani);
-        byte[] reg1Bytes = reg1.getBytes(StandardCharsets.US_ASCII);
-        DatagramSocket s1 = null;
-        String r1;
-        try {
-            s1 = boundUdp(n.network, n.local, JoanSipBuilder.REG1_PORT);
-            r1 = sendRecv(s1, null, pcscf, JoanSipBuilder.PCSCF_SIP_PORT,
-                    reg1Bytes, REG1_TIMEOUT_MS);
-        } catch (Exception e) {
-            return sb + "FAIL: reg1 send " + brief(e);
-        } finally {
-            closeQuietly(s1);
+        /* Try every P-CSCF the PDN advertised, not just the first.
+         * collectPcscfs() has always carried the reason -- when the carrier
+         * drains a node, registration stays down until the radio is bounced
+         * even though the other advertised addresses answer immediately --
+         * but that list only ever fed the native daemon. This handset's PDN
+         * advertises three. Shorten the per-candidate wait when there is
+         * more than one so working through them stays bounded. */
+        int perTry = n.pcscfs.size() > 1
+                ? REG1_TIMEOUT_MS / 2 : REG1_TIMEOUT_MS;
+        InetAddress pcscf = null;
+        String r1 = null;
+        int tried = 0;
+        for (InetAddress cand : n.pcscfs) {
+            tried++;
+            /* Fresh branch per attempt: a new transaction to a new host. */
+            byte[] reg1Bytes = JoanSipBuilder
+                    .buildRegister(sipId, txn, 1, null, null, null, null, pani)
+                    .getBytes(StandardCharsets.US_ASCII);
+            DatagramSocket s1 = null;
+            try {
+                s1 = boundUdp(n.network, n.local, JoanSipBuilder.REG1_PORT);
+                r1 = sendRecv(s1, null, cand, JoanSipBuilder.PCSCF_SIP_PORT,
+                        reg1Bytes, perTry);
+            } catch (Exception e) {
+                r1 = null;
+            } finally {
+                closeQuietly(s1);
+            }
+            if (r1 != null) {
+                pcscf = cand;
+                break;
+            }
         }
-        if (r1 == null) {
-            return sb + "FAIL: reg1 timeout";
+        sb.append("pcscf_tried=").append(tried).append(' ');
+        if (r1 == null || pcscf == null) {
+            return sb + "FAIL: reg1 no answer from any of " + n.pcscfs.size();
         }
         JoanSipBuilder.Reply p1 = JoanSipBuilder.parseReply(r1);
         if (p1 == null) {
