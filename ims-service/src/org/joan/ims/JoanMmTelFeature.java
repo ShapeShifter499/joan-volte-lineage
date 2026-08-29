@@ -2,6 +2,7 @@ package org.joan.ims;
 
 import android.content.Context;
 import android.os.Bundle;
+import android.telephony.TelephonyManager;
 import android.telephony.ims.ImsCallProfile;
 import android.telephony.ims.feature.ImsFeature;
 import android.telephony.ims.feature.MmTelFeature;
@@ -230,12 +231,54 @@ public class JoanMmTelFeature extends MmTelFeature {
         }
     }
 
+    /**
+     * Telephony asks whether a dial should go over IMS or fall back to CS.
+     *
+     * Emergency numbers always fall back. This stack has no emergency
+     * registration and no urn:service:sos path, so an emergency dial placed
+     * over it would reach an S-CSCF that has no idea it is an emergency
+     * call. If the number cannot be classified at all we also fall back:
+     * losing VoLTE on a call is recoverable, guessing wrong about an
+     * emergency call is not.
+     */
     @Override
     public int shouldProcessCall(String[] numbers) {
-        if (JoanRegistration.isRegistered()) {
-            return PROCESS_CALL_IMS;
+        if (!JoanRegistration.isRegistered()) {
+            return PROCESS_CALL_CSFB;
         }
-        return PROCESS_CALL_CSFB;
+        if (anyEmergency(numbers)) {
+            JoanTrace.note("emergency dial -> CSFB");
+            return PROCESS_CALL_CSFB;
+        }
+        return PROCESS_CALL_IMS;
+    }
+
+    private boolean anyEmergency(String[] numbers) {
+        if (numbers == null || numbers.length == 0) {
+            return false;
+        }
+        TelephonyManager tm = app.getSystemService(TelephonyManager.class);
+        if (tm == null) {
+            return true;
+        }
+        for (String n : numbers) {
+            if (n == null || n.isEmpty()) {
+                continue;
+            }
+            try {
+                if (tm.isEmergencyNumber(n)) {
+                    return true;
+                }
+            } catch (Throwable t) {
+                /* Cannot classify: treat as emergency and use CS. */
+                Log.w(TAG, "isEmergencyNumber unavailable "
+                        + t.getClass().getSimpleName());
+                JoanTrace.note("emergency check failed "
+                        + t.getClass().getSimpleName());
+                return true;
+            }
+        }
+        return false;
     }
 
     private void markReady() {
