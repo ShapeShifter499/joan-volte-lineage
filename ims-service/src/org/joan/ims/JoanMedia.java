@@ -13,14 +13,19 @@ import android.util.Log;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.SocketTimeoutException;
 
 /**
  * 8 kHz PCMU between AudioFlinger and the native RTP UA.
  *
- * IMS calls put Telecom in MODE_IN_CALL, which owns the telephony
- * audio HAL. CAF never opens AudioRecord because the modem has the
- * path. We are AP SIP, so we inject on STREAM_VOICE_CALL / MIC
- * (VOICE_COMMUNICATION races Telecom and threw IllegalStateException).
+ * Capture and playback run on separate threads: a single loop that
+ * blocked on mic read then UDP receive sent uplink every ~40 ms
+ * (choppy on the far end).
+ *
+ * Telecom MODE_IN_CALL ducks STREAM_VOICE_CALL and
+ * USAGE_VOICE_COMMUNICATION, so write() can return 160 with no
+ * audible output. STREAM_MUSIC + speakerphone is the diagnostic
+ * path that can actually be heard during an IMS call.
  */
 final class JoanMedia {
     private static final String TAG = "JoanIms";
@@ -36,141 +41,162 @@ final class JoanMedia {
     };
 
     private static volatile boolean sRun;
-    private static Thread sThread;
+    private static Thread sCap;
+    private static Thread sPlay;
+    private static DatagramSocket sSock;
 
     private JoanMedia() {}
 
     static void start(Context ctx) {
         stop();
         Context app = ctx.getApplicationContext();
+        try {
+            sSock = new DatagramSocket();
+            sSock.setSoTimeout(40);
+        } catch (Exception e) {
+            JoanTrace.note("media sock " + e.getClass().getSimpleName());
+            return;
+        }
         sRun = true;
-        sThread = new Thread(() -> loop(app), "joan-ims-media");
-        sThread.start();
-        JoanTrace.note("media start");
+        sCap = new Thread(() -> capture(app), "joan-ims-cap");
+        sPlay = new Thread(() -> playback(app), "joan-ims-play");
+        sCap.start();
+        sPlay.start();
+        JoanTrace.note("media start split");
     }
 
     static void stop() {
         sRun = false;
-        Thread t = sThread;
-        sThread = null;
-        if (t != null) {
+        Thread[] ts = { sCap, sPlay };
+        sCap = null;
+        sPlay = null;
+        DatagramSocket sock = sSock;
+        sSock = null;
+        if (sock != null) {
+            sock.close();
+        }
+        for (Thread t : ts) {
+            if (t == null) {
+                continue;
+            }
             t.interrupt();
             try {
-                t.join(500);
-            } catch (InterruptedException ignored) {
+                t.join(400);
+            } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
         }
         JoanTrace.note("media stop");
     }
 
-    private static void loop(Context app) {
+    private static void capture(Context app) {
         AudioRecord rec = null;
-        AudioTrack trk = null;
-        AudioTrack music = null;
-        DatagramSocket sock = null;
         try {
             int minIn = AudioRecord.getMinBufferSize(SAMPLE_HZ,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-            int minOut = AudioTrack.getMinBufferSize(SAMPLE_HZ,
-                    AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
-            int inBuf = Math.max(minIn, PTIME_SAMPLES * 8);
-            int outBuf = Math.max(minOut, PTIME_SAMPLES * 8);
-
-            rec = openRecord(inBuf);
+            rec = openRecord(Math.max(minIn, PTIME_SAMPLES * 8));
             if (rec == null) {
                 JoanTrace.note("media no AudioRecord");
                 return;
             }
             rec.startRecording();
+            DatagramSocket sock = sSock;
+            if (sock == null) {
+                return;
+            }
+            InetAddress loop = InetAddress.getByName("127.0.0.1");
+            short[] pcm = new short[PTIME_SAMPLES];
+            byte[] ulaw = new byte[PTIME_SAMPLES];
+            DatagramPacket out = new DatagramPacket(ulaw, ulaw.length, loop, NATIVE_PORT);
+            JoanTrace.note("media cap rolling src=" + rec.getAudioSource());
+            while (sRun) {
+                int n = rec.read(pcm, 0, PTIME_SAMPLES);
+                if (n <= 0) {
+                    continue;
+                }
+                int m = Math.min(n, PTIME_SAMPLES);
+                for (int i = 0; i < m; i++) {
+                    ulaw[i] = linearToUlaw(pcm[i]);
+                }
+                out.setLength(m);
+                sock.send(out);
+            }
+        } catch (Throwable t) {
+            JoanTrace.note("media cap fail " + t.getClass().getSimpleName());
+            Log.w(TAG, "media cap", t);
+        } finally {
+            try { if (rec != null) rec.release(); } catch (Throwable ignored) {}
+        }
+    }
 
+    private static void playback(Context app) {
+        AudioTrack trk = null;
+        try {
             AudioManager am = app.getSystemService(AudioManager.class);
             if (am != null) {
-                try {
-                    am.setMode(AudioManager.MODE_IN_COMMUNICATION);
-                    am.setSpeakerphoneOn(false);
-                    int max = am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL);
-                    if (max > 0) {
-                        am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, max, 0);
-                    }
-                    int maxm = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-                    if (maxm > 0) {
-                        am.setStreamVolume(AudioManager.STREAM_MUSIC, maxm, 0);
-                    }
-                } catch (Throwable t) {
-                    JoanTrace.note("media mode " + t.getClass().getSimpleName());
+                am.setMode(AudioManager.MODE_NORMAL);
+                am.setSpeakerphoneOn(true);
+                int maxm = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                if (maxm > 0) {
+                    am.setStreamVolume(AudioManager.STREAM_MUSIC, maxm, 0);
                 }
             }
-            trk = openTrack(app, outBuf);
+            int minOut = AudioTrack.getMinBufferSize(SAMPLE_HZ,
+                    AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+            int outBuf = Math.max(minOut, PTIME_SAMPLES * 16);
+            trk = openMusicTrack(outBuf);
             if (trk == null) {
-                JoanTrace.note("media no AudioTrack");
+                JoanTrace.note("media no music track");
                 return;
             }
             trk.setVolume(1.0f);
             trk.play();
-            music = openMusicTrack(outBuf);
-            if (music != null) {
-                music.setVolume(1.0f);
-                music.play();
-                JoanTrace.note("media music track on");
+            DatagramSocket sock = sSock;
+            if (sock == null) {
+                return;
             }
-            JoanTrace.note("media rolling src=" + rec.getAudioSource());
-
-            sock = new DatagramSocket();
-            sock.setSoTimeout(20);
             InetAddress loop = InetAddress.getByName("127.0.0.1");
-            short[] pcm = new short[PTIME_SAMPLES];
-            byte[] ulaw = new byte[PTIME_SAMPLES];
+            byte[] prime = new byte[PTIME_SAMPLES];
+            sock.send(new DatagramPacket(prime, prime.length, loop, NATIVE_PORT));
             byte[] down = new byte[512];
-            DatagramPacket out = new DatagramPacket(ulaw, ulaw.length, loop, NATIVE_PORT);
+            short[] pcm = new short[PTIME_SAMPLES];
             DatagramPacket in = new DatagramPacket(down, down.length);
             int dl = 0;
+            JoanTrace.note("media play rolling speaker");
             while (sRun) {
-                int n = rec.read(pcm, 0, PTIME_SAMPLES);
-                if (n > 0) {
-                    int m = Math.min(n, PTIME_SAMPLES);
-                    for (int i = 0; i < m; i++) {
-                        ulaw[i] = linearToUlaw(pcm[i]);
-                    }
-                    out.setLength(m);
-                    sock.send(out);
-                }
                 try {
                     sock.receive(in);
-                    int m = in.getLength();
-                    if (m > PTIME_SAMPLES) {
-                        m = PTIME_SAMPLES;
+                } catch (SocketTimeoutException e) {
+                    continue;
+                }
+                int m = in.getLength();
+                if (m > PTIME_SAMPLES) {
+                    m = PTIME_SAMPLES;
+                }
+                if (m <= 0) {
+                    continue;
+                }
+                for (int i = 0; i < m; i++) {
+                    pcm[i] = ulawToLinear(down[i]);
+                }
+                int wr = trk.write(pcm, 0, m);
+                dl++;
+                if (dl == 1 || (dl % 50) == 0) {
+                    JoanTrace.note("media dl frames=" + dl + " write=" + wr
+                            + " mode=" + (am == null ? -1 : am.getMode()));
+                    if (am != null) {
+                        try {
+                            am.setMode(AudioManager.MODE_NORMAL);
+                            am.setSpeakerphoneOn(true);
+                        } catch (Throwable ignored) {}
                     }
-                    for (int i = 0; i < m; i++) {
-                        pcm[i] = ulawToLinear(down[i]);
-                    }
-                    int wr = trk.write(pcm, 0, m);
-                    if (music != null) {
-                        music.write(pcm, 0, m);
-                    }
-                    dl++;
-                    if (dl == 1 || (dl % 50) == 0) {
-                        JoanTrace.note("media dl frames=" + dl + " write=" + wr);
-                        if (am != null) {
-                            try {
-                                am.setMode(AudioManager.MODE_IN_COMMUNICATION);
-                            } catch (Throwable ignored) {}
-                        }
-                    }
-                } catch (java.net.SocketTimeoutException ignored) {
-                    // no downlink this ptime
                 }
             }
         } catch (Throwable t) {
-            String msg = t.getMessage();
-            JoanTrace.note("media fail " + t.getClass().getSimpleName()
-                    + (msg == null ? "" : (":" + msg)));
-            Log.w(TAG, "media loop", t);
+            JoanTrace.note("media play fail " + t.getClass().getSimpleName());
+            Log.w(TAG, "media play", t);
         } finally {
-            try { if (rec != null) rec.release(); } catch (Throwable ignored) {}
             try { if (trk != null) trk.release(); } catch (Throwable ignored) {}
-            try { if (music != null) music.release(); } catch (Throwable ignored) {}
-            try { if (sock != null) sock.close(); } catch (Throwable ignored) {}
         }
     }
 
@@ -196,13 +222,12 @@ final class JoanMedia {
         return null;
     }
 
-    private static AudioTrack openTrack(Context app, int outBuf) {
-        AudioTrack trk = null;
+    private static AudioTrack openMusicTrack(int outBuf) {
         try {
-            trk = new AudioTrack.Builder()
+            AudioTrack t = new AudioTrack.Builder()
                     .setAudioAttributes(new AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                             .build())
                     .setAudioFormat(new AudioFormat.Builder()
                             .setSampleRate(SAMPLE_HZ)
@@ -212,40 +237,13 @@ final class JoanMedia {
                     .setBufferSizeInBytes(outBuf)
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .build();
-        } catch (Throwable t) {
-            JoanTrace.note("media track builder " + t.getClass().getSimpleName());
-        }
-        if (trk == null || trk.getState() != AudioTrack.STATE_INITIALIZED) {
-            if (trk != null) {
-                try { trk.release(); } catch (Throwable ignored) {}
+            if (t.getState() == AudioTrack.STATE_INITIALIZED) {
+                return t;
             }
-            trk = new AudioTrack(AudioManager.STREAM_VOICE_CALL, SAMPLE_HZ,
-                    AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                    outBuf, AudioTrack.MODE_STREAM);
-        }
-        if (trk.getState() != AudioTrack.STATE_INITIALIZED) {
-            try { trk.release(); } catch (Throwable ignored) {}
-            return null;
-        }
-        try {
-            AudioManager am = app.getSystemService(AudioManager.class);
-            if (am != null) {
-                for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
-                    if (d.getType() == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE) {
-                        am.setCommunicationDevice(d);
-                        trk.setPreferredDevice(d);
-                        JoanTrace.note("media earpiece device");
-                        break;
-                    }
-                }
-            }
+            t.release();
         } catch (Throwable t) {
-            JoanTrace.note("media earpiece " + t.getClass().getSimpleName());
+            JoanTrace.note("media music " + t.getClass().getSimpleName());
         }
-        return trk;
-    }
-
-    private static AudioTrack openMusicTrack(int outBuf) {
         try {
             AudioTrack t = new AudioTrack(AudioManager.STREAM_MUSIC, SAMPLE_HZ,
                     AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
@@ -254,9 +252,7 @@ final class JoanMedia {
                 return t;
             }
             t.release();
-        } catch (Throwable t) {
-            JoanTrace.note("media music " + t.getClass().getSimpleName());
-        }
+        } catch (Throwable ignored) {}
         return null;
     }
 

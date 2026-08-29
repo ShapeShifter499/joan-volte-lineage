@@ -266,7 +266,7 @@ static void rtp_send_one(void)
     pkt[10] = (unsigned char)(g_ssrc >> 8);
     pkt[11] = (unsigned char)g_ssrc;
     media_drain_uplink();
-    if (g_have_uplink)
+    if (g_have_uplink || g_uplink[80])
         memcpy(pkt + RTP_HDR, g_uplink, PCMU_SAMPLES);
     else
         for (int i = 0; i < PCMU_SAMPLES; i++)
