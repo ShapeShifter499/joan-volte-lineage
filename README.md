@@ -219,7 +219,43 @@ Known defects:
 - The loopback ctl listener is still the only route the IMS app can use
   on a sideloaded zip (see [Control channel](#control-channel)) and is
   unauthenticated. An in-tree Lineage build compiles it out; see
-  `upstream/README.md` and `joan-ims.mk`.
+  `upstream/README.md` and `joan-ims.mk`. **It is slated for removal
+  along with the daemon itself** -- see below.
+
+## Planned: remove the daemon and the loopback listener
+
+Decided direction: once the app can do everything itself, the native daemon
+and the unauthenticated `127.0.0.1:15090` listener both go, entirely.
+
+The daemon exists on a single premise -- that a Java `ImsService` cannot
+program the kernel IPsec SAs that 3GPP sec-agree needs, because app domains
+are blocked from xfrm netlink by a platform `neverallow`. That is true only
+of *raw xfrm netlink*. `android.net.IpSecManager` / `IpSecTransform` are
+public framework APIs for transport-mode IPsec on a socket, and
+`allocateSecurityParameterIndex(address, requestedSpi)` takes a requested
+SPI -- exactly what sec-agree needs, since the UE chooses spi-c and spi-s.
+A privileged app can use them with no special SELinux policy.
+
+If the SIP UA moves into the app there is no daemon, so there is no IPC, so
+there is nothing to authenticate. The listener is not replaced by a better
+channel; it stops existing. `sepolicy/joan_ims.te` goes with it.
+
+**Order matters, and this is not negotiable.** A previous attempt on this
+project removed an ugly-but-load-bearing TCP control listener after
+positive-controlling its replacement *as root*. The app runs under a
+different uid and a different SELinux domain, and it could not reach the
+daemon at all once the listener was gone.
+
+So:
+
+1. Prove `IpSecTransform` can carry sec-agree ESP on joan against a live
+   carrier -- registration reaching 200 OK through the app alone.
+2. Move the SIP UA into the app and prove MO, MT and audio on it.
+3. Only then delete the daemon, `ctl.c`, the listener and the sepolicy.
+
+Every step of the proof must run **as the app**, in the app's own uid and
+SELinux domain. A check that passes as root proves nothing about whether
+the shipping configuration works.
 
 ## Planned: VoWiFi (Wi-Fi Calling)
 
