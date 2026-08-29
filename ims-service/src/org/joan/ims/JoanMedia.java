@@ -77,7 +77,10 @@ final class JoanMedia {
                 net.bindSocket(sSock);
             }
             sSock.bind(new InetSocketAddress(local, JoanSipUa.RTP_PORT));
-            sSock.setSoTimeout(40);
+            /* Only needs to be short enough to notice sRun going false,
+             * and stop() closes the socket which unblocks receive anyway.
+             * 40 ms was 25 pointless wakeups a second on the audio thread. */
+            sSock.setSoTimeout(500);
         } catch (Exception e) {
             JoanTrace.note("media sock " + e.getClass().getSimpleName());
             return;
@@ -166,6 +169,7 @@ final class JoanMedia {
             byte[] rtp = new byte[RTP_HDR + PTIME_SAMPLES];
             DatagramPacket out = new DatagramPacket(
                     rtp, rtp.length, dest, dport);
+            double agcGain = 1.0;
             AudioManager cam = app.getSystemService(AudioManager.class);
             JoanTrace.note("media cap rolling src=" + rec.getAudioSource()
                     + " mode=" + (cam == null ? -1 : cam.getMode()));
@@ -175,25 +179,47 @@ final class JoanMedia {
                     continue;
                 }
                 int m = Math.min(n, PTIME_SAMPLES);
+                long rawSq = 0;
+                for (int i = 0; i < m; i++) {
+                    int a = pcm[i] < 0 ? -pcm[i] : pcm[i];
+                    rawSq += (long) a * a;
+                }
+                boolean speech = m > 0 && rawSq / m > ACTIVE_MEAN_SQ;
+                if (speech && !sPlatformAgc) {
+                    /* Adapt on speech only, so silence is never amplified
+                     * into audible noise. Come down fast to catch a shout,
+                     * go up slowly so the gain does not breathe. */
+                    double rms = Math.sqrt((double) rawSq / m);
+                    double want = Math.max(1.0, Math.min(AGC_MAX_GAIN,
+                            AGC_TARGET / Math.max(1.0, rms)));
+                    agcGain += (want - agcGain) * (want < agcGain ? 0.25 : 0.02);
+                }
                 long frameSq = 0;
                 for (int i = 0; i < m; i++) {
-                    short v = pcm[i];
+                    int v = (int) (pcm[i] * agcGain);
+                    if (v > AGC_LIMIT) {
+                        v = AGC_LIMIT;
+                    } else if (v < -AGC_LIMIT) {
+                        v = -AGC_LIMIT;
+                    }
                     int a = v < 0 ? -v : v;
                     frameSq += (long) a * a;
                     if (a > ulPeak) {
                         ulPeak = a;
                     }
-                    ulaw[i] = linearToUlaw(v);
+                    ulaw[i] = linearToUlaw((short) v);
                 }
                 ulSumSq += frameSq;
                 ulSamples += m;
-                if (m > 0 && frameSq / m > ACTIVE_MEAN_SQ) {
+                if (speech) {
                     ulActSq += frameSq;
                     ulActSamples += m;
                 }
                 if (!ulLogged && ulSamples >= SAMPLE_HZ * 5L) {
                     JoanTrace.note("media ul level " + level(ulSumSq,
-                            ulSamples, ulPeak, ulActSq, ulActSamples));
+                            ulSamples, ulPeak, ulActSq, ulActSamples)
+                            + String.format(java.util.Locale.US,
+                                    " agc=%+.1fdB", 20 * Math.log10(agcGain)));
                     ulLogged = true;
                 }
                 rtp[0] = (byte) 0x80;
@@ -214,8 +240,12 @@ final class JoanMedia {
                 sock.send(out);
             }
         } catch (Throwable t) {
-            JoanTrace.note("media cap fail " + t.getClass().getSimpleName());
-            Log.w(TAG, "media cap", t);
+            /* A closed socket during stop() is the normal way these threads
+             * end. Stack-tracing it twice per call buries real failures. */
+            if (sRun) {
+                JoanTrace.note("media cap fail " + t.getClass().getSimpleName());
+                Log.w(TAG, "media cap", t);
+            }
         } finally {
             try { if (rec != null) rec.release(); } catch (Throwable ignored) {}
             JoanTrace.note("media ul stopped " + level(ulSumSq, ulSamples,
@@ -322,8 +352,10 @@ final class JoanMedia {
                 }
             }
         } catch (Throwable t) {
-            JoanTrace.note("media play fail " + t.getClass().getSimpleName());
-            Log.w(TAG, "media play", t);
+            if (sRun) {
+                JoanTrace.note("media play fail " + t.getClass().getSimpleName());
+                Log.w(TAG, "media play", t);
+            }
         } finally {
             try { if (trk != null) trk.release(); } catch (Throwable ignored) {}
             JoanTrace.note("media dl stopped frames=" + dl + " "
@@ -349,7 +381,9 @@ final class JoanMedia {
                         .setBufferSizeInBytes(inBuf)
                         .build();
                 if (rec.getState() == AudioRecord.STATE_INITIALIZED) {
-                    JoanTrace.note("media record ok src=" + src);
+                    attachEffects(rec.getAudioSessionId());
+                    JoanTrace.note("media record ok src=" + src
+                            + " platform_agc=" + sPlatformAgc);
                     return rec;
                 }
                 JoanTrace.note("media record uninit src=" + src);
@@ -362,6 +396,40 @@ final class JoanMedia {
             }
         }
         return null;
+    }
+
+    /**
+     * Use the platform's own preprocessing where a ROM offers it, and only
+     * fall back to the software AGC above when it does not. On stock
+     * LineageOS 22 for joan, AutomaticGainControl.isAvailable() is false:
+     * libaudiopreprocessing.so is on the device but nothing in
+     * audio_effects.xml points at it.
+     */
+    private static void attachEffects(int sessionId) {
+        sPlatformAgc = false;
+        try {
+            if (android.media.audiofx.AutomaticGainControl.isAvailable()) {
+                android.media.audiofx.AutomaticGainControl agc =
+                        android.media.audiofx.AutomaticGainControl.create(sessionId);
+                if (agc != null) {
+                    agc.setEnabled(true);
+                    sPlatformAgc = true;
+                }
+            }
+        } catch (Throwable t) {
+            JoanTrace.note("media agc " + t.getClass().getSimpleName());
+        }
+        try {
+            if (android.media.audiofx.AcousticEchoCanceler.isAvailable()) {
+                android.media.audiofx.AcousticEchoCanceler aec =
+                        android.media.audiofx.AcousticEchoCanceler.create(sessionId);
+                if (aec != null) {
+                    aec.setEnabled(true);
+                }
+            }
+        } catch (Throwable ignored) {
+            // platform default stands
+        }
     }
 
     private static AudioTrack openVoiceTrack(int outBuf) {
@@ -402,6 +470,17 @@ final class JoanMedia {
      * of an idle handset and well below any real talking.
      */
     private static final long ACTIVE_MEAN_SQ = 10000L;
+
+    /* Software AGC. This platform has no AGC effect: audio_effects.xml
+     * declares only Qualcomm's aec and ns, and LG's uplink conditioning
+     * lives in the ADSP voice topology (ACDB), which the AP VoIP path we
+     * use does not reach. Measured uplink speech swung between -24 and
+     * -45 dBFS across calls while the far end arrived at -16 to -23,
+     * because nothing between AudioRecord and the encoder touches level. */
+    private static final double AGC_TARGET = 32768.0 * 0.1;   /* -20 dBFS */
+    private static final double AGC_MAX_GAIN = 16.0;          /* +24 dB */
+    private static final int AGC_LIMIT = 23197;               /* -3 dBFS */
+    private static volatile boolean sPlatformAgc;
 
     private static String level(long sumSq, long samples, int peak,
                                 long actSq, long actSamples) {
