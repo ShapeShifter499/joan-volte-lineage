@@ -300,6 +300,96 @@ static int header_value(const char *msg, const char *name,
     return -1;
 }
 
+/* RFC 3261 12.1.2: a UAC's route set is every Record-Route URI carried by
+ * the response, taken in REVERSE order. Proxies prepend as the request goes
+ * out, so the response lists them far-end first, and an in-dialog request
+ * has to leave here with our own P-CSCF on top.
+ *
+ * header_value() returns only the first matching header, so the route set
+ * was both truncated and unreversed. A response carrying a proxy chain
+ * would route the ACK past our own P-CSCF.
+ *
+ * Commas inside <> or "" belong to a URI and are not separators. Returns the
+ * length written and reports the number of URIs seen through *count. */
+static int route_set_reversed(const char *msg, char *dst, size_t dstlen,
+                              int *count)
+{
+    const char *ent[16];
+    size_t elen[16];
+    int n = 0;
+    const char *name = "Record-Route";
+    const size_t nl = 12;
+
+    const char *p = msg;
+    while (n < 16 && (p = strcasestr(p, name)) != NULL) {
+        int at_line_start = (p == msg) ||
+                            (p >= msg + 2 && p[-1] == '\n' && p[-2] == '\r');
+        if (!at_line_start || p[nl] != ':') {
+            p += nl;
+            continue;
+        }
+        const char *v = p + nl + 1;
+        while (*v == ' ' || *v == '\t')
+            v++;
+        const char *eol = strstr(v, "\r\n");
+        const char *end = eol ? eol : v + strlen(v);
+
+        const char *seg = v;
+        int depth = 0, quoted = 0;
+        for (const char *c = v; c <= end; c++) {
+            if (c == end || (!depth && !quoted && *c == ',')) {
+                const char *b = seg;
+                const char *e = c;
+                while (b < e && (*b == ' ' || *b == '\t'))
+                    b++;
+                while (e > b && (e[-1] == ' ' || e[-1] == '\t'))
+                    e--;
+                if (e > b && n < 16) {
+                    ent[n] = b;
+                    elen[n] = (size_t)(e - b);
+                    n++;
+                }
+                seg = c + 1;
+                continue;
+            }
+            if (*c == '"')
+                quoted = !quoted;
+            else if (!quoted && *c == '<')
+                depth++;
+            else if (!quoted && *c == '>' && depth)
+                depth--;
+        }
+        p = eol ? eol + 2 : end;
+    }
+
+    if (count)
+        *count = n;
+    if (n == 0) {
+        if (dstlen)
+            dst[0] = '\0';
+        return -1;
+    }
+
+    /* Emit reversed. Build from the nearest hop outwards so that a set too
+     * long for the buffer loses its tail, never the top hop. */
+    size_t off = 0;
+    dst[0] = '\0';
+    for (int i = n - 1; i >= 0; i--) {
+        size_t sep = off ? 2 : 0;
+        if (off + sep + elen[i] + 1 > dstlen)
+            break;
+        if (sep) {
+            dst[off] = ',';
+            dst[off + 1] = ' ';
+            off += 2;
+        }
+        memcpy(dst + off, ent[i], elen[i]);
+        off += elen[i];
+        dst[off] = '\0';
+    }
+    return (int)off;
+}
+
 int parse_response(const char *msg, size_t len, sip_response_t *r)
 {
     memset(r, 0, sizeof(*r));
@@ -328,12 +418,23 @@ int parse_response(const char *msg, size_t len, sip_response_t *r)
                                          sizeof(r->service_route)) >= 0;
     r->have_contact = header_value(msg, "Contact", r->contact,
                                    sizeof(r->contact)) >= 0;
-    r->have_record_route = header_value(msg, "Record-Route",
-                                        r->record_route,
-                                        sizeof(r->record_route)) >= 0;
+    r->have_record_route = route_set_reversed(msg, r->record_route,
+                                              sizeof(r->record_route),
+                                              &r->record_route_n) >= 0;
     r->have_p_associated_uri = header_value(msg, "P-Associated-URI",
                                             r->p_associated_uri,
                                             sizeof(r->p_associated_uri)) >= 0;
+    header_value(msg, "Call-ID", r->call_id, sizeof(r->call_id));
+    char cseq_raw[64];
+    if (header_value(msg, "CSeq", cseq_raw, sizeof(cseq_raw)) >= 0) {
+        r->cseq = atoi(cseq_raw);
+        const char *m = cseq_raw;
+        while (*m && *m != ' ' && *m != '\t')
+            m++;
+        while (*m == ' ' || *m == '\t')
+            m++;
+        snprintf(r->cseq_method, sizeof(r->cseq_method), "%s", m);
+    }
     char exp[32];
     if (header_value(msg, "Expires", exp, sizeof(exp)) >= 0)
         r->expires = atoi(exp);

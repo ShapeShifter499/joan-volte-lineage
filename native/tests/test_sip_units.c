@@ -336,6 +336,62 @@ static void test_sdp_and_tcp_frame(void)
     CHECK(bl == 6 && !memcmp(buf, "INVITE", 6), "tcp extract remainder");
 }
 
+/* RFC 3261 12.1.2: the UAC route set is every Record-Route, reversed.
+ * Regression for the ACK that never reached the far end: only the first
+ * header was captured and it was left in received order, so the ACK was
+ * addressed past our own P-CSCF. */
+static void test_route_set(void)
+{
+    const char *multi =
+        "SIP/2.0 200 OK\r\n"
+        "Via: SIP/2.0/UDP [2001:db8::1]:1234;branch=z9hG4bKa\r\n"
+        "Record-Route: <sip:far.example.net;lr>\r\n"
+        "Record-Route: <sip:scscf.example.net;lr>\r\n"
+        "Record-Route: <sip:pcscf.example.net;lr>\r\n"
+        "Call-ID: abc123\r\n"
+        "CSeq: 21 INVITE\r\n"
+        "Content-Length: 0\r\n\r\n";
+    sip_response_t r;
+    CHECK(parse_response(multi, strlen(multi), &r) == 0, "route set parses");
+    CHECK(r.record_route_n == 3, "route set counts every Record-Route");
+    CHECK(strncmp(r.record_route, "<sip:pcscf.example.net;lr>", 26) == 0,
+          "route set puts our P-CSCF on top");
+    CHECK(strstr(r.record_route, "far.example.net") != NULL &&
+          strstr(r.record_route, "pcscf.example.net") <
+          strstr(r.record_route, "far.example.net"),
+          "route set is reversed end to end");
+    CHECK(r.cseq == 21 && !strcmp(r.cseq_method, "INVITE"),
+          "response CSeq method parsed");
+    CHECK(!strcmp(r.call_id, "abc123"), "response Call-ID parsed");
+
+    /* One header may carry several comma-separated URIs. */
+    const char *folded =
+        "SIP/2.0 200 OK\r\n"
+        "Record-Route: <sip:a.example.net;lr>, <sip:b.example.net;lr>\r\n"
+        "CSeq: 2 INVITE\r\n"
+        "Content-Length: 0\r\n\r\n";
+    CHECK(parse_response(folded, strlen(folded), &r) == 0, "folded rr parses");
+    CHECK(r.record_route_n == 2, "folded rr splits on commas");
+    CHECK(strncmp(r.record_route, "<sip:b.example.net;lr>", 22) == 0,
+          "folded rr is reversed");
+
+    /* A single Record-Route must survive unchanged. */
+    const char *one =
+        "SIP/2.0 200 OK\r\n"
+        "Record-Route: <sip:only.example.net;lr>\r\n"
+        "CSeq: 3 INVITE\r\n"
+        "Content-Length: 0\r\n\r\n";
+    CHECK(parse_response(one, strlen(one), &r) == 0, "single rr parses");
+    CHECK(r.record_route_n == 1 &&
+          !strcmp(r.record_route, "<sip:only.example.net;lr>"),
+          "single rr unchanged");
+
+    const char *none =
+        "SIP/2.0 200 OK\r\nCSeq: 4 INVITE\r\nContent-Length: 0\r\n\r\n";
+    CHECK(parse_response(none, strlen(none), &r) == 0, "no rr parses");
+    CHECK(!r.have_record_route && r.record_route_n == 0, "no rr reported");
+}
+
 int main(void)
 {
     test_md5();
@@ -345,6 +401,7 @@ int main(void)
     test_build_first();
     test_response_parse();
     test_sdp_and_tcp_frame();
+    test_route_set();
     if (g_fail) {
         printf("\n%d TEST(S) FAILED\n", g_fail);
         return 1;

@@ -63,7 +63,7 @@ static struct {
     sip_dialog_t dlg;
     char dest[300];        /* original request URI */
     char target[300];      /* remote target from the 2xx Contact */
-    char route[512];       /* route set: Record-Route if the 2xx carried one */
+    char route[1024];      /* route set: Record-Route reversed, RFC 3261 12.1.2 */
     char to_tag[64];
     int  active;
     int  se_sec;           /* RFC 4028 Session-Expires; 0 = none */
@@ -876,8 +876,9 @@ int ua_call_invite(const char *dest)
             snprintf(g_call.route, sizeof(g_call.route), "%s",
                      resp.have_record_route ? resp.record_route
                                             : g_reg.service_route);
-            klog(LOG_INFO, "dialog target captured (rr=%s)",
-                 resp.have_record_route ? "yes" : "no");
+            klog(LOG_INFO, "dialog target captured (rr=%s n=%d)",
+                 resp.have_record_route ? "yes" : "no",
+                 resp.record_route_n);
             g_call.dlg = dlg;
             g_call.active = 1;
             g_call.se_sec = resp.session_expires;

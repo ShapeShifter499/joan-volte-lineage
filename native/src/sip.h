@@ -63,8 +63,9 @@ typedef struct {
     int have_service_route;
     char contact[256];                /* remote target for in-dialog reqs */
     int have_contact;
-    char record_route[512];
+    char record_route[1024];          /* RFC 3261 12.1.2 route set, reversed */
     int have_record_route;
+    int record_route_n;               /* how many Record-Route URIs it held */
     char p_associated_uri[512];       /* public identities the core registered */
     int have_p_associated_uri;
     int expires;                      /* -1 if absent */
@@ -73,6 +74,9 @@ typedef struct {
     char require[128];
     int session_expires;              /* RFC 4028; 0 if absent */
     char se_refresher[8];             /* "uac", "uas", or empty */
+    char call_id[64];
+    int cseq;                         /* CSeq number; 0 if absent */
+    char cseq_method[16];             /* CSeq method, e.g. "INVITE" */
 } sip_response_t;
 
 void txn_new(sip_txn_t *t, const sip_identity_t *id, sec_params_t mine);
