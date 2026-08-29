@@ -135,7 +135,7 @@ static void handle_line(int fd, char *line)
             respond(fd, "ERR", "net fields");
             return;
         }
-        klog(LOG_INFO, "net configured");
+        klog(LOG_INFO, "net configured pcscf_candidates=%d", g_cfg->pcscf_n);
         respond(fd, "OK", "net");
         return;
     }
