@@ -544,6 +544,10 @@ final class JoanSipBuilder {
         int port;
         boolean mux;
         int rtcpPort;
+        /** First payload type on m=audio: the selected one in an answer. */
+        int payloadType = -1;
+        /** Whether payload type 0 (PCMU) appears at all: offers list many. */
+        boolean offersPcmu;
     }
 
     static String sdpOffer(String ip, int rtpPort) {
@@ -555,14 +559,17 @@ final class JoanSipBuilder {
                 + "s=-\r\n"
                 + "c=IN " + fam + " " + ip + "\r\n"
                 + "t=0 0\r\n"
-                + "m=audio " + rtpPort + " RTP/AVP 0 96 97 101\r\n"
+                /* PCMU only: JoanMedia implements G.711 u-law and
+                 * nothing else. Offering AMR-WB, AMR and telephone-event
+                 * as the C UA did invited the core to answer with one of
+                 * them, after which we would have sent u-law labelled as
+                 * payload type 0 into an AMR session and decoded AMR as
+                 * u-law -- noise both ways, with no error anywhere. This
+                 * core happens to pick the first entry, which is the only
+                 * reason that was survivable. Implementing AMR-WB is the
+                 * real fix and is not done here. */
+                + "m=audio " + rtpPort + " RTP/AVP 0\r\n"
                 + "a=rtpmap:0 PCMU/8000\r\n"
-                + "a=rtpmap:96 AMR-WB/16000/1\r\n"
-                + "a=fmtp:96 octet-align=0;mode-change-capability=2\r\n"
-                + "a=rtpmap:97 AMR/8000/1\r\n"
-                + "a=fmtp:97 octet-align=0\r\n"
-                + "a=rtpmap:101 telephone-event/8000\r\n"
-                + "a=fmtp:101 0-15\r\n"
                 + "a=ptime:20\r\n"
                 + "a=maxptime:240\r\n"
                 + "a=rtcp:" + (rtpPort + 1) + "\r\n"
@@ -751,12 +758,26 @@ final class JoanSipBuilder {
             } else if (line.startsWith("c=IN IP4 ")) {
                 m.ip = line.substring(9).trim();
             } else if (line.startsWith("m=audio ")) {
-                String rest = line.substring(8).trim();
-                int sp = rest.indexOf(' ');
+                /* m=audio <port> <proto> <pt> [<pt> ...] */
+                String[] tok = line.substring(8).trim().split("\\s+");
                 try {
-                    m.port = Integer.parseInt(sp < 0 ? rest : rest.substring(0, sp));
-                } catch (NumberFormatException ignored) {
+                    m.port = Integer.parseInt(tok[0]);
+                } catch (Exception ignored) {
                     m.port = 0;
+                }
+                for (int i = 2; i < tok.length; i++) {
+                    int pt;
+                    try {
+                        pt = Integer.parseInt(tok[i]);
+                    } catch (NumberFormatException ignored) {
+                        continue;
+                    }
+                    if (m.payloadType < 0) {
+                        m.payloadType = pt;
+                    }
+                    if (pt == 0) {
+                        m.offersPcmu = true;
+                    }
                 }
             } else if (line.equalsIgnoreCase("a=rtcp-mux")) {
                 m.mux = true;

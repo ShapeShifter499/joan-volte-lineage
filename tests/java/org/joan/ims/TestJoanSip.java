@@ -14,6 +14,7 @@ public final class TestJoanSip {
         testGrantedExpires();
         testRefreshLead();
         testAdvertisedCapabilities();
+        testCodecHonesty();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -367,6 +368,44 @@ public final class TestJoanSip {
         check(reg.contains("Allow: " + JoanSipBuilder.ALLOW)
                 && inv.contains("Allow: " + JoanSipBuilder.ALLOW),
                 "both advertise exactly the handled method set");
+    }
+
+    /** Offer only PCMU, and read back which codec the answer selected. */
+    private static void testCodecHonesty() {
+        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                "user@ims.example", "sip:+15555550100@ims.example",
+                "ims.example", "2600::5", 5000, 5001, "123456789012345");
+        String inv = JoanSipBuilder.buildInvite(id, new JoanSipBuilder.Dialog(),
+                "tel:+15555550111", null, null, 40000, "3GPP-E-UTRAN-FDD");
+        check(inv.contains("m=audio 40000 RTP/AVP 0\r\n"),
+                "offer lists PCMU and nothing else");
+        for (String codec : new String[] { "AMR-WB", "AMR/8000",
+                "telephone-event" }) {
+            check(!inv.contains(codec), "offer does not promise " + codec);
+        }
+
+        String amrAnswer = "SIP/2.0 200 OK\r\n\r\nv=0\r\n"
+                + "c=IN IP6 2600::9\r\n"
+                + "m=audio 21000 RTP/AVP 96\r\n"
+                + "a=rtpmap:96 AMR-WB/16000/1\r\n";
+        JoanSipBuilder.Media m = JoanSipBuilder.parseSdp(amrAnswer);
+        check(m != null && m.payloadType == 96 && !m.offersPcmu,
+                "an AMR-WB answer is recognised as not PCMU");
+
+        String pcmuAnswer = "SIP/2.0 200 OK\r\n\r\nv=0\r\n"
+                + "c=IN IP6 2600::9\r\n"
+                + "m=audio 21000 RTP/AVP 0\r\n"
+                + "a=rtpmap:0 PCMU/8000\r\n";
+        m = JoanSipBuilder.parseSdp(pcmuAnswer);
+        check(m != null && m.payloadType == 0 && m.offersPcmu,
+                "a PCMU answer is accepted");
+
+        String multiOffer = "INVITE sip:me SIP/2.0\r\n\r\nv=0\r\n"
+                + "c=IN IP6 2600::9\r\n"
+                + "m=audio 21000 RTP/AVP 96 97 0 101\r\n";
+        m = JoanSipBuilder.parseSdp(multiOffer);
+        check(m != null && m.payloadType == 96 && m.offersPcmu,
+                "an offer listing PCMU anywhere is answerable");
     }
 
     private static void testImei() {

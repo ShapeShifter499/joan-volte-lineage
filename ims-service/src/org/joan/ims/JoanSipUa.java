@@ -258,6 +258,32 @@ final class JoanSipUa {
                     route = rr;
                 }
                 JoanSipBuilder.Media media = JoanSipBuilder.parseSdp(rx);
+                /* The answer names the codec that was actually selected.
+                 * We only speak PCMU; streaming u-law into anything else
+                 * is noise in both directions and reports no error. ACK
+                 * first so the dialog is well formed, then hang it up. */
+                if (media != null && media.payloadType != 0) {
+                    JoanTrace.note("app invite answered pt="
+                            + media.payloadType + "; only PCMU implemented");
+                    try {
+                        send(sSockC, sPcscf, sPcscfPortS,
+                                JoanSipBuilder.buildAck(id, dlg, target,
+                                        route, sSecVerify, toHdr, fromHdr)
+                                        .getBytes(StandardCharsets.US_ASCII));
+                    } catch (Exception ignored) {
+                        // ignore
+                    }
+                    synchronized (LOCK) {
+                        sDlg = dlg;
+                        sTarget = target;
+                        sRoute = route;
+                        sToHdr = toHdr;
+                        sFromHdr = fromHdr;
+                        sCall = true;
+                    }
+                    hangup();
+                    return "ERR unsupported codec " + media.payloadType;
+                }
                 String ack = JoanSipBuilder.buildAck(id, dlg, target, route,
                         sSecVerify, toHdr, fromHdr);
                 try {
@@ -512,6 +538,21 @@ final class JoanSipUa {
                 // ignore
             }
             JoanTrace.note("app inbound INVITE busy");
+            return;
+        }
+        JoanSipBuilder.Media offer = JoanSipBuilder.parseSdp(rx);
+        if (offer != null && !offer.offersPcmu) {
+            /* sdpAnswer() would answer PCMU regardless of what was
+             * offered. Better to decline than to ring the user for a call
+             * that cannot carry audio. */
+            JoanTrace.note("app inbound INVITE offers no PCMU; 488");
+            try {
+                sendReply(buildResponse(rx, 488, "Not Acceptable Here",
+                        sId, "nocodec", null)
+                        .getBytes(StandardCharsets.US_ASCII));
+            } catch (Exception ignored) {
+                // ignore
+            }
             return;
         }
         sOurToTag = String.format("%012x",
