@@ -31,14 +31,22 @@ public class JoanStateProvider extends ContentProvider {
     private static volatile boolean sProbeRunning = false;
     private static volatile String sIpsecResult = "";
     private static volatile boolean sIpsecRunning = false;
+    private static volatile String sAppRegResult = "";
+    private static volatile boolean sAppRegRunning = false;
 
     @Override
     public Cursor query(Uri uri, String[] projection, String selection,
                         String[] selectionArgs, String sortOrder) {
         Context ctx = getContext();
+        boolean probe = uri != null && (
+                "akaprobe".equals(uri.getLastPathSegment())
+                        || "ipsecspike".equals(uri.getLastPathSegment())
+                        || "appregister".equals(uri.getLastPathSegment()));
         if (ctx != null) {
             JoanTrace.init(ctx);
-            JoanDriver.start(ctx);
+            if (!probe) {
+                JoanDriver.start(ctx);
+            }
         }
         MatrixCursor c = new MatrixCursor(new String[] { "key", "value" });
         if (uri != null && "akaprobe".equals(uri.getLastPathSegment())) {
@@ -80,6 +88,28 @@ public class JoanStateProvider extends ContentProvider {
                         sIpsecRunning = false;
                     }
                 }, "joan-ipsec-spike").start();
+            }
+            return c;
+        }
+        if (uri != null && "appregister".equals(uri.getLastPathSegment())) {
+            /* REGISTER 200 from the app over IpSecTransform. Refuses
+             * if the native daemon is still answering STATUS. */
+            c.addRow(new Object[] { "appregister_running",
+                    String.valueOf(sAppRegRunning) });
+            c.addRow(new Object[] { "appregister_result", sAppRegResult });
+            if (!sAppRegRunning && ctx != null) {
+                sAppRegRunning = true;
+                final Context app = ctx.getApplicationContext();
+                new Thread(() -> {
+                    try {
+                        sAppRegResult = JoanAppRegister.run(app);
+                    } catch (Throwable t) {
+                        sAppRegResult = "appregister error "
+                                + t.getClass().getSimpleName();
+                    } finally {
+                        sAppRegRunning = false;
+                    }
+                }, "joan-app-register").start();
             }
             return c;
         }
