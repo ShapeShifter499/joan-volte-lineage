@@ -78,7 +78,29 @@ int cfg_apply_line(ua_config_t *c, const char *line)
     } else if (!strcmp(key, "LOCAL_PORT")) {
         c->id.local_port = atoi(val);
     } else if (!strcmp(key, "PCSCF")) {
-        snprintf(c->id.pcscf, sizeof(c->id.pcscf), "%s", val);
+        /* Accepts a comma-separated candidate list. A single address still
+         * parses to a one-entry list, so an older caller keeps working. */
+        c->pcscf_n = 0;
+        const char *p = val;
+        while (*p && c->pcscf_n < JOAN_PCSCF_MAX) {
+            while (*p == ' ' || *p == ',')
+                p++;
+            const char *e = p;
+            while (*e && *e != ',')
+                e++;
+            size_t l = (size_t)(e - p);
+            while (l && p[l - 1] == ' ')
+                l--;
+            if (l && l < sizeof(c->pcscf_list[0].addr)) {
+                memcpy(c->pcscf_list[c->pcscf_n].addr, p, l);
+                c->pcscf_list[c->pcscf_n].addr[l] = '\0';
+                c->pcscf_list[c->pcscf_n].blocked_until_ms = 0;
+                c->pcscf_n++;
+            }
+            p = e;
+        }
+        snprintf(c->id.pcscf, sizeof(c->id.pcscf), "%s",
+                 c->pcscf_n ? c->pcscf_list[0].addr : "");
     } else if (!strcmp(key, "PCSCF_PORT")) {
         c->id.pcscf_port = atoi(val);
     } else if (!strcmp(key, "IMEI")) {

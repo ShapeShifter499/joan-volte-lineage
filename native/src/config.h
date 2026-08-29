@@ -6,9 +6,21 @@
 
 #include "sip.h"
 
+/* The IMS PDN advertises several P-CSCF addresses. Keeping only the first
+ * meant that when the carrier drained that node mid-session, registration
+ * stayed down across every retry until the radio was bounced. */
+#define JOAN_PCSCF_MAX 8
+
 typedef struct {
-    sip_identity_t id;
+    char addr[80];
+    long blocked_until_ms;   /* monotonic ms; 0 = usable */
+} pcscf_cand_t;
+
+typedef struct {
+    sip_identity_t id;       /* id.pcscf is the candidate in use now */
     sec_params_t mine;
+    pcscf_cand_t pcscf_list[JOAN_PCSCF_MAX];
+    int pcscf_n;
 } ua_config_t;
 
 void cfg_init(ua_config_t *c);

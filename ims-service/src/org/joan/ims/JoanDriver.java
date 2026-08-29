@@ -253,7 +253,7 @@ final class JoanDriver {
         }
 
         Inet6Address local = pickLocalV6(imsLp);
-        InetAddress pcscf = pickPcscf(imsLp);
+        String pcscf = collectPcscfs(imsLp);
         if (local == null) {
             return Discovery.waitFor("IMS network has no usable IPv6 local address");
         }
@@ -275,7 +275,7 @@ final class JoanDriver {
 
         Cycle c = new Cycle();
         c.localIp = stripScope(local.getHostAddress());
-        c.pcscf = stripScope(pcscf.getHostAddress());
+        c.pcscf = pcscf;
         c.iface = imsLp.getInterfaceName();
         c.impi = impi;
         c.impu = impu;
@@ -576,20 +576,44 @@ final class JoanDriver {
         return null;
     }
 
-    @SuppressWarnings("unchecked")
-    private static InetAddress pickPcscf(LinkProperties lp) {
+    /**
+     * Every P-CSCF the IMS PDN advertises, comma-separated, IPv6 first.
+     *
+     * This used to return only the first address. When the carrier drained
+     * that node mid-session the daemon retried it forever and registration
+     * stayed down until the radio was bounced, even though the PDN was
+     * advertising two other addresses that answered immediately. The daemon
+     * fails over across whatever it is given, so give it all of them.
+     */
+    private static String collectPcscfs(LinkProperties lp) {
         try {
             Method m = lp.getClass().getMethod("getPcscfServers");
             List<?> list = (List<?>) m.invoke(lp);
             if (list == null || list.isEmpty()) {
                 return null;
             }
+            StringBuilder v6 = new StringBuilder();
+            StringBuilder rest = new StringBuilder();
             for (Object o : list) {
-                if (o instanceof Inet6Address) {
-                    return (InetAddress) o;
+                if (!(o instanceof InetAddress)) {
+                    continue;
                 }
+                String a = stripScope(((InetAddress) o).getHostAddress());
+                if (a == null || a.isEmpty() || a.indexOf(',') >= 0) {
+                    continue;
+                }
+                StringBuilder into = (o instanceof Inet6Address) ? v6 : rest;
+                if (into.length() > 0) {
+                    into.append(',');
+                }
+                into.append(a);
             }
-            return (InetAddress) list.get(0);
+            if (v6.length() > 0 && rest.length() > 0) {
+                v6.append(',').append(rest);
+            } else if (v6.length() == 0) {
+                v6 = rest;
+            }
+            return v6.length() > 0 ? v6.toString() : null;
         } catch (Exception e) {
             return null;
         }

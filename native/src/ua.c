@@ -413,12 +413,18 @@ static int sip_wait_recv(int s, int alt, char *rx, size_t rxlen,
     return (int)r;
 }
 
+/* Returned when the datagram never left the host. "No reply" and "could not
+ * send" are different faults with different fixes, and reporting both as -1
+ * sent a debugging session chasing a silent network that was never asked a
+ * question. */
+#define SIP_SEND_FAILED (-2)
+
 static int sip_send_recv_dual(int s, int alt, int dport,
                               const char *pkt, size_t len,
                               char *rx, size_t rxlen, int timeout_ms)
 {
     if (sip_sendto(s, dport, pkt, len) < 0)
-        return -1;
+        return SIP_SEND_FAILED;
 
     return sip_wait_recv(s, alt, rx, rxlen, timeout_ms);
 }
@@ -453,6 +459,64 @@ static int sip_sendto(int s, int dport, const char *pkt, size_t len)
     return 0;
 }
 
+/* ---- P-CSCF failover ---------------------------------------------------
+ *
+ * The IMS PDN advertises several P-CSCF addresses. The UA used to take the
+ * first and retry it forever; when the carrier drained that node mid-session
+ * every REGISTER and INVITE went unanswered for 45 minutes, and only a radio
+ * bounce recovered it -- because the bounce happened to return a different
+ * primary. On a failure we now park the candidate that stopped answering and
+ * move to the next, letting the block lapse so a drained node can come back.
+ */
+#define PCSCF_BLOCK_MS 900000L   /* 15 min: longer than the retry cadence */
+
+static void pcscf_select(void)
+{
+    ua_config_t *c = g_cfg;
+    if (c->pcscf_n <= 0)
+        return;
+
+    long now = now_ms();
+    int pick = -1;
+    for (int i = 0; i < c->pcscf_n; i++) {
+        if (c->pcscf_list[i].blocked_until_ms &&
+            c->pcscf_list[i].blocked_until_ms <= now)
+            c->pcscf_list[i].blocked_until_ms = 0;
+        if (pick < 0 && !c->pcscf_list[i].blocked_until_ms)
+            pick = i;
+    }
+    if (pick < 0) {
+        /* Everything is parked. Forget the blocks rather than stall: a
+         * candidate we cannot reach is still better than none at all. */
+        for (int i = 0; i < c->pcscf_n; i++)
+            c->pcscf_list[i].blocked_until_ms = 0;
+        pick = 0;
+        klog(LOG_INFO, "pcscf every candidate blocked; cleared");
+    }
+    if (strcmp(c->id.pcscf, c->pcscf_list[pick].addr))
+        klog(LOG_INFO, "pcscf switching to candidate %d of %d",
+             pick + 1, c->pcscf_n);
+    snprintf(c->id.pcscf, sizeof(c->id.pcscf), "%s",
+             c->pcscf_list[pick].addr);
+}
+
+/* Park the candidate in use. Never parks a sole candidate: there would be
+ * nothing to move to, and the block would only add delay. */
+static void pcscf_block_current(const char *why)
+{
+    ua_config_t *c = g_cfg;
+    if (c->pcscf_n <= 1)
+        return;
+    for (int i = 0; i < c->pcscf_n; i++) {
+        if (!strcmp(c->pcscf_list[i].addr, c->id.pcscf)) {
+            c->pcscf_list[i].blocked_until_ms = now_ms() + PCSCF_BLOCK_MS;
+            klog(LOG_INFO, "pcscf candidate %d of %d parked for %lds (%s)",
+                 i + 1, c->pcscf_n, PCSCF_BLOCK_MS / 1000, why);
+            return;
+        }
+    }
+}
+
 int ua_register_stage1(char *nonce_out, size_t nonce_len)
 {
     g_err[0] = '\0';
@@ -461,6 +525,8 @@ int ua_register_stage1(char *nonce_out, size_t nonce_len)
         fail("no id/net yet", 1);
         return -1;
     }
+
+    pcscf_select();
 
     sip_identity_t id = g_cfg->id;
     joan_sec_params_default(&g_cfg->mine);
@@ -487,7 +553,14 @@ int ua_register_stage1(char *nonce_out, size_t nonce_len)
     int r = sip_send_recv_dual(s, -1, g_cfg->id.pcscf_port, msg,
                                (size_t)n, rx, sizeof(rx), 8000);
     close(s);
+    if (r == SIP_SEND_FAILED) {
+        /* Our own send failed, so the candidate has not been given a
+         * chance to answer -- parking it would blame the wrong thing. */
+        fail("reg1 send failed", 10);
+        return -10;
+    }
     if (r <= 0) {
+        pcscf_block_current("reg1 no reply");
         fail("reg1 no reply", 4);
         return -4;
     }
@@ -674,7 +747,14 @@ int ua_register_stage2(const uint8_t *res, size_t res_len,
     char rx[4096];
     int r = sip_send_recv_dual(s, g_port_s_fd, (int)pcscf_sec.port_s,
                                msg, (size_t)n, rx, sizeof(rx), 8000);
+    if (r == SIP_SEND_FAILED) {
+        fail("reg2 send failed", 11);
+        return -11;
+    }
     if (r <= 0) {
+        /* The candidate answered reg1 and then went quiet mid-handshake;
+         * that still counts against it. */
+        pcscf_block_current("reg2 no reply");
         fail("reg2 no reply", 27);
         return -27;
     }

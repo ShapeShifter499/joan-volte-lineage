@@ -481,6 +481,40 @@ static void test_bye_echoes_dialog_uris(void)
           "an 81-char To-tag survives intact");
 }
 
+/* The IMS PDN advertises several P-CSCF addresses. Keeping only the first
+ * left registration stuck on a drained node for 45 minutes. */
+static void test_pcscf_candidates(void)
+{
+    ua_config_t c;
+    cfg_init(&c);
+    CHECK(cfg_apply_line(&c,
+              "PCSCF=fd00:976a:b699:4901::5,fd00:976a:2:242::5,"
+              "fd00:976a:2:2a1::6") == 0,
+          "pcscf list applies");
+    CHECK(c.pcscf_n == 3, "pcscf list keeps every candidate");
+    CHECK(!strcmp(c.pcscf_list[0].addr, "fd00:976a:b699:4901::5") &&
+          !strcmp(c.pcscf_list[2].addr, "fd00:976a:2:2a1::6"),
+          "pcscf list preserves order");
+    CHECK(!strcmp(c.id.pcscf, "fd00:976a:b699:4901::5"),
+          "pcscf active is the first candidate");
+    CHECK(c.pcscf_list[0].blocked_until_ms == 0, "pcscf starts unblocked");
+
+    /* Spaces after commas are common in header-ish input. */
+    cfg_init(&c);
+    CHECK(cfg_apply_line(&c, "PCSCF=fd00::1, fd00::2") == 0,
+          "pcscf spaced list applies");
+    CHECK(c.pcscf_n == 2 && !strcmp(c.pcscf_list[1].addr, "fd00::2"),
+          "pcscf list tolerates spaces");
+
+    /* A single address must still work: older callers send exactly this. */
+    cfg_init(&c);
+    CHECK(cfg_apply_line(&c, "PCSCF=fd00:976a:b699:4901::5") == 0,
+          "pcscf single applies");
+    CHECK(c.pcscf_n == 1 &&
+          !strcmp(c.id.pcscf, "fd00:976a:b699:4901::5"),
+          "pcscf single address unchanged");
+}
+
 int main(void)
 {
     test_md5();
@@ -493,6 +527,7 @@ int main(void)
     test_route_set();
     test_ack_echoes_dialog_uris();
     test_bye_echoes_dialog_uris();
+    test_pcscf_candidates();
     if (g_fail) {
         printf("\n%d TEST(S) FAILED\n", g_fail);
         return 1;
