@@ -7,6 +7,7 @@ import android.media.AudioManager;
 import android.media.AudioRecord;
 import android.media.AudioTrack;
 import android.media.MediaRecorder;
+import android.os.Process;
 import android.util.Log;
 
 import android.net.Network;
@@ -127,6 +128,20 @@ final class JoanMedia {
         JoanTrace.note("media stop");
     }
 
+    /**
+     * Both media threads carry a 20 ms deadline. At default priority the
+     * scheduler is free to leave either of them behind a background task,
+     * which shows up as dropouts rather than as anything logged.
+     */
+    private static void audioPriority(String which) {
+        try {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO);
+        } catch (Throwable t) {
+            JoanTrace.note("media " + which + " priority "
+                    + t.getClass().getSimpleName());
+        }
+    }
+
     private static AudioAttributes voiceAttrs() {
         return new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -137,6 +152,7 @@ final class JoanMedia {
 
     private static void capture(Context app) {
         AudioRecord rec = null;
+        audioPriority("cap");
         try {
             int minIn = AudioRecord.getMinBufferSize(SAMPLE_HZ,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
@@ -200,6 +216,8 @@ final class JoanMedia {
 
     private static void playback(Context app) {
         AudioTrack trk = null;
+        int dl = 0;
+        audioPriority("play");
         try {
             AudioManager am = app.getSystemService(AudioManager.class);
             int minOut = AudioTrack.getMinBufferSize(SAMPLE_HZ,
@@ -223,7 +241,6 @@ final class JoanMedia {
             byte[] down = new byte[512];
             short[] pcm = new short[PTIME_SAMPLES];
             DatagramPacket in = new DatagramPacket(down, down.length);
-            int dl = 0;
             JoanTrace.note("media play rolling voice mode="
                     + (am == null ? -1 : am.getMode()) + " rtp=" + sRtp);
             while (sRun) {
@@ -269,8 +286,12 @@ final class JoanMedia {
                 int wr = trk.write(pcm, 0, m);
                 sRecv++;
                 dl++;
-                if (dl == 1 || (dl % 50) == 0) {
-                    JoanTrace.note("media dl frames=" + dl + " write=" + wr
+                if (dl == 1) {
+                    /* Downlink has started. Nothing else is traced from
+                     * this loop: JoanTrace.note() opens, writes and closes
+                     * a FileWriter under a process-global lock, and this
+                     * loop runs every 20 ms. */
+                    JoanTrace.note("media dl first frame write=" + wr
                             + " mode=" + (am == null ? -1 : am.getMode())
                             + " spk=" + (am != null && am.isSpeakerphoneOn()));
                 }
@@ -280,6 +301,7 @@ final class JoanMedia {
             Log.w(TAG, "media play", t);
         } finally {
             try { if (trk != null) trk.release(); } catch (Throwable ignored) {}
+            JoanTrace.note("media play stopped frames=" + dl);
         }
     }
 
