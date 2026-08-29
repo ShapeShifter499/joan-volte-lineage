@@ -255,24 +255,31 @@ final class JoanSipUa {
         JoanSipBuilder.Id id;
         String target, route, toHdr, fromHdr;
         synchronized (LOCK) {
-            if (!sCall || sDlg == null || sId == null) {
+            if (!sCall || sId == null) {
                 sCall = false;
                 return;
             }
             dlg = sDlg;
+            if (dlg == null) {
+                sCall = false;
+                return;
+            }
             id = new JoanSipBuilder.Id(sId.impi, sPublicId, sId.realm,
                     sId.localIp, sId.viaPort, sId.contactPort, sId.imei);
-            target = sTarget != null ? sTarget : sDest;
+            target = sTarget != null && !sTarget.isEmpty() ? sTarget : sDest;
             route = sRoute;
             toHdr = sToHdr;
             fromHdr = sFromHdr;
             sCall = false;
         }
+        if (target == null || target.isEmpty()) {
+            JoanTrace.note("app BYE skipped no target");
+            return;
+        }
         String bye = JoanSipBuilder.buildBye(id, dlg, target, route,
                 sSecVerify, toHdr, fromHdr);
         try {
-            send(sSockC, sPcscf, sPcscfPortS,
-                    bye.getBytes(StandardCharsets.US_ASCII));
+            sendReply(bye.getBytes(StandardCharsets.US_ASCII));
             JoanTrace.note("app BYE sent");
         } catch (Exception e) {
             JoanTrace.note("app BYE send fail");
@@ -307,6 +314,27 @@ final class JoanSipUa {
         synchronized (LOCK) {
             sCall = true;
             sHeldInvite = null;
+            /* UAS dialog: From is our To+tag, To is the INVITE From.
+             * Without this, hangup() has no dialog and sends no BYE. */
+            JoanSipBuilder.Dialog dlg = new JoanSipBuilder.Dialog();
+            dlg.callId = JoanSipBuilder.header(invite, "Call-ID");
+            dlg.cseq = 0;
+            dlg.fromTag = tag;
+            sDlg = dlg;
+            String invTo = JoanSipBuilder.header(invite, "To");
+            if (invTo == null) {
+                invTo = "";
+            }
+            if (invTo.indexOf("tag=") < 0) {
+                invTo = invTo + ";tag=" + tag;
+            }
+            sFromHdr = invTo;
+            sToHdr = JoanSipBuilder.header(invite, "From");
+            String c = JoanSipBuilder.header(invite, "Contact");
+            sTarget = c != null ? JoanSipBuilder.contactUri(c) : "";
+            String rr = JoanSipBuilder.header(invite, "Record-Route");
+            sRoute = rr != null ? rr : sServiceRoute;
+            sDest = sTarget;
             if (media != null) {
                 try {
                     sMediaIp = InetAddress.getByName(media.ip);
@@ -424,14 +452,12 @@ final class JoanSipUa {
         } catch (Exception e) {
             JoanTrace.note("app 180 send fail");
         }
-        String from = JoanSipBuilder.header(rx, "From");
-        String pai = JoanSipBuilder.header(rx, "P-Asserted-Identity");
-        String uri = pai != null ? JoanSipBuilder.contactUri("<" + pai + ">")
-                : (from != null ? JoanSipBuilder.contactUri(from) : "");
+        JoanSipBuilder.Cli cli = JoanSipBuilder.callingIdentity(rx);
         JoanTrace.note("app inbound INVITE tcp=" + sReplyTcp
-                + " number=" + (uri.isEmpty() ? "no" : "yes"));
+                + " number=" + (cli.withheld || cli.uri.isEmpty() ? "no" : "yes")
+                + " name=" + (cli.name.isEmpty() ? "no" : "yes"));
         if (sApp != null) {
-            JoanMmTelFeature.onIncomingCall(sApp, uri, "");
+            JoanMmTelFeature.onIncomingCall(sApp, cli.uri, cli.name);
         }
     }
 

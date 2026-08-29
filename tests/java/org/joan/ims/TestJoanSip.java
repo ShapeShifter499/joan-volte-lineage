@@ -220,6 +220,46 @@ public final class TestJoanSip {
                 "tcp extract one");
         check(JoanSipBuilder.extractOne(acc).startsWith("INVITE"),
                 "tcp extract remainder");
+        testCli();
+    }
+
+    private static void testCli() {
+        String pai = "INVITE sip:me@example.net SIP/2.0\r\n"
+                + "From: \"Alice Smith\" <sip:spoofed@evil.example>;tag=a1\r\n"
+                + "P-Asserted-Identity: <sip:+15555550100@ims.example.net>, "
+                + "<tel:+15555550100>\r\n"
+                + "Content-Length: 0\r\n\r\n";
+        JoanSipBuilder.Cli c = JoanSipBuilder.callingIdentity(pai);
+        check(!c.withheld && "tel:+15555550100".equals(c.uri),
+                "cli prefers the asserted tel: over the claimed From");
+        check("Alice Smith".equals(c.name), "cli takes display name from From");
+        String fromonly = "INVITE sip:me SIP/2.0\r\n"
+                + "From: \"Bob\" <tel:+15555558888>;tag=b2\r\n"
+                + "Content-Length: 0\r\n\r\n";
+        c = JoanSipBuilder.callingIdentity(fromonly);
+        check("tel:+15555558888".equals(c.uri) && "Bob".equals(c.name),
+                "cli falls back to From when no P-Asserted-Identity");
+        String anon = "INVITE sip:me SIP/2.0\r\n"
+                + "From: \"Anonymous\" <sip:anonymous@anonymous.invalid>;tag=c3\r\n"
+                + "Content-Length: 0\r\n\r\n";
+        c = JoanSipBuilder.callingIdentity(anon);
+        check(c.withheld && c.uri.isEmpty() && c.name.isEmpty(),
+                "withheld number leaks neither number nor name");
+        String nasty = "INVITE sip:me SIP/2.0\r\n"
+                + "From: \"bad\tname\" <tel:+15555550000>;tag=d4\r\n"
+                + "Content-Length: 0\r\n\r\n";
+        c = JoanSipBuilder.callingIdentity(nasty);
+        check(c.name.indexOf('\t') < 0 && c.name.indexOf('"') < 0,
+                "display name is stripped of control characters and quotes");
+        /* The old Java wrap "<" + pai + ">" produced a leftover '<'. */
+        String realPai = "INVITE sip:me SIP/2.0\r\n"
+                + "From: \"Alice\" <sip:user@domain>;tag=z\r\n"
+                + "P-Asserted-Identity: \"Alice\" <sip:+15555550100@ims.example.net>\r\n"
+                + "Content-Length: 0\r\n\r\n";
+        c = JoanSipBuilder.callingIdentity(realPai);
+        check(c.uri.startsWith("sip:+") && c.uri.indexOf('<') < 0,
+                "cli uri has no leftover angle bracket");
+        check("Alice".equals(c.name), "cli name from PAI/From display");
     }
 
     private static void testImei() {

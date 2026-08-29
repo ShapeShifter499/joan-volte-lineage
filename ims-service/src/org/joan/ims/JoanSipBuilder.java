@@ -699,6 +699,96 @@ final class JoanSipBuilder {
         return a.toString();
     }
 
+    static final class Cli {
+        final String uri;
+        final String name;
+        final boolean withheld;
+
+        Cli(String uri, String name, boolean withheld) {
+            this.uri = uri;
+            this.name = name;
+            this.withheld = withheld;
+        }
+    }
+
+    /**
+     * Same rules as native sip_calling_identity: P-Asserted-Identity
+     * tel: wins for the number, From supplies the display name.
+     */
+    static Cli callingIdentity(String msg) {
+        String pai = header(msg, "P-Asserted-Identity");
+        String from = header(msg, "From");
+        String uri = "";
+        String name = "";
+        if (pai != null) {
+            String pick = pai;
+            int tel = indexOfIgnoreCase(pai, "<tel:");
+            if (tel >= 0) {
+                pick = pai.substring(tel);
+            }
+            String[] p = splitNameAddr(pick);
+            uri = p[0];
+            name = p[1];
+        }
+        if (from != null) {
+            String[] p = splitNameAddr(from);
+            if (uri.isEmpty()) {
+                uri = p[0];
+            }
+            if (name.isEmpty()) {
+                name = p[1];
+            }
+        }
+        if (uri.isEmpty() || uri.toLowerCase(java.util.Locale.ROOT)
+                .contains("anonymous")) {
+            return new Cli("", "", true);
+        }
+        if (name.toLowerCase(java.util.Locale.ROOT).contains("anonymous")) {
+            name = "";
+        }
+        return new Cli(uri, name, false);
+    }
+
+    /** "Display" <uri> -> [uri, cleaned name]. */
+    static String[] splitNameAddr(String val) {
+        if (val == null) {
+            return new String[] { "", "" };
+        }
+        int lt = val.indexOf('<');
+        int gt = lt >= 0 ? val.indexOf('>', lt) : -1;
+        if (lt >= 0 && gt > lt) {
+            return new String[] {
+                    val.substring(lt + 1, gt),
+                    cleanDisplayName(val.substring(0, lt))
+            };
+        }
+        int e = 0;
+        while (e < val.length() && val.charAt(e) != ';' && val.charAt(e) != ',') {
+            e++;
+        }
+        return new String[] { cleanDisplayName(val.substring(0, e)), "" };
+    }
+
+    static String cleanDisplayName(String s) {
+        if (s == null) {
+            return "";
+        }
+        s = s.trim();
+        if (s.length() >= 2 && s.charAt(0) == '"' && s.charAt(s.length() - 1) == '"') {
+            s = s.substring(1, s.length() - 1);
+        }
+        StringBuilder b = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c < 0x20 || c == 0x7f) {
+                b.append(' ');
+            } else {
+                b.append(c);
+            }
+        }
+        return b.toString().trim();
+    }
+
     private static String aorOf(String publicId) {
         if (publicId.startsWith("tel:") || publicId.startsWith("sip:")) {
             return publicId;
