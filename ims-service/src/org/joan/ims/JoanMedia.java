@@ -135,6 +135,10 @@ final class JoanMedia {
 
     private static void capture(Context app) {
         AudioRecord rec = null;
+        long ulSumSq = 0;
+        long ulSamples = 0;
+        int ulPeak = 0;
+        boolean ulLogged = false;
         audioPriority("cap");
         try {
             int minIn = AudioRecord.getMinBufferSize(SAMPLE_HZ,
@@ -156,7 +160,9 @@ final class JoanMedia {
             byte[] rtp = new byte[RTP_HDR + PTIME_SAMPLES];
             DatagramPacket out = new DatagramPacket(
                     rtp, rtp.length, dest, dport);
-            JoanTrace.note("media cap rolling src=" + rec.getAudioSource());
+            AudioManager cam = app.getSystemService(AudioManager.class);
+            JoanTrace.note("media cap rolling src=" + rec.getAudioSource()
+                    + " mode=" + (cam == null ? -1 : cam.getMode()));
             while (sRun) {
                 int n = rec.read(pcm, 0, PTIME_SAMPLES);
                 if (n <= 0) {
@@ -164,7 +170,19 @@ final class JoanMedia {
                 }
                 int m = Math.min(n, PTIME_SAMPLES);
                 for (int i = 0; i < m; i++) {
-                    ulaw[i] = linearToUlaw(pcm[i]);
+                    short v = pcm[i];
+                    int a = v < 0 ? -v : v;
+                    ulSumSq += (long) a * a;
+                    if (a > ulPeak) {
+                        ulPeak = a;
+                    }
+                    ulaw[i] = linearToUlaw(v);
+                }
+                ulSamples += m;
+                if (!ulLogged && ulSamples >= SAMPLE_HZ * 5L) {
+                    JoanTrace.note("media ul level "
+                            + level(ulSumSq, ulSamples, ulPeak));
+                    ulLogged = true;
                 }
                 rtp[0] = (byte) 0x80;
                 rtp[1] = 0; /* PCMU */
@@ -188,12 +206,18 @@ final class JoanMedia {
             Log.w(TAG, "media cap", t);
         } finally {
             try { if (rec != null) rec.release(); } catch (Throwable ignored) {}
+            JoanTrace.note("media ul stopped "
+                    + level(ulSumSq, ulSamples, ulPeak));
         }
     }
 
     private static void playback(Context app) {
         AudioTrack trk = null;
         int dl = 0;
+        long dlSumSq = 0;
+        long dlSamples = 0;
+        int dlPeak = 0;
+        boolean dlLogged = false;
         audioPriority("play");
         try {
             AudioManager am = app.getSystemService(AudioManager.class);
@@ -250,7 +274,19 @@ final class JoanMedia {
                     continue;
                 }
                 for (int i = 0; i < m; i++) {
-                    pcm[i] = ulawToLinear(down[off + i]);
+                    short v = ulawToLinear(down[off + i]);
+                    int a = v < 0 ? -v : v;
+                    dlSumSq += (long) a * a;
+                    if (a > dlPeak) {
+                        dlPeak = a;
+                    }
+                    pcm[i] = v;
+                }
+                dlSamples += m;
+                if (!dlLogged && dlSamples >= SAMPLE_HZ * 5L) {
+                    JoanTrace.note("media dl level "
+                            + level(dlSumSq, dlSamples, dlPeak));
+                    dlLogged = true;
                 }
                 int wr = trk.write(pcm, 0, m);
                 sRecv++;
@@ -270,7 +306,8 @@ final class JoanMedia {
             Log.w(TAG, "media play", t);
         } finally {
             try { if (trk != null) trk.release(); } catch (Throwable ignored) {}
-            JoanTrace.note("media play stopped frames=" + dl);
+            JoanTrace.note("media dl stopped frames=" + dl + " "
+                    + level(dlSumSq, dlSamples, dlPeak));
         }
     }
 
@@ -328,6 +365,26 @@ final class JoanMedia {
             JoanTrace.note("media voice " + t.getClass().getSimpleName());
         }
         return null;
+    }
+
+    /**
+     * Signal level of one direction of the call, as RMS and peak dBFS.
+     *
+     * There is no gain stage anywhere between AudioRecord and the u-law
+     * encoder, so the uplink level the far end hears is exactly the level
+     * the microphone delivered. When someone reports "they said I sounded
+     * quiet" this is the number that says whether the capture is low or
+     * the problem is downstream of us.
+     */
+    private static String level(long sumSq, long samples, int peak) {
+        if (samples <= 0) {
+            return "no samples";
+        }
+        double rms = Math.sqrt((double) sumSq / (double) samples);
+        double rmsDb = rms > 0 ? 20.0 * Math.log10(rms / 32768.0) : -99.0;
+        double peakDb = peak > 0 ? 20.0 * Math.log10(peak / 32768.0) : -99.0;
+        return String.format(java.util.Locale.US,
+                "rms=%.1fdBFS peak=%.1fdBFS n=%d", rmsDb, peakDb, samples);
     }
 
     private static void put32(byte[] b, int off, int v) {
