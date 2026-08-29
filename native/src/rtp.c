@@ -290,11 +290,24 @@ static void rtp_send_rtcp(void)
         return;
     }
     ssize_t w = sendto(fd, pkt, n, 0, (struct sockaddr *)&dest, dlen);
+    int dual = 0;
+    /* RFC 5761 §5.1.3: if the answerer does not mux it MUST NOT include
+     * a=rtcp-mux and SHOULD include a=rtcp. Last T-Mobile 200 had neither
+     * (mux=0 rtcp=0) while we offered mux. SBCs that only open the RTP
+     * 5-tuple never see SR on port+1. Send the same compound packet on
+     * the RTP destination as well. Not copied from PhhIms (GPL-2.0, and
+     * that tree does not send RTCP). */
+    if (w == n && !g_rtcp_mux && !g_rtcp_remote_port && g_fd >= 0) {
+        ssize_t w2 = sendto(g_fd, pkt, n, 0,
+                            (struct sockaddr *)&g_dst, g_dlen);
+        if (w2 == n)
+            dual = 1;
+    }
     if (w == n) {
         g_rtcp_sent++;
         if (g_rtcp_sent == 1 || (g_rtcp_sent % 4) == 0)
-            klog(LOG_INFO, "rtcp sr sent=%u mux=%d rc=%d rtp sent=%u recv=%u",
-                 g_rtcp_sent, g_rtcp_mux, rc, g_sent, g_recv);
+            klog(LOG_INFO, "rtcp sr sent=%u mux=%d dual=%d rc=%d rtp sent=%u recv=%u",
+                 g_rtcp_sent, g_rtcp_mux, dual, rc, g_sent, g_recv);
     } else if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
         klog(LOG_WARN, "rtcp send errno=%d mux=%d", errno, g_rtcp_mux);
     }
