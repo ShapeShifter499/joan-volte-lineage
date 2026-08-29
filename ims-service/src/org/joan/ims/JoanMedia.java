@@ -457,15 +457,25 @@ final class JoanMedia {
             pkt[37] = 8;
             byte[] cname = "joan.ims".getBytes("US-ASCII");
             System.arraycopy(cname, 0, pkt, 38, 8);
-            /* RFC 5761: RTCP shares the RTP port only when rtcp-mux was
-             * negotiated. Otherwise it goes to the port the peer named in
-             * a=rtcp:, which parseSdp has always parsed and nothing ever
-             * used. Sending to the RTP port unconditionally -- a bring-up
-             * probe from when the answer looked silent -- put an SR+SDES
-             * into the peer's audio stream every five seconds on every
-             * non-muxed call, which is every call this handset makes. */
+            /* RFC 5761: with rtcp-mux, RTCP shares the RTP port.
+             * Otherwise it belongs on the peer's a=rtcp: port, which
+             * parseSdp parses and which we now honour instead of assuming
+             * RTP+1. */
             int port = sMux ? rtpPort : sRtcpPort;
             sock.send(new DatagramPacket(pkt, pkt.length, dest, port));
+            if (!sMux && port != rtpPort) {
+                /* And also on the RTP 5-tuple. This is load-bearing, not
+                 * a leftover probe: e7783f8 added it because this core
+                 * answers mux=0 with no a=rtcp:, and sending the SR only
+                 * to RTP+1 froze the downlink at ~16s and lost the call at
+                 * ~32s. The SBC keeps the media path bound to the RTP
+                 * 5-tuple. Removing it reproduced exactly that failure --
+                 * an answered inbound call with frames=0 downlink -- so it
+                 * stays until something proves the SBC no longer needs it.
+                 * The cost is a non-audio packet in the peer's RTP stream
+                 * every five seconds, which their jitter buffer discards. */
+                sock.send(new DatagramPacket(pkt, pkt.length, dest, rtpPort));
+            }
             sRtcpNext = now + 5000;
         } catch (Exception ignored) {
             sRtcpNext = System.currentTimeMillis() + 5000;
