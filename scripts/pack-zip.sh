@@ -76,7 +76,22 @@ subprocess.run([os.path.join(bt, 'apksigner'), 'sign',
 print('apk:', os.path.getsize(signed), 'bytes ->', signed)
 PYEOF
 
-echo "== 3. assemble recovery zip"
+echo "== 3. rro overlay build (device-default IMS for com.android.phone)"
+if [ -d rro ]; then
+    rm -rf rro/build
+    mkdir -p rro/build
+    "$BT/aapt2" compile --dir rro/res -o rro/build/res.zip
+    "$BT/aapt2" link -o rro/build/joan-ims-rro-unsigned.apk \
+        -I "$SDK/platforms/android-36/android.jar" \
+        --manifest rro/AndroidManifest.xml rro/build/res.zip \
+        --auto-add-overlay
+    "$BT/apksigner" sign --ks ims-service/build/keystore/joan-dev.jks \
+        --ks-pass pass:joanims --key-pass pass:joanims \
+        --out rro/build/joan-ims-rro.apk rro/build/joan-ims-rro-unsigned.apk
+    echo "   rro: $(stat -c%s rro/build/joan-ims-rro.apk) bytes"
+fi
+
+echo "== 4. assemble recovery zip"
 INSTALLED_SIZE=$(stat -c%s ims-service/build/joan-ims.apk)
 [ "$INSTALLED_SIZE" -gt 5000 ] || { echo "apk too small"; exit 1; }
 mkdir -p out
@@ -92,6 +107,9 @@ files = {
         os.path.join(root, 'META-INF/com/google/android/updater-script'),
     'app/joan-ims.apk': os.path.join(root,
         'ims-service/build/joan-ims.apk'),
+    'app/joan-ims-rro.apk': os.path.join(root,
+        'rro/build/joan-ims-rro.apk') if os.path.exists(
+            os.path.join(root, 'rro/build/joan-ims-rro.apk')) else None,
     'etc/permissions/org.joan.ims.xml': os.path.join(root,
         'permissions/org.joan.ims.xml') if os.path.exists(
             os.path.join(root, 'permissions/org.joan.ims.xml')) else None,
