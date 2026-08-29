@@ -221,6 +221,28 @@ Known defects:
   unauthenticated. An in-tree Lineage build compiles it out; see
   `upstream/README.md` and `joan-ims.mk`.
 
+## Planned: VoWiFi (Wi-Fi Calling)
+
+Not implemented. VoWiFi is this same IMS stack with an IKEv2/IPsec tunnel
+to the carrier's ePDG in front of it: once the tunnel is up, the phone is
+logically inside the carrier network and the existing registration and
+calling run through it unchanged. The SIP UA would bind to the tunnel
+interface instead of `rmnet_dataN` and take the P-CSCF from the IKE config
+payload rather than PCO.
+
+The framework scaffolding and the carrier provisioning are already there --
+the IMS APN is provisioned `LTE|IWLAN|LTE_CA|NR` and the WLAN registration
+slot exists -- but LineageOS ships no ePDG implementation for joan, and
+`vendor.qti.iwlan` is installed without ever being started. The shape is
+the same as VoLTE: stock LG did it on the application processor, Lineage
+strips that, and the gap has to be rebuilt.
+
+The next step is small and zip-deployable: advertise
+`REGISTRATION_TECH_IWLAN` from our `ImsService`, which is what makes the
+framework actually request a tunnel, and see whether anything attempts one.
+Measurements, the full plan and the traps are in
+[`docs/vowifi-feasibility-2026-08-29.md`](docs/vowifi-feasibility-2026-08-29.md).
+
 ## Carrier support
 
 The goal is carrier-neutral. The daemon has no compiled-in realm: it takes
