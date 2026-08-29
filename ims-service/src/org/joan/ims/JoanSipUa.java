@@ -481,6 +481,13 @@ final class JoanSipUa {
             return;
         }
         if (!"INVITE".equals(method)) {
+            /* Anything else is dropped without a reply. That is worth
+             * saying out loud: the REGISTER Contact advertises
+             * +g.3gpp.smsip and Allow lists MESSAGE, so a core is entitled
+             * to deliver SMS here as a SIP MESSAGE -- which would land
+             * exactly here and vanish. Log the method, never the message:
+             * a MESSAGE body is the text of someone's SMS. */
+            JoanTrace.note("app inbound unhandled method=" + method);
             return;
         }
         if (sCall || sHeldInvite != null) {
