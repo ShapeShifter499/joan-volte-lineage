@@ -197,3 +197,54 @@ The hand-added line was removed and nothing changed.
 `device/lge/joan-common` clones on branch `joan/volte-ims`, plus
 `docs/architecture-decision.md`. `vendor/lge/joan-ims` deliberately lives
 here, in `upstream/`, so the sources cannot drift into two copies.
+
+---
+
+## Recipe for the IpSecManager migration (gathered, not yet built)
+
+The next milestone is a **REGISTER reaching 200 OK from the app alone**, over
+`IpSecTransform`, with the daemon stopped. Everything below was read out of
+the working C implementation so it does not have to be re-derived.
+
+**AKA is already solved in Java.** `JoanAka.runIccAuth(ctx, nonceB64)`
+returns `"RES=.. CK=.. IK=.."`. No porting needed.
+
+**Key derivation** (3GPP TS 33.203 Annex I, as `native/src/xfrm.c` does it):
+
+    HMAC-SHA-1-96 auth key = IK (16 bytes) followed by 4 zero bytes -> 160 bits
+    AES-CBC       enc  key = CK (16 bytes)                          -> 128 bits
+
+**Digest** is RFC 3310 AKAv1-MD5 (`aka_digest_response_hex`):
+
+    HA1      = MD5(impi ":" realm ":" RES)      <- RES as RAW BYTES, at its
+                                                   exact length (8 or 16).
+                                                   Not hex. Not zero-padded;
+                                                   padding corrupts it.
+    HA2      = MD5("REGISTER" ":" request_uri)
+    response = MD5(hex(HA1) ":" nonce_b64 ":" nc ":" cnonce ":" qop ":" hex(HA2))
+
+`nc=00000001` and `cnonce="cnonce01"` are currently hardcoded -- a known
+defect worth fixing during the port rather than carrying over. reg2's
+Authorization also carries `integrity-protected=yes`.
+
+**Ports.** reg1 goes unprotected 5060 -> P-CSCF 5060. reg2 goes from our
+protected client port to the P-CSCF's **server** port. Replies arrive on our
+protected **server** port, not the client port it was sent from -- that cost
+a lot of time once already, so bind and select on both.
+
+**One asymmetry to think about carefully.** The C daemon installs four SAs
+but only **outbound** policies on purpose: an inbound policy caused decrypted
+replies to be dropped with `XfrmInTmplMismatch`, and Linux accepts a
+decrypted packet when no inbound policy demands otherwise. `IpSecManager` is
+a different model -- transforms are applied per socket per direction via
+`applyTransportModeTransform(socket, DIRECTION_IN|DIRECTION_OUT, t)` -- so
+that workaround does not translate directly. Expect this to be the part that
+needs real experimentation.
+
+**Run it with the daemon stopped** (`stop joan-ims`). Two SIP UAs registering
+the same subscriber at once is a good way to get one of them deregistered and
+to spend an evening blaming the wrong thing.
+
+The capability half is already proven: `spi_out_named=exact` from the app,
+against the live P-CSCF, means the SPIs the P-CSCF dictates can be
+programmed. What is unproven is the whole flow end to end.
