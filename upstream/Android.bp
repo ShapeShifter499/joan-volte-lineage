@@ -1,3 +1,61 @@
-// Moved to the repository root so a Lineage tree can
-// `inherit-product` vendor/lge/joan-ims without extra path rewriting.
-// See ../Android.bp and ../joan-ims.mk.
+// AP-side IMS stack for LG V30 (joan).
+// SPDX-License-Identifier: Apache-2.0
+//
+// Built from source in-tree. The out-of-tree recovery zip ships a static
+// prebuilt aarch64 binary because a zip has no other option; a ROM build
+// must not, because a reviewer has to be able to build this themselves.
+
+cc_binary {
+    name: "joan-ims-ua",
+    init_rc: ["root/system_ext/etc/init/joan-ims.rc"],
+    system_ext_specific: true,
+
+    srcs: [
+        "native/src/main.c",
+        "native/src/ua.c",
+        "native/src/sip.c",
+        "native/src/ctl.c",
+        "native/src/xfrm.c",
+        "native/src/config.c",
+        "native/src/secagree.c",
+        "native/src/md5.c",
+        "native/src/util.c",
+        "native/src/rtp.c",
+    ],
+    local_include_dirs: ["native/src"],
+
+    cflags: [
+        "-Wall",
+        "-Werror",
+        // Compiles out the unauthenticated loopback control listener. It
+        // exists only because a sideloaded install cannot ship the sepolicy
+        // that makes the authenticated unix socket reachable from the app.
+        // A ROM build ships that policy, so this must stay 0.
+        "-DJOAN_IMS_BRINGUP_TCP_CTL=0",
+    ],
+
+    shared_libs: ["liblog"],
+}
+
+android_app {
+    name: "JoanIms",
+    srcs: ["ims-service/src/**/*.java"],
+    manifest: "ims-service/AndroidManifest.xml",
+    system_ext_specific: true,
+
+    // Needs BIND_IMS_SERVICE and the privileged phone-state permissions,
+    // so it must be privileged and platform-signed.
+    privileged: true,
+    certificate: "platform",
+    platform_apis: true,
+
+    required: ["privapp-permissions-org.joan.ims.xml"],
+}
+
+prebuilt_etc {
+    name: "privapp-permissions-org.joan.ims.xml",
+    system_ext_specific: true,
+    sub_dir: "permissions",
+    src: "permissions/org.joan.ims.xml",
+    filename_from_src: true,
+}

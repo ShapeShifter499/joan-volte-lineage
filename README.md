@@ -170,6 +170,10 @@ so the addresses are carried but ignored for matching.
 
 Working beyond registration:
 
+- **A Dialer MO call to Google Voice held for 142 seconds** with
+  `sent=7100 recv=7100`, no 200 retransmissions, no premature teardown,
+  and hangup from our side answered `200 OK`. This previously died at
+  ~32s every time; see the To-tag defect below.
 - MO INVITE → 100 → 180 → 200 → ACK on a live answered call, with PCMU
   RTP in both directions. Dialer MO two-way audio is proven (mic to GV
   and GV heard on Joan via STREAM_MUSIC / split threads).
@@ -180,15 +184,33 @@ Working beyond registration:
   place an IMS MO call through ctl `CALL`. MT still auto-answers in the
   daemon; ringing the Dialer needs a reverse event channel.
 
+What the ~30s teardown actually was, since it cost a lot of time: a
+64-byte `to_tag` buffer silently truncated Google Voice's 81-character
+To-tag to 63. Every in-dialog request rebuilt its `To` around that
+truncated tag, so the far end could not match the ACK to its dialog --
+it retransmitted the 200 every 4s until timer H and sent BYE, and our
+BYE drew `481`. The downlink freeze at ~16s was a *symptom* of the
+unconfirmed dialog, not an RTCP problem. Fixed by echoing the dialog's
+`To`/`From` verbatim (RFC 3261 12.2.1.1) and widening the buffers.
+
 Not yet verified on device:
 
-- Holding a Dialer MO past ~30s (GV BYE after downlink freeze; RTCP
-  SR + Session-Expires UPDATE are in tree, not listen-tested).
 - MT ringing the Dialer (`notifyIncomingCall`).
 - Authenticated unix ctl without the unauthenticated TCP fallback.
 
 Known defects:
 
+- **No P-CSCF failover.** The IMS PDN advertises several P-CSCF
+  addresses; the UA takes the first and retries it forever. When that
+  node was drained mid-session, registration stayed down for ~45 minutes
+  across every retry, and only a radio bounce (which produced a
+  different primary) recovered it. It also never re-attaches the PDN
+  after repeated failures.
+- **`rc=4` is ambiguous.** `sip_send_recv_dual()` returns -1 for both a
+  failed send and a timeout, so "reg1 no reply rc=4" conflates "the
+  network said nothing" with "sendmsg failed locally". These need
+  separate codes; the ambiguity sent a debugging session down the wrong
+  path until interface counters settled it.
 - `cnonce`/`nc` are hardcoded; AKAv2-MD5 is advertised from the challenge
   but never computed (`CK`/`IK` are discarded), and a quoted
   `algorithm="..."` is silently discarded -- both matter for carriers that
@@ -214,6 +236,17 @@ carrier" and "actually works on another carrier".
 Ported from a postmarketOS VoLTE bring-up on the same handset. Kernel-side
 work (mainline joan) lives in a separate tree.
 
+## Upstreaming
+
+`upstream/` holds the in-tree form of this module for a real LineageOS
+build: own `joan_ims` SELinux domain instead of borrowing `netmgrd`,
+`system_ext` instead of `/system`, and the unauthenticated loopback
+listener compiled out. The device-tree side (a one-line
+`inherit-product` in `device/lge/joan/device.mk`) is staged separately in
+`../joan_lineageos_volte`, which also carries the architecture decision
+record. This repository stays the single source of truth for the daemon
+and app sources.
+
 ## License
 
-Not yet declared — to be settled before upstream submission.
+Apache-2.0. See `LICENSE`.
