@@ -222,6 +222,22 @@ Known defects:
   `upstream/README.md` and `joan-ims.mk`. **It is slated for removal
   along with the daemon itself** -- see below.
 
+### seapp_contexts needs no patching
+
+`plat_seapp_contexts` on a bring-up device carried a hand-added line putting
+`org.joan.ims` in `platform_app`. It is not needed and the zip does not
+install it. The APK is platform-signed, so it already gets `seinfo=platform`
+and lands in `platform_app` through the stock rule. Reverting the edit
+changed nothing: the app still starts in `platform_app`, still registers,
+and the IpSecManager spike still passes.
+
+That matters twice over. A recovery zip cannot append compiled policy --
+measured, and the reason `vendor_sepolicy.cil.bak-joan-imsd` exists as a
+zero-byte file -- so needing a policy edit would have been a real problem.
+And it means results measured on a bring-up device are valid for a clean
+flash, which is not something to assume: check what the zip actually
+installs before trusting a device's behaviour.
+
 ## Planned: remove the daemon and the loopback listener
 
 Decided direction: once the app can do everything itself, the native daemon
