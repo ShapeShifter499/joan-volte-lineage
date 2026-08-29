@@ -95,6 +95,32 @@ final class JoanDriver {
                 }
 
                 Cycle c = d.cycle;
+                if (JoanSipUa.isRegistered()) {
+                    logState("app UA still registered; refresh in 30m");
+                    Thread.sleep(30 * 60_000L);
+                    continue;
+                }
+                if (daemonDown()) {
+                    logState("attempt REGISTER via app UA");
+                    String r = JoanSipUa.register(app);
+                    boolean ok = r != null && r.contains("reg2=200");
+                    JoanTrace.note("app register: "
+                            + (r == null ? "null" : r));
+                    if (ok && JoanSipUa.isRegistered()) {
+                        JoanRegistration.setRegistered(true, c.pcscf);
+                        logState("registered via app UA; re-register in 30m");
+                        registerBackoff = REG_RETRY_MIN_MS;
+                        Thread.sleep(30 * 60_000L);
+                    } else {
+                        JoanRegistration.setRegistered(false, null);
+                        logState("app REGISTER failed; backoff "
+                                + (registerBackoff / 1000) + "s");
+                        Thread.sleep(registerBackoff);
+                        registerBackoff = Math.min(REG_RETRY_MAX_MS,
+                                registerBackoff * 2);
+                    }
+                    continue;
+                }
                 logState("attempt REGISTER via native UA");
                 if (JoanAka.registerCycle(app, c.impi, c.impu,
                         c.domain, c.imei, c.localIp, c.localPort,
@@ -617,6 +643,13 @@ final class JoanDriver {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static boolean daemonDown() {
+        String r = JoanCtl.txn("STATUS");
+        return r == null || r.isEmpty()
+                || !(r.startsWith("STATE") || r.startsWith("INFO")
+                || r.startsWith("OK") || r.startsWith("ERR"));
     }
 
     private static String stripScope(String host) {

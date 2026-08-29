@@ -167,6 +167,47 @@ public final class TestJoanSip {
                 null, null, "3GPP-NR-FDD");
         check(nr.contains("P-Access-Network-Info: 3GPP-NR-FDD"),
                 "reg1 PANI follows radio not carrier");
+        testInvite();
+    }
+
+    private static void testInvite() {
+        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                "user@ims.example.net", "sip:+15555550100@ims.example.net",
+                "ims.example.net", "2001:db8::2", 25000, 26000,
+                "123456789012345");
+        JoanSipBuilder.Dialog dlg = new JoanSipBuilder.Dialog();
+        String inv = JoanSipBuilder.buildInvite(id, dlg,
+                "tel:+15555550999", "<sip:[2001:db8::1]:5060;lr>",
+                "ipsec-3gpp;alg=hmac-sha-1-96", 40000, "3GPP-E-UTRAN-FDD");
+        check(inv != null && inv.startsWith("INVITE tel:+15555550999 SIP/2.0"),
+                "invite request-line");
+        check(inv.contains("a=rtpmap:0 PCMU/8000"), "invite PCMU first");
+        check(!inv.contains("Supported: timer"), "invite does not advertise timer");
+        check(inv.contains("m=audio 40000 RTP/AVP"), "invite rtp port");
+        String to = "SIP/2.0 200 OK\r\nTo: <sip:x@y>;tag="
+                + "t".repeat(81) + "\r\n\r\n";
+        check(JoanSipBuilder.extractToTag(to).length() == 81,
+                "81-char To-tag survives");
+        String ack = JoanSipBuilder.buildAck(id, dlg, "sip:peer@host",
+                "<sip:[2001:db8::1];lr>", "ipsec-3gpp",
+                "<sip:x@y>;tag=abc", "<sip:+15555550100@ims.example.net>;tag="
+                        + dlg.fromTag);
+        check(ack.startsWith("ACK sip:peer@host SIP/2.0"), "ack r-uri is Contact");
+        check(ack.contains("To: <sip:x@y>;tag=abc"), "ack echoes To");
+        check(ack.contains("CSeq: 1 ACK"), "ack reuses INVITE CSeq");
+        String bye = JoanSipBuilder.buildBye(id, dlg, "sip:peer@host",
+                "<sip:[2001:db8::1];lr>", "ipsec-3gpp",
+                "<sip:x@y>;tag=abc", "<sip:+15555550100@ims.example.net>;tag="
+                        + dlg.fromTag);
+        check(bye.contains("CSeq: 2 BYE"), "bye increments CSeq");
+        String sdp = "SIP/2.0 200 OK\r\n\r\nv=0\r\nc=IN IP6 2001:db8::9\r\n"
+                + "m=audio 20000 RTP/AVP 0\r\na=sendrecv\r\n";
+        JoanSipBuilder.Media m = JoanSipBuilder.parseSdp(sdp);
+        check(m != null && m.port == 20000 && "2001:db8::9".equals(m.ip),
+                "sdp parse c/m");
+        check(JoanSipBuilder.pickPublicId(
+                "<sip:a@ims>; <tel:+15555550100>").equals("tel:+15555550100"),
+                "public id prefers tel:");
     }
 
     private static void testImei() {

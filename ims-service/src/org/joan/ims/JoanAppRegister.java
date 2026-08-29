@@ -258,6 +258,15 @@ final class JoanAppRegister {
             sb.append("reg2=").append(p2.status);
             if (p2.status >= 200 && p2.status < 300) {
                 sb.append(" OK");
+                JoanSipUa.adopt(ctx, n.network, n.local, pcscf, pcscfSec.portS,
+                        sip2, pani, p1.secServer, r2,
+                        sockC, sockS, ipsec,
+                        new AutoCloseable[] { outC, inC, outS, inS,
+                                spiUeC, spiUeS, spiPeerC, spiPeerS });
+                sockC = null;
+                sockS = null;
+                outC = inC = outS = inS = null;
+                spiUeC = spiUeS = spiPeerC = spiPeerS = null;
             }
             return sb.toString();
         } catch (Exception e) {
@@ -448,7 +457,7 @@ final class JoanAppRegister {
         return null;
     }
 
-    private static String tryRecv(DatagramSocket s, byte[] buf, int timeoutMs) {
+    static String tryRecv(DatagramSocket s, byte[] buf, int timeoutMs) {
         try {
             s.setSoTimeout(Math.max(1, timeoutMs));
             DatagramPacket in = new DatagramPacket(buf, buf.length);

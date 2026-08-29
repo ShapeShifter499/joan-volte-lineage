@@ -407,6 +407,283 @@ final class JoanSipBuilder {
         return i;
     }
 
+    static final class Dialog {
+        String callId;
+        String fromTag;
+        String branch;
+        int cseq = 1;
+    }
+
+    static final class Media {
+        String ip;
+        int port;
+        boolean mux;
+        int rtcpPort;
+    }
+
+    static String sdpOffer(String ip, int rtpPort) {
+        boolean v6 = ip != null && ip.indexOf(':') >= 0;
+        String fam = v6 ? "IP6" : "IP4";
+        long sess = System.currentTimeMillis() / 1000;
+        return "v=0\r\n"
+                + "o=- " + sess + " 1 IN " + fam + " " + ip + "\r\n"
+                + "s=-\r\n"
+                + "c=IN " + fam + " " + ip + "\r\n"
+                + "t=0 0\r\n"
+                + "m=audio " + rtpPort + " RTP/AVP 0 96 97 101\r\n"
+                + "a=rtpmap:0 PCMU/8000\r\n"
+                + "a=rtpmap:96 AMR-WB/16000/1\r\n"
+                + "a=fmtp:96 octet-align=0;mode-change-capability=2\r\n"
+                + "a=rtpmap:97 AMR/8000/1\r\n"
+                + "a=fmtp:97 octet-align=0\r\n"
+                + "a=rtpmap:101 telephone-event/8000\r\n"
+                + "a=fmtp:101 0-15\r\n"
+                + "a=ptime:20\r\n"
+                + "a=maxptime:240\r\n"
+                + "a=rtcp:" + (rtpPort + 1) + "\r\n"
+                + "a=rtcp-mux\r\n"
+                + "a=sendrecv\r\n";
+    }
+
+    static String buildInvite(Id id, Dialog dlg, String dest, String route,
+                              String secVerify, int rtpPort, String pani) {
+        if (id.impu == null || id.impu.isEmpty()) {
+            return null;
+        }
+        String aor = aorOf(id.impu);
+        String host = bracket(id.localIp);
+        SecureRandom rng = new SecureRandom();
+        dlg.branch = String.format("z9hG4bK%08x%08x", rng.nextInt(), rng.nextInt());
+        dlg.callId = String.format("%08x-%04x-%04x-%04x-%06x%04x",
+                rng.nextInt(), rng.nextInt() & 0xffff, rng.nextInt() & 0xffff,
+                rng.nextInt() & 0xffff, rng.nextInt() & 0xffffff,
+                rng.nextInt() & 0xffff);
+        dlg.fromTag = String.format("%012x", rng.nextLong() & 0xffffffffffffL);
+        dlg.cseq = 1;
+        String sdp = sdpOffer(id.localIp, rtpPort);
+        String contactUser = contactUser(aor);
+        if (pani == null || pani.isEmpty()) {
+            pani = "3GPP-E-UTRAN-FDD";
+        }
+        StringBuilder a = new StringBuilder(1800);
+        a.append("INVITE ").append(dest).append(" SIP/2.0\r\n");
+        a.append("Via: SIP/2.0/UDP ").append(host).append(':')
+                .append(id.viaPort).append(";branch=").append(dlg.branch)
+                .append(";rport\r\n");
+        a.append("Max-Forwards: 70\r\n");
+        if (route != null && !route.isEmpty()) {
+            a.append("Route: ").append(route).append("\r\n");
+        }
+        a.append("From: <").append(aor).append(">;tag=")
+                .append(dlg.fromTag).append("\r\n");
+        a.append("To: <").append(dest).append(">\r\n");
+        a.append("Call-ID: ").append(dlg.callId).append("\r\n");
+        a.append("CSeq: ").append(dlg.cseq).append(" INVITE\r\n");
+        a.append("Contact: <sip:").append(contactUser).append('@')
+                .append(host).append(':').append(id.contactPort)
+                .append(">;+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\";audio\r\n");
+        a.append("P-Preferred-Identity: <").append(aor).append(">\r\n");
+        a.append("P-Access-Network-Info: ").append(pani).append("\r\n");
+        a.append("Allow: INVITE, ACK, CANCEL, BYE, UPDATE, PRACK, INFO, OPTIONS\r\n");
+        a.append("Supported: replaces\r\n");
+        a.append("Require: sec-agree\r\n");
+        a.append("Proxy-Require: sec-agree\r\n");
+        if (secVerify != null && !secVerify.isEmpty()) {
+            a.append("Security-Verify: ").append(secVerify).append("\r\n");
+        }
+        a.append("Accept-Contact: *;+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\"\r\n");
+        a.append("Content-Type: application/sdp\r\n");
+        a.append("Content-Length: ").append(sdp.length()).append("\r\n\r\n");
+        a.append(sdp);
+        return a.toString();
+    }
+
+    static String buildAck(Id id, Dialog dlg, String target, String route,
+                           String secVerify, String toHdr, String fromHdr) {
+        return inDialog("ACK", id, dlg, target, route, secVerify,
+                toHdr, fromHdr, dlg.cseq, null);
+    }
+
+    static String buildBye(Id id, Dialog dlg, String target, String route,
+                           String secVerify, String toHdr, String fromHdr) {
+        return inDialog("BYE", id, dlg, target, route, secVerify,
+                toHdr, fromHdr, dlg.cseq + 1, null);
+    }
+
+    static String buildPrack(Id id, Dialog dlg, String target, String route,
+                             String secVerify, String toHdr, String fromHdr,
+                             int rseq) {
+        return inDialog("PRACK", id, dlg, target, route, secVerify,
+                toHdr, fromHdr, dlg.cseq + 1,
+                "RAck: " + rseq + " " + dlg.cseq + " INVITE\r\n");
+    }
+
+    static String extractToTag(String msg) {
+        String to = header(msg, "To");
+        if (to == null) {
+            to = header(msg, "t");
+        }
+        if (to == null) {
+            return "";
+        }
+        int i = indexOfIgnoreCase(to, "tag=");
+        if (i < 0) {
+            return "";
+        }
+        int v = i + 4;
+        int e = v;
+        while (e < to.length()) {
+            char c = to.charAt(e);
+            if (c == ';' || c == '>' || c == ' ') {
+                break;
+            }
+            e++;
+        }
+        int n = e - v;
+        if (n > 190) {
+            n = 190;
+        }
+        return to.substring(v, v + n);
+    }
+
+    static String pickPublicId(String pAssociated) {
+        if (pAssociated == null) {
+            return "";
+        }
+        String pick = extractAngle(pAssociated, "<tel:");
+        if (pick == null) {
+            pick = extractAngle(pAssociated, "<sip:");
+        }
+        return pick == null ? "" : pick;
+    }
+
+    static String contactUri(String contact) {
+        if (contact == null) {
+            return "";
+        }
+        int lt = contact.indexOf('<');
+        int gt = contact.indexOf('>');
+        if (lt >= 0 && gt > lt) {
+            return contact.substring(lt + 1, gt);
+        }
+        return contact.trim();
+    }
+
+    static Media parseSdp(String msg) {
+        String body = msg;
+        int sep = msg.indexOf("\r\n\r\n");
+        if (sep >= 0) {
+            body = msg.substring(sep + 4);
+        }
+        Media m = new Media();
+        for (String line : body.split("\r\n")) {
+            if (line.startsWith("c=IN IP6 ")) {
+                m.ip = line.substring(9).trim();
+            } else if (line.startsWith("c=IN IP4 ")) {
+                m.ip = line.substring(9).trim();
+            } else if (line.startsWith("m=audio ")) {
+                String rest = line.substring(8).trim();
+                int sp = rest.indexOf(' ');
+                try {
+                    m.port = Integer.parseInt(sp < 0 ? rest : rest.substring(0, sp));
+                } catch (NumberFormatException ignored) {
+                    m.port = 0;
+                }
+            } else if (line.equalsIgnoreCase("a=rtcp-mux")) {
+                m.mux = true;
+            } else if (line.startsWith("a=rtcp:")) {
+                try {
+                    String p = line.substring(7).trim();
+                    int sp = p.indexOf(' ');
+                    m.rtcpPort = Integer.parseInt(sp < 0 ? p : p.substring(0, sp));
+                } catch (NumberFormatException ignored) {
+                    m.rtcpPort = 0;
+                }
+            }
+        }
+        if (m.port > 0 && m.rtcpPort == 0 && !m.mux) {
+            m.rtcpPort = m.port + 1;
+        }
+        return m.ip != null && m.port > 0 ? m : null;
+    }
+
+    static String requestMethod(String msg) {
+        if (msg == null || msg.startsWith("SIP/2.0 ")) {
+            return "";
+        }
+        int sp = msg.indexOf(' ');
+        return sp < 0 ? "" : msg.substring(0, sp);
+    }
+
+    private static String inDialog(String method, Id id, Dialog dlg,
+                                   String target, String route, String secVerify,
+                                   String toHdr, String fromHdr, int cseq,
+                                   String extra) {
+        String aor = aorOf(id.impu != null && !id.impu.isEmpty()
+                ? id.impu : id.impi);
+        String host = bracket(id.localIp);
+        SecureRandom rng = new SecureRandom();
+        String branch = String.format("z9hG4bK%08x%08x", rng.nextInt(), rng.nextInt());
+        StringBuilder a = new StringBuilder(1200);
+        a.append(method).append(' ').append(target).append(" SIP/2.0\r\n");
+        a.append("Via: SIP/2.0/UDP ").append(host).append(':')
+                .append(id.viaPort).append(";branch=").append(branch)
+                .append(";rport\r\n");
+        a.append("Max-Forwards: 70\r\n");
+        if (route != null && !route.isEmpty()) {
+            a.append("Route: ").append(route).append("\r\n");
+        }
+        if (fromHdr != null && !fromHdr.isEmpty()) {
+            a.append("From: ").append(fromHdr).append("\r\n");
+        } else {
+            a.append("From: <").append(aor).append(">;tag=")
+                    .append(dlg.fromTag).append("\r\n");
+        }
+        if (toHdr != null && !toHdr.isEmpty()) {
+            a.append("To: ").append(toHdr).append("\r\n");
+        }
+        a.append("Call-ID: ").append(dlg.callId).append("\r\n");
+        a.append("CSeq: ").append(cseq).append(' ').append(method).append("\r\n");
+        if (extra != null) {
+            a.append(extra);
+        }
+        if (secVerify != null && !secVerify.isEmpty()) {
+            a.append("Security-Verify: ").append(secVerify).append("\r\n");
+        }
+        a.append("Content-Length: 0\r\n\r\n");
+        return a.toString();
+    }
+
+    private static String aorOf(String publicId) {
+        if (publicId.startsWith("tel:") || publicId.startsWith("sip:")) {
+            return publicId;
+        }
+        return "sip:" + publicId;
+    }
+
+    private static String contactUser(String aor) {
+        String cu = aor;
+        if (cu.startsWith("sip:")) {
+            cu = cu.substring(4);
+        } else if (cu.startsWith("tel:")) {
+            cu = cu.substring(4);
+        }
+        int at = cu.indexOf('@');
+        return at >= 0 ? cu.substring(0, at) : cu;
+    }
+
+    private static String extractAngle(String s, String start) {
+        int i = s.indexOf(start);
+        if (i < 0) {
+            return null;
+        }
+        int gt = s.indexOf('>', i);
+        if (gt < 0) {
+            return null;
+        }
+        return s.substring(i + 1, gt);
+    }
+
     private static int indexOfIgnoreCase(String hay, String needle) {
         return hay.toLowerCase(java.util.Locale.ROOT)
                 .indexOf(needle.toLowerCase(java.util.Locale.ROOT));

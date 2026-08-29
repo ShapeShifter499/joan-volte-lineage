@@ -69,8 +69,13 @@ public class JoanMmTelFeature extends MmTelFeature {
         if (f == null) {
             Log.w(TAG, "incoming call but no MmTelFeature; cannot ring");
             JoanTrace.note("incoming with no feature");
-            new Thread(() -> JoanCtl.txn("REJECT 486"),
-                    "joan-ims-noferature-reject").start();
+            new Thread(() -> {
+                if (JoanSipUa.isRegistered()) {
+                    JoanSipUa.reject(486);
+                } else {
+                    JoanCtl.txn("REJECT 486");
+                }
+            }, "joan-ims-noferature-reject").start();
             return;
         }
         try {
@@ -87,8 +92,13 @@ public class JoanMmTelFeature extends MmTelFeature {
         } catch (Throwable t) {
             Log.w(TAG, "notifyIncomingCall failed", t);
             JoanTrace.note("incoming failed " + t.getClass().getSimpleName());
-            new Thread(() -> JoanCtl.txn("REJECT 486"),
-                    "joan-ims-fail-reject").start();
+            new Thread(() -> {
+                if (JoanSipUa.isRegistered()) {
+                    JoanSipUa.reject(486);
+                } else {
+                    JoanCtl.txn("REJECT 486");
+                }
+            }, "joan-ims-fail-reject").start();
         }
     }
 

@@ -106,6 +106,19 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             uri = "tel:" + callee;
         }
         new Thread(() -> {
+            if (JoanSipUa.isRegistered()) {
+                String resp = JoanSipUa.invite(uri);
+                if (resp != null && resp.startsWith("OK")) {
+                    state = STATE_ESTABLISHED;
+                    notifyStarted(used);
+                    feature.useAndroidAudioHandler();
+                    startMedia();
+                    watchRemoteHangup();
+                } else {
+                    failStart(resp == null ? "invite failed" : resp);
+                }
+                return;
+            }
             String resp = JoanCtl.txn("CALL " + uri);
             if (resp != null && resp.startsWith("OK")) {
                 state = STATE_ESTABLISHED;
@@ -132,6 +145,23 @@ public class JoanCallSession extends ImsCallSessionImplBase {
         /* The INVITE is still unanswered: the daemon must send the 200 OK
          * before we can claim the call is up. Off the binder thread. */
         new Thread(() -> {
+            if (JoanSipUa.isRegistered()) {
+                String resp = JoanSipUa.answer();
+                if (resp != null && resp.startsWith("OK")) {
+                    state = STATE_ESTABLISHED;
+                    notifyStarted(profile);
+                    feature.useAndroidAudioHandler();
+                    startMedia();
+                    watchRemoteHangup();
+                    JoanTrace.note("incoming call answered");
+                } else {
+                    Log.w(TAG, "ANSWER refused by app UA");
+                    JoanTrace.note("incoming answer failed");
+                    state = STATE_TERMINATED;
+                    notifyTerminated(0);
+                }
+                return;
+            }
             String resp = JoanCtl.txn("ANSWER");
             if (resp != null && resp.startsWith("OK")) {
                 state = STATE_ESTABLISHED;
@@ -155,8 +185,13 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             /* 603 Decline says the user refused; 486 would claim we are
              * busy, which sends some callers to a different treatment. */
             state = STATE_TERMINATED;
-            new Thread(() -> JoanCtl.txn("REJECT 603"),
-                    "joan-ims-reject").start();
+            new Thread(() -> {
+                if (JoanSipUa.isRegistered()) {
+                    JoanSipUa.reject(603);
+                } else {
+                    JoanCtl.txn("REJECT 603");
+                }
+            }, "joan-ims-reject").start();
             notifyTerminated(reason);
             return;
         }
@@ -175,7 +210,13 @@ public class JoanCallSession extends ImsCallSessionImplBase {
     private void hangupAsync() {
         watchHangup = false;
         JoanMedia.stop();
-        new Thread(() -> JoanCtl.txn("HANGUP"), "joan-ims-hangup").start();
+        new Thread(() -> {
+            if (JoanSipUa.isRegistered()) {
+                JoanSipUa.hangup();
+            } else {
+                JoanCtl.txn("HANGUP");
+            }
+        }, "joan-ims-hangup").start();
     }
 
     private void watchRemoteHangup() {
@@ -188,13 +229,20 @@ public class JoanCallSession extends ImsCallSessionImplBase {
                     if (!watchHangup) {
                         return;
                     }
-                    String st = JoanCtl.txn("STATUS");
-                    if (st == null) {
-                        continue;
-                    }
-                    if (st.contains("CALL=1")) {
-                        seenUp = true;
-                        continue;
+                    if (JoanSipUa.isRegistered()) {
+                        if (JoanSipUa.callActive()) {
+                            seenUp = true;
+                            continue;
+                        }
+                    } else {
+                        String st = JoanCtl.txn("STATUS");
+                        if (st == null) {
+                            continue;
+                        }
+                        if (st.contains("CALL=1")) {
+                            seenUp = true;
+                            continue;
+                        }
                     }
                     if (seenUp) {
                         JoanTrace.note("remote hangup STATUS without CALL=1");
@@ -261,6 +309,16 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             l.callSessionTerminated(new ImsReasonInfo(reason, 0, "hangup"));
         } catch (Throwable t) {
             Log.w(TAG, "term notify " + t.getClass().getSimpleName());
+        }
+    }
+
+    private void startMedia() {
+        if (JoanSipUa.mediaIp() != null) {
+            JoanMedia.startRtp(app, JoanSipUa.network(), JoanSipUa.localAddr(),
+                    JoanSipUa.mediaIp(), JoanSipUa.mediaPort(),
+                    JoanSipUa.mediaMux());
+        } else {
+            JoanMedia.start(app);
         }
     }
 
