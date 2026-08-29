@@ -10,64 +10,20 @@ stock-shaped Android ROM. The longer-term intent is to offer this upstream so
 LineageOS can ship working VoLTE for joan rather than requiring a side-load.
 
 > **Status: REGISTER 200, MO and MT PCMU, and Dialer two-way audio work on
-> LineageOS 22.2.** Live answered Dialer MO carried mic to GV and GV on
-> Joan (STREAM_MUSIC, split cap/play). Speaker/earpiece follows Dialer.
-> Calls still drop around 30s — RTCP/Session-Expires keepalive is the
-> next measurement. See [Current state](#current-state).
+> LineageOS 22.2 from the ImsService alone.** SIP, AKA, and IPsec run in
+> the app over `IpSecTransform`. The unauthenticated `127.0.0.1:15090`
+> joan-ims listener is gone. Native sources stay in `native/` as a
+> fallback, not a boot service.
 
 ## How it works
 
-Two pieces, because Android splits the problem in two:
+The ImsService (`org.joan.ims`) is the SIP user agent: ISIM AKA, RFC 3329
+sec-agree, `IpSecManager` transport-mode ESP, REGISTER/INVITE/RTP.
+`MmTelFeature.setCallAudioHandler(ANDROID)` puts audio on the
+voice-communication stream; Dialer owns routing.
 
-| Component | Lives in | Role |
-|---|---|---|
-| `joan-ims-ua` | `native/` (C, static aarch64) | The SIP/AKA/IPsec user agent. Builds REGISTER, runs RFC 3310 digest AKA, installs the IPsec SAs the P-CSCF demands. |
-| `org.joan.ims` | `ims-service/` (Java) | An Android `ImsService`. Talks to the SIM for AKA, and drives the daemon. |
-
-They are split because neither half can do the other's job:
-
-- The Java service **cannot program IPsec**. Writing xfrm from an app domain
-  is blocked by a platform `neverallow`, so the native helper is not an
-  optimisation — it is the only way.
-- The native daemon **cannot talk to the SIM**. AKA authentication goes
-  through the telephony framework, which is Java-side.
-
-So the app performs the ISIM AKA exchange and hands the daemon the resulting
-`RES`/`CK`/`IK`, and the daemon does the networking.
-
-The daemon runs from `/system/bin/joan-ims-ua` in SELinux domain `netmgrd`,
-because that domain already holds the kernel xfrm permissions this needs.
-It lives on `/system` rather than `/vendor` because joan's dynamic-partition
-layout leaves the vendor logical partition with no free space.
-
-### Control channel
-
-The app reaches the daemon over the abstract unix socket `@joan_ims_ctl`,
-one request line to one response line (`REG1`, `REG2`, `NET`, `ID`,
-`STATUS`, …).
-
-The daemon authenticates every peer with `SO_PEERCRED` and refuses any uid
-not on its allowlist — uid 0, plus whatever
-`/data/vendor/netmgr/joan-ims.allowuid` lists (one uid per line). This
-matters because `REG2` carries AKA key material.
-
-That unix socket is **not currently reachable from the IMS app.** Connecting
-from `priv_app` to the daemon's `netmgrd` domain needs an allow rule for
-`unix_stream_socket connectto`, and a sideloaded zip cannot load a policy
-append on this device — the app gets `EACCES`.
-
-So the daemon also listens on `127.0.0.1:15090`, and today that is the only
-route the app can actually use: TCP has no `connectto` check. **It is
-unauthenticated and must not ship enabled.** Any app holding `INTERNET` can
-reach it, and `REG2` carries AKA key material. Identifying a TCP peer would
-mean reading `/proc/net/tcp`, which returns `EACCES` from `netmgrd`
-(measured on-device), so it cannot be secured in place.
-
-It is guarded by `JOAN_IMS_BRINGUP_TCP_CTL` and announces itself at WARN as
-bring-up only. An in-ROM install — the upstream target — ships sepolicy with
-the image, which makes the unix socket reachable; the flag is then compiled
-out and the authenticated transport is the only one left. `JoanCtl` already
-tries the unix socket first, so it moves over automatically.
+The C daemon in `native/` was the bring-up path. It is not started and
+is not in the recovery zip. Do not re-enable `127.0.0.1:15090`.
 
 ## Building
 

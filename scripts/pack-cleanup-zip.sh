@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Pack the cleanup-only zip: removes legacy /vendor + current /system
-# joan-ims installs. Flash before joan-volte-recovery.zip when migrating.
+# Pack the uninstaller zip: removes JoanIms and leftover joan-ims files.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
@@ -9,7 +8,7 @@ python3 - "$ROOT" <<'PYEOF'
 import os, sys, zipfile
 
 root = sys.argv[1]
-out = os.path.join(root, 'out', 'joan-volte-cleanup.zip')
+out = os.path.join(root, 'out', 'joan-volte-uninstall.zip')
 files = {
     'META-INF/com/google/android/update-binary':
         os.path.join(root, 'scripts', 'update-binary-cleanup'),

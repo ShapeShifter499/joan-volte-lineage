@@ -10,19 +10,13 @@ OUT=$ROOT/out
 SDK=${ANDROID_SDK:-$HOME/Android/Sdk}
 BT=$(ls -d "$SDK"/build-tools/* | sort | tail -1)
 
-echo "== 1. native device binary"
-make -C native device >/dev/null 2>&1 || {
-    echo "native build failed"; exit 1;
-}
-echo "   $(ls -l native/build/joan-ims-aarch64 | awk '{print $5, $9}')"
-
-echo "== 2. host unit tests (sanity gate)"
+echo "== 1. native host tests (daemon no longer shipped)"
 ./tests/run-host-tests.sh > /tmp/joan-pack-tests.log 2>&1 || {
     cat /tmp/joan-pack-tests.log; exit 1;
 }
 echo "   ok: $(tail -1 /tmp/joan-pack-tests.log)"
 
-echo "== 3. apk build"
+echo "== 2. apk build"
 # Clean first: stale .class files from earlier builds must never leak
 # into the dex (the dead JoanSip draft shipped that way once).
 rm -rf ims-service/build/obj ims-service/build/dex
@@ -82,11 +76,9 @@ subprocess.run([os.path.join(bt, 'apksigner'), 'sign',
 print('apk:', os.path.getsize(signed), 'bytes ->', signed)
 PYEOF
 
-echo "== 4. assemble recovery zip"
+echo "== 3. assemble recovery zip"
 INSTALLED_SIZE=$(stat -c%s ims-service/build/joan-ims.apk)
 [ "$INSTALLED_SIZE" -gt 5000 ] || { echo "apk too small"; exit 1; }
-mkdir -p root/system/bin
-cp native/build/joan-ims-aarch64 root/system/bin/joan-ims
 mkdir -p out
 python3 - "$ROOT" <<'PYEOF2'
 import os, sys, zipfile
@@ -98,10 +90,6 @@ files = {
         os.path.join(root, 'scripts', 'update-binary'),
     'META-INF/com/google/android/updater-script':
         os.path.join(root, 'META-INF/com/google/android/updater-script'),
-    'system/bin/joan-ims':
-        os.path.join(root, 'root/system/bin/joan-ims'),
-    'system/etc/init/joan-ims.rc':
-        os.path.join(root, 'root/system/etc/init/joan-ims.rc'),
     'app/joan-ims.apk': os.path.join(root,
         'ims-service/build/joan-ims.apk'),
     'etc/permissions/org.joan.ims.xml': os.path.join(root,

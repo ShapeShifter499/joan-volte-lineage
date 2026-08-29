@@ -1,11 +1,8 @@
 #!/sbin/sh
 # Lineage recovery installer — joan-volte (no Magisk, no CIL append).
 #
-# v4: /system layout. The daemon + rc moved from /vendor to /system
-# (/vendor is a zero-headroom logical partition on joan — recovery writes
-# fail with "ERROR: write /vendor/bin/joan-ims"). SELinux binds by label,
-# not path, so netmgrd_exec works identically on /system/bin.
-# Also removes the legacy /vendor install if present (best-effort).
+# v5: ImsService only. The unauthenticated 127.0.0.1:15090 joan-ims
+# daemon is removed; SIP lives in the app over IpSecTransform.
 OUTFD="/proc/self/fd/$2"
 ZIP="$3"
 TMP=/tmp/joan-volte
@@ -43,14 +40,12 @@ copy_file() {
   chcon "$con" "$dst" 2>/dev/null || true
 }
 
-ui_print "joan-volte v4: joan-ims + ImsService apk (system layout)"
+ui_print "joan-volte v5: ImsService apk (no loopback ctl daemon)"
 
 rm -rf "$TMP"
 mkdir -p "$TMP"
 unzip -o "$ZIP" -d "$TMP" || error "unzip failed"
 
-need_file "$TMP/system/bin/joan-ims" 10000
-need_file "$TMP/system/etc/init/joan-ims.rc" 80
 need_file "$TMP/app/joan-ims.apk" 5000
 
 ui_print "Mounting system rw"
@@ -58,9 +53,10 @@ mount -o rw,remount / 2>/dev/null || true
 mkdir -p /system/priv-app/JoanIms
 chmod 755 /system/priv-app/JoanIms 2>/dev/null || true
 
-ui_print "Installing joan-ims-ua (netmgrd_exec label)"
-copy_file "$TMP/system/bin/joan-ims" /system/bin/joan-ims-ua 755 u:object_r:netmgrd_exec:s0
-copy_file "$TMP/system/etc/init/joan-ims.rc" /system/etc/init/joan-ims.rc 644 u:object_r:system_file:s0
+ui_print "Removing joan-ims loopback listener"
+rm -f /system/bin/joan-ims /system/bin/joan-ims-ua \
+      /system/etc/init/joan-ims.rc /system/etc/init/joan-imsd.rc
+rm -f /system_ext/bin/joan-ims-ua /system_ext/etc/init/joan-ims.rc
 
 ui_print "Installing ImsService priv-app"
 copy_file "$TMP/app/joan-ims.apk" /system/priv-app/JoanIms/JoanIms.apk 644 u:object_r:system_file:s0
@@ -73,9 +69,6 @@ if [ -f "$TMP/etc/permissions/android.hardware.telephony.ims.xml" ]; then
     /system/etc/permissions/android.hardware.telephony.ims.xml 644 u:object_r:system_file:s0
 fi
 
-# Best-effort removal of the legacy /vendor install (would double-start
-# the daemon otherwise). Vendor mount in recovery is flaky on dynamic
-# partitions, so never fail the install over this.
 ui_print "Legacy /vendor cleanup (best-effort)"
 if mount -o rw,remount /vendor 2>/dev/null; then
   rm -f /vendor/bin/joan-ims /vendor/etc/init/joan-ims.rc
@@ -83,7 +76,6 @@ if mount -o rw,remount /vendor 2>/dev/null; then
 else
   ui_print "  WARN: vendor rw remount failed; flash cleanup zip first"
 fi
-
 
 sync
 ui_print "Done. Reboot system."
