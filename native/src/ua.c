@@ -68,6 +68,10 @@ static struct {
     int  active;
     int  se_sec;           /* RFC 4028 Session-Expires; 0 = none */
     int  se_uac;           /* 1 if we are the refresher */
+    /* RFC 3261 13.2.2.4: the UAC must re-send the ACK for every
+     * retransmitted 2xx, so it has to outlive ua_call_invite(). */
+    char ack[SIP_MAX_MSG];
+    int  ack_len;
     long refresh_at;
 } g_call;
 static ua_state_t g_state;
@@ -913,9 +917,13 @@ int ua_call_invite(const char *dest)
                                dest, g_call.route[0] ? g_call.route
                                                      : g_reg.service_route,
                                g_reg.sec_verify, &dlg, to_tag);
+            if (an > 0 && (size_t)an <= sizeof(g_call.ack)) {
+                memcpy(g_call.ack, ack, (size_t)an);
+                g_call.ack_len = an;
+            }
             if (an > 0 && sip_sendto(s, g_reg.pcscf_port_s, ack,
                                      (size_t)an) == 0)
-                klog(LOG_INFO, "call answered, ACK sent");
+                klog(LOG_INFO, "call answered, ACK sent %d B", an);
             else
                 klog(LOG_WARN, "call answered but ACK failed");
             media_from_sip(rx);
@@ -1058,6 +1066,23 @@ static void handle_sip_request(char *rx, size_t r)
         if (!strncmp(rx, "SIP/2.0", 7))
             code = atoi(rx + 8);
         klog(LOG_INFO, "inbound datagram (%zu B): response %d", r, code);
+        /* A 2xx repeating on the INVITE means the far end never accepted
+         * our ACK; it will tear the call down on timer H if we stay quiet.
+         * RFC 3261 13.2.2.4: answer every retransmission. */
+        if (code >= 200 && code < 300 && g_call.active && g_call.ack_len > 0) {
+            sip_response_t rr;
+            if (parse_response(rx, r, &rr) == 0 &&
+                !strcasecmp(rr.cseq_method, "INVITE") &&
+                rr.call_id[0] &&
+                !strcmp(rr.call_id, g_call.dlg.call_id)) {
+                if (sip_sendto(g_port_c_fd, g_reg.pcscf_port_s,
+                               g_call.ack, (size_t)g_call.ack_len) == 0)
+                    klog(LOG_INFO, "2xx retransmit: ACK re-sent %d B",
+                         g_call.ack_len);
+                else
+                    klog(LOG_WARN, "2xx retransmit: ACK re-send failed");
+            }
+        }
         return;
     }
     klog(LOG_INFO, "inbound datagram (%zu B): %s", r, method);
