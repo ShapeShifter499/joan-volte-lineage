@@ -117,14 +117,6 @@ if [ -f "$TMP/app/joan-ims-rro.apk" ]; then
     /product/overlay/JoanImsPhoneDefault.apk 644 u:object_r:system_file:s0
 fi
 
-ui_print "Legacy /vendor cleanup (best-effort)"
-if mount -o rw,remount /vendor 2>/dev/null; then
-  rm -f /vendor/bin/joan-ims /vendor/etc/init/joan-ims.rc
-  ui_print "  legacy vendor files removed (or absent)"
-else
-  ui_print "  WARN: vendor rw remount failed; flash cleanup zip first"
-fi
-
 sync
 ui_print "Done. Reboot system."
 exit 0

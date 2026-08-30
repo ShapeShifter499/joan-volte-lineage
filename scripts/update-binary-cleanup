@@ -1,6 +1,9 @@
 #!/sbin/sh
-# joan-volte uninstaller. Removes the ImsService priv-app and any leftover
-# joan-ims daemon files from this device. Never fails on absent files.
+# joan-volte uninstaller. Removes the ImsService priv-app, the
+# device-default IMS overlay, and any leftover joan-ims daemon files from
+# this device. Never fails on absent files. No /vendor work: the old
+# daemon only ever shipped to two dev handsets, and those were already
+# cleaned (kept out of the release zips since v0.2.1).
 OUTFD="/proc/self/fd/$2"
 
 ui_print() {
@@ -18,10 +21,9 @@ rm -f /system/bin/joan-ims /system/bin/joan-ims-ua \
 rm -f /system_ext/bin/joan-ims-ua /system_ext/etc/init/joan-ims.rc
 ui_print "  /system: JoanIms + leftovers removed (or absent)"
 
-if mount -o rw,remount /vendor 2>/dev/null; then
-  rm -f /vendor/bin/joan-ims /vendor/etc/init/joan-ims.rc
-  ui_print "  /vendor: leftovers removed (or absent)"
-fi
+mount -o rw,remount /product 2>/dev/null || true
+rm -f /product/overlay/JoanImsPhoneDefault.apk
+ui_print "  /product: overlay removed (or absent)"
 
 sync
 ui_print "Uninstall done. Reboot system."
