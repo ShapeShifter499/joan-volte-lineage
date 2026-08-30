@@ -7,10 +7,9 @@
 LOCAL_PATH := $(dir $(lastword $(MAKEFILE_LIST)))
 
 PRODUCT_PACKAGES += \
-    JoanIms
+    JoanIms \
+    JoanImsPhoneDefault
 
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)permissions/android.hardware.telephony.ims.xml:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/permissions/android.hardware.telephony.ims.xml \
     $(LOCAL_PATH)permissions/org.joan.ims.xml:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/permissions/org.joan.ims.xml
-
-PRODUCT_PACKAGE_OVERLAYS += $(LOCAL_PATH)overlay

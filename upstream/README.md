@@ -22,7 +22,7 @@ point `LOCAL_PATH` at a checkout that also contains `ims-service/` and
 
     Android.bp          JoanIms privileged app
     joan-ims.mk         PRODUCT_PACKAGES + overlays + IMS feature xml
-    overlay/            config_ims_mmtel_package (if present)
+    rro/                JoanImsPhoneDefault RRO: config_ims_mmtel_package
     permissions/        telephony.ims feature + privapp allowlist
 
 ## Do not

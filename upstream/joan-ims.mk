@@ -7,11 +7,12 @@
 LOCAL_PATH := $(dir $(lastword $(MAKEFILE_LIST)))
 
 PRODUCT_PACKAGES += \
-    JoanIms
+    JoanIms \
+    JoanImsPhoneDefault
 
 # IMS feature flag the framework reads to construct ImsResolver.
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)../permissions/android.hardware.telephony.ims.xml:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/permissions/android.hardware.telephony.ims.xml
 
-# Tells PhoneGlobals which package implements ImsService.
-PRODUCT_PACKAGE_OVERLAYS += $(LOCAL_PATH)../overlay
+# Tells PhoneGlobals which package implements ImsService. Shipped as the
+# JoanImsPhoneDefault RRO above, the same apk the zip installs.

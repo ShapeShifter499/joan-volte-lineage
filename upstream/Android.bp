@@ -21,3 +21,19 @@ prebuilt_etc {
     src: "../permissions/org.joan.ims.xml",
     filename_from_src: true,
 }
+
+// The device-default ImsService pointer, as a runtime resource overlay.
+//
+// This is the same apk the flashable zip installs to /product/overlay. It
+// replaces a PRODUCT_PACKAGE_OVERLAYS directory that carried the identical
+// string: a build-time overlay cannot be shipped in a zip, and keeping both
+// meant two sources of truth for one resource. An RRO serves both paths, and
+// build-time overlays are the legacy mechanism -- they cannot cross a
+// Treble system/vendor split, which an RRO can.
+runtime_resource_overlay {
+    name: "JoanImsPhoneDefault",
+    manifest: "../rro/AndroidManifest.xml",
+    resource_dirs: ["../rro/res"],
+    certificate: "platform",
+    product_specific: true,
+}
