@@ -381,10 +381,20 @@ public final class TestJoanSip {
                 "ims.example", "2600::5", 5000, 5001, "123456789012345");
         String inv = JoanSipBuilder.buildInvite(id, new JoanSipBuilder.Dialog(),
                 "tel:+15555550111", null, null, 40000, "3GPP-E-UTRAN-FDD");
-        check(inv.contains("m=audio 40000 RTP/AVP 0\r\n"),
-                "offer lists PCMU and nothing else");
-        for (String codec : new String[] { "AMR-WB", "AMR/8000",
-                "telephone-event" }) {
+        /* Offer exactly what is implemented: AMR-WB (JoanAmrCodec plus
+         * JoanAmr's RFC 4867 framing) and PCMU, wideband first. */
+        check(inv.contains("m=audio 40000 RTP/AVP 96 0\r\n"),
+                "offer lists AMR-WB then PCMU");
+        check(inv.contains("a=rtpmap:96 AMR-WB/16000/1"),
+                "offer names AMR-WB at the dynamic payload type");
+        check(inv.contains("a=rtpmap:0 PCMU/8000"),
+                "offer keeps PCMU as fallback");
+        /* Bandwidth-efficient packing is not implemented, so it must not
+         * be negotiated by leaving octet-align out -- its absence means
+         * bandwidth-efficient, not "either". */
+        check(inv.contains("octet-align=1"),
+                "offer requires octet-aligned AMR");
+        for (String codec : new String[] { "AMR/8000", "telephone-event" }) {
             check(!inv.contains(codec), "offer does not promise " + codec);
         }
 
@@ -395,6 +405,22 @@ public final class TestJoanSip {
         JoanSipBuilder.Media m = JoanSipBuilder.parseSdp(amrAnswer);
         check(m != null && m.payloadType == 96 && !m.offersPcmu,
                 "an AMR-WB answer is recognised as not PCMU");
+        check(m != null && "AMR-WB".equals(m.codecName),
+                "rtpmap names the selected codec");
+        String pcmuAns = "SIP/2.0 200 OK\r\n\r\nv=0\r\n"
+                + "c=IN IP6 2600::9\r\n"
+                + "m=audio 21000 RTP/AVP 0\r\n"
+                + "a=rtpmap:0 PCMU/8000\r\n";
+        JoanSipBuilder.Media pm = JoanSipBuilder.parseSdp(pcmuAns);
+        check(pm != null && "PCMU".equals(pm.codecName),
+                "a PCMU answer names PCMU");
+        String other = "SIP/2.0 200 OK\r\n\r\nv=0\r\n"
+                + "c=IN IP6 2600::9\r\n"
+                + "m=audio 21000 RTP/AVP 97\r\n"
+                + "a=rtpmap:97 G729/8000\r\n";
+        JoanSipBuilder.Media om = JoanSipBuilder.parseSdp(other);
+        check(om != null && "G729".equals(om.codecName),
+                "an unimplemented codec is named, not mistaken for AMR");
 
         String pcmuAnswer = "SIP/2.0 200 OK\r\n\r\nv=0\r\n"
                 + "c=IN IP6 2600::9\r\n"

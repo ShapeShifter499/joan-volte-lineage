@@ -596,6 +596,8 @@ final class JoanSipBuilder {
         int payloadType = -1;
         /** Whether payload type 0 (PCMU) appears at all: offers list many. */
         boolean offersPcmu;
+        /** rtpmap encoding name for payloadType, e.g. "AMR-WB". */
+        String codecName = "";
     }
 
     static String sdpOffer(String ip, int rtpPort) {
@@ -607,16 +609,18 @@ final class JoanSipBuilder {
                 + "s=-\r\n"
                 + "c=IN " + fam + " " + ip + "\r\n"
                 + "t=0 0\r\n"
-                /* PCMU only: JoanMedia implements G.711 u-law and
-                 * nothing else. Offering AMR-WB, AMR and telephone-event
-                 * as the C UA did invited the core to answer with one of
-                 * them, after which we would have sent u-law labelled as
-                 * payload type 0 into an AMR session and decoded AMR as
-                 * u-law -- noise both ways, with no error anywhere. This
-                 * core happens to pick the first entry, which is the only
-                 * reason that was survivable. Implementing AMR-WB is the
-                 * real fix and is not done here. */
-                + "m=audio " + rtpPort + " RTP/AVP 0\r\n"
+                /* AMR-WB first, PCMU as fallback. Both are implemented:
+                 * JoanAmrCodec encodes and decodes AMR through MediaCodec
+                 * and JoanAmr does the RFC 4867 framing. octet-align=1 is
+                 * required -- the bandwidth-efficient packing is not
+                 * implemented and must not be negotiated by omission.
+                 *
+                 * AMR-WB is what IR.92 profiles for wideband voice, and
+                 * G.711 is not in that profile at all: a network that
+                 * refuses PCMU has nothing else to choose without this. */
+                + "m=audio " + rtpPort + " RTP/AVP 96 0\r\n"
+                + "a=rtpmap:96 AMR-WB/16000/1\r\n"
+                + "a=fmtp:96 octet-align=1;mode-change-capability=2\r\n"
                 + "a=rtpmap:0 PCMU/8000\r\n"
                 + "a=ptime:20\r\n"
                 + "a=maxptime:240\r\n"
@@ -850,6 +854,27 @@ final class JoanSipBuilder {
                 }
             } else if (line.equalsIgnoreCase("a=rtcp-mux")) {
                 m.mux = true;
+            } else if (line.startsWith("a=rtpmap:")) {
+                /* a=rtpmap:<pt> <encoding>/<rate>[/<channels>] -- the name
+                 * for the selected payload type is how we know whether the
+                 * answer chose AMR-WB, AMR or G.711. */
+                String r = line.substring(9).trim();
+                int sp = r.indexOf(' ');
+                if (sp > 0) {
+                    try {
+                        int pt = Integer.parseInt(r.substring(0, sp).trim());
+                        String enc = r.substring(sp + 1).trim();
+                        int slash = enc.indexOf('/');
+                        if (slash > 0) {
+                            enc = enc.substring(0, slash);
+                        }
+                        if (pt == m.payloadType) {
+                            m.codecName = enc;
+                        }
+                    } catch (NumberFormatException ignored) {
+                        // not a payload type; skip the line
+                    }
+                }
             } else if (line.startsWith("a=rtcp:")) {
                 try {
                     String p = line.substring(7).trim();

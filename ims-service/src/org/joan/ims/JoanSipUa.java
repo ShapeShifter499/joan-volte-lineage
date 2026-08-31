@@ -63,6 +63,9 @@ final class JoanSipUa {
     private static volatile InetAddress sMediaIp;
     private static volatile int sMediaPort;
     private static volatile int sMediaRtcpPort;
+    /** Negotiated payload type, and TRUE/FALSE for AMR-WB/NB, null=PCMU. */
+    private static volatile int sMediaPt;
+    private static volatile Boolean sMediaAmrWb;
     private static volatile boolean sMediaMux;
 
     private JoanSipUa() {}
@@ -111,6 +114,14 @@ final class JoanSipUa {
 
     static int mediaPort() {
         return sMediaPort;
+    }
+
+    static int mediaPt() {
+        return sMediaPt;
+    }
+
+    static Boolean mediaAmrWideband() {
+        return sMediaAmrWb;
     }
 
     /** The peer's RTCP port from its a=rtcp:, or the RTP port + 1. */
@@ -263,9 +274,14 @@ final class JoanSipUa {
                  * We only speak PCMU; streaming u-law into anything else
                  * is noise in both directions and reports no error. ACK
                  * first so the dialog is well formed, then hang it up. */
-                if (media != null && media.payloadType != 0) {
+                String enc = media == null ? "" : media.codecName;
+                boolean amrWb = "AMR-WB".equalsIgnoreCase(enc);
+                boolean amrNb = "AMR".equalsIgnoreCase(enc);
+                if (media != null && media.payloadType != 0
+                        && !amrWb && !amrNb) {
                     JoanTrace.note("app invite answered pt="
-                            + media.payloadType + "; only PCMU implemented");
+                            + media.payloadType + " (" + enc
+                            + "); not implemented");
                     try {
                         send(sSockC, sPcscf, sPcscfPortS,
                                 JoanSipBuilder.buildAck(id, dlg, target,
@@ -307,6 +323,12 @@ final class JoanSipUa {
                             sMediaPort = media.port;
                             sMediaRtcpPort = media.rtcpPort;
                             sMediaMux = media.mux;
+                            sMediaPt = media.payloadType;
+                            sMediaAmrWb = amrWb ? Boolean.TRUE
+                                    : (amrNb ? Boolean.FALSE : null);
+                            JoanTrace.note("app invite codec="
+                                    + (enc.isEmpty() ? "PCMU" : enc)
+                                    + " pt=" + media.payloadType);
                         } catch (Exception e) {
                             sMediaIp = null;
                         }
