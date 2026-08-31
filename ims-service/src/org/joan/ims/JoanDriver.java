@@ -296,9 +296,20 @@ final class JoanDriver {
             return Discovery.waitFor("IMS network has no usable local address");
         }
         if (pcscf == null) {
-            return Discovery.waitFor("IMS network has no P-CSCF yet");
+            /* Say which of the three it is, and what the PDN does have, so
+             * a report distinguishes an empty PCO from an unreadable API. */
+            int n4 = 0;
+            int n6 = 0;
+            for (android.net.LinkAddress la : imsLp.getLinkAddresses()) {
+                if (la.getAddress() instanceof Inet6Address) {
+                    n6++;
+                } else {
+                    n4++;
+                }
+            }
+            return Discovery.waitFor("IMS network has no P-CSCF: "
+                    + sPcscfReason + " (addrs v4=" + n4 + " v6=" + n6 + ")");
         }
-
         // Only after radio+IMS prerequisites are met do we ask for identity.
         String domain = hiddenString(tm, "getIsimDomain");
         String impi = hiddenString(tm, "getIsimImpi");
@@ -630,13 +641,41 @@ final class JoanDriver {
      * advertising two other addresses that answered immediately. The daemon
      * fails over across whatever it is given, so give it all of them.
      */
+    /**
+     * Why collectPcscfs() came back empty. "no P-CSCF yet" was reported
+     * identically whether the PDN advertised none, the hidden API was
+     * missing, or the call threw -- three different problems with three
+     * different answers, and no way to tell them apart from a user report.
+     */
+    private static volatile String sPcscfReason = "";
+
+    static String pcscfReason() {
+        return sPcscfReason;
+    }
+
     private static String collectPcscfs(LinkProperties lp) {
+        Method m;
         try {
-            Method m = lp.getClass().getMethod("getPcscfServers");
+            m = lp.getClass().getMethod("getPcscfServers");
+        } catch (NoSuchMethodException e) {
+            sPcscfReason = "getPcscfServers absent on this build";
+            return null;
+        } catch (Throwable t) {
+            sPcscfReason = "getPcscfServers lookup "
+                    + t.getClass().getSimpleName();
+            return null;
+        }
+        try {
             List<?> list = (List<?>) m.invoke(lp);
-            if (list == null || list.isEmpty()) {
+            if (list == null) {
+                sPcscfReason = "getPcscfServers returned null";
                 return null;
             }
+            if (list.isEmpty()) {
+                sPcscfReason = "PDN advertised no P-CSCF (empty list)";
+                return null;
+            }
+            sPcscfReason = "";
             StringBuilder v6 = new StringBuilder();
             StringBuilder rest = new StringBuilder();
             for (Object o : list) {
@@ -658,8 +697,15 @@ final class JoanDriver {
             } else if (v6.length() == 0) {
                 v6 = rest;
             }
-            return v6.length() > 0 ? v6.toString() : null;
-        } catch (Exception e) {
+            if (v6.length() == 0) {
+                sPcscfReason = "P-CSCF list had " + list.size()
+                        + " entries but none usable";
+                return null;
+            }
+            return v6.toString();
+        } catch (Throwable t) {
+            sPcscfReason = "getPcscfServers threw "
+                    + t.getClass().getSimpleName();
             return null;
         }
     }
