@@ -196,11 +196,20 @@ final class JoanMedia {
                 }
                 long frameSq = 0;
                 for (int i = 0; i < m; i++) {
-                    int v = (int) (pcm[i] * agcGain);
-                    if (v > AGC_LIMIT) {
-                        v = AGC_LIMIT;
-                    } else if (v < -AGC_LIMIT) {
-                        v = -AGC_LIMIT;
+                    int v;
+                    if (sPlatformAgc) {
+                        /* The platform conditioned this already. Touch
+                         * nothing -- not the gain, and not the limiter,
+                         * which was still squaring off every peak above
+                         * -3 dBFS and damaging audio that was fine. */
+                        v = pcm[i];
+                    } else {
+                        v = (int) (pcm[i] * agcGain);
+                        if (v > AGC_LIMIT) {
+                            v = AGC_LIMIT;
+                        } else if (v < -AGC_LIMIT) {
+                            v = -AGC_LIMIT;
+                        }
                     }
                     int a = v < 0 ? -v : v;
                     frameSq += (long) a * a;
