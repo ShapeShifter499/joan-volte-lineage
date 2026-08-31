@@ -27,5 +27,6 @@ javac -d "$JAVA_OUT" \
     "$JAVA_SRC/JoanSipCrypto.java" \
     "$JAVA_SRC/JoanSecAgree.java" \
     "$JAVA_SRC/JoanSipBuilder.java" \
+    "$JAVA_SRC/JoanAmr.java" \
     "$JAVA_TEST/org/joan/ims/TestJoanSip.java"
 exec java -cp "$JAVA_OUT" org.joan.ims.TestJoanSip

@@ -110,7 +110,7 @@ public class JoanStateProvider extends ContentProvider {
             }
             return c;
         }
-        c.addRow(new Object[] { "build", "2026-08-29-imsservice-only" });
+        c.addRow(new Object[] { "build", buildLabel(ctx) });
         c.addRow(new Object[] { "driver_started", String.valueOf(JoanDriver.isRunning()) });
         c.addRow(new Object[] { "registered", String.valueOf(JoanRegistration.isRegistered()) });
         c.addRow(new Object[] { "ims_requested", String.valueOf(JoanDriver.imsRequested()) });
@@ -118,6 +118,24 @@ public class JoanStateProvider extends ContentProvider {
         c.addRow(new Object[] { "aka_stage", JoanTrace.akaStage() });
         c.addRow(new Object[] { "sub_debug", JoanDriver.subscriptionDebug(ctx) });
         return c;
+    }
+
+    /**
+     * The version actually installed, read from the package rather than a
+     * string constant. The constant went stale immediately and a bug
+     * report then could not say which build it came from.
+     */
+    private static String buildLabel(Context ctx) {
+        if (ctx == null) {
+            return "unknown";
+        }
+        try {
+            android.content.pm.PackageInfo pi = ctx.getPackageManager()
+                    .getPackageInfo(ctx.getPackageName(), 0);
+            return pi.versionName + " (" + pi.versionCode + ")";
+        } catch (Throwable t) {
+            return "unknown";
+        }
     }
 
     @Override

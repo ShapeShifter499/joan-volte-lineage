@@ -17,6 +17,7 @@ public final class TestJoanSip {
         testCodecHonesty();
         testDerivedIdentity();
         testSecAgreeOnInvite();
+        testAmrPayload();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -464,6 +465,79 @@ public final class TestJoanSip {
         check(JoanSipBuilder.buildInvite(id, new JoanSipBuilder.Dialog(),
                 "tel:+1", null, null, 40000, "x").contains("Require: sec-agree"),
                 "the 7-arg form still defaults to sending it");
+    }
+
+    /** RFC 4867 octet-aligned framing. */
+    private static void testAmrPayload() {
+        /* Spec frame sizes. Getting one wrong truncates or overruns every
+         * packet at that mode, with no error anywhere. */
+        int[] nb = { 12, 13, 15, 17, 19, 20, 26, 31 };
+        for (int ft = 0; ft < nb.length; ft++) {
+            check(JoanAmr.frameBytes(ft, false) == nb[ft],
+                    "AMR-NB mode " + ft + " is " + nb[ft] + " bytes");
+        }
+        int[] wb = { 17, 23, 32, 36, 40, 46, 50, 58, 60 };
+        for (int ft = 0; ft < wb.length; ft++) {
+            check(JoanAmr.frameBytes(ft, true) == wb[ft],
+                    "AMR-WB mode " + ft + " is " + wb[ft] + " bytes");
+        }
+        check(JoanAmr.frameBytes(8, false) == 5
+                && JoanAmr.frameBytes(9, true) == 5, "SID is 5 bytes");
+        check(JoanAmr.frameBytes(15, true) == 0
+                && JoanAmr.frameBytes(14, true) == 0,
+                "NO_DATA and speech-lost carry nothing");
+        check(JoanAmr.frameBytes(11, true) < 0
+                && JoanAmr.frameBytes(10, false) < 0,
+                "reserved frame types are refused, not invented");
+
+        /* Storage -> RTP payload, AMR-WB mode 2 (12.65 kbit/s). */
+        byte hdr = (byte) ((2 << 3) | (1 << 2));   /* FT=2, Q=1 */
+        byte[] storage = new byte[1 + 32];
+        storage[0] = hdr;
+        for (int i = 0; i < 32; i++) {
+            storage[1 + i] = (byte) (i + 1);
+        }
+        byte[] pay = new byte[64];
+        int n = JoanAmr.pack(storage, 0, storage.length, JoanAmr.CMR_NONE,
+                true, pay);
+        check(n == 34, "WB mode 2 payload is CMR + ToC + 32 = 34 bytes");
+        check((pay[0] & 0xff) == 0xf0, "CMR 15 (no request) in the top nibble");
+        check(pay[1] == hdr && (pay[1] & 0x80) == 0,
+                "ToC carries FT/Q with F clear for a single frame");
+        check(pay[2] == 1 && pay[33] == 32, "speech data follows the ToC");
+
+        /* Round trip. */
+        byte[] back = new byte[64];
+        int m = JoanAmr.unpack(pay, 0, n, true, back);
+        check(m == storage.length, "unpack returns the storage frame length");
+        boolean same = true;
+        for (int i = 0; i < m; i++) {
+            same &= back[i] == storage[i];
+        }
+        check(same, "round trip is byte-identical");
+
+        /* A multi-frame payload: two ToCs, then both frames. We take the
+         * first, since this UA offers ptime 20 and never asks for more. */
+        byte[] multi = new byte[1 + 2 + 64];
+        multi[0] = (byte) 0xf0;
+        multi[1] = (byte) (hdr | 0x80);   /* F set: another ToC follows */
+        multi[2] = hdr;
+        multi[3] = 0x55;
+        multi[35] = 0x66;
+        check(JoanAmr.unpack(multi, 0, multi.length, true, back) == 33
+                && back[1] == 0x55,
+                "multi-frame payload yields the first frame");
+
+        /* Malformed input must be refused rather than half-decoded. */
+        check(JoanAmr.unpack(pay, 0, 1, true, back) < 0, "refuses a 1-byte payload");
+        check(JoanAmr.unpack(pay, 0, 10, true, back) < 0, "refuses a truncated frame");
+        byte[] reserved = { (byte) 0xf0, (byte) (11 << 3), 0, 0 };
+        check(JoanAmr.unpack(reserved, 0, 4, true, back) < 0,
+                "refuses a reserved frame type");
+        check(JoanAmr.pack(storage, 0, 5, JoanAmr.CMR_NONE, true, pay) < 0,
+                "refuses to pack a short storage frame");
+        check(JoanAmr.requestedMode(new byte[] { (byte) 0x20 }, 0, 1) == 2,
+                "CMR is read from the top nibble");
     }
 
     private static void testImei() {
