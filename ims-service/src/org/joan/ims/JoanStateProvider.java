@@ -130,10 +130,24 @@ public class JoanStateProvider extends ContentProvider {
         if (ctx == null) {
             return "unknown";
         }
+        /* Parse the apk on disk, not PackageManager's record of it.
+         * Replacing a system app in place leaves PM reporting the previous
+         * versionCode until it rescans, so a bug report claimed 0.3.0 (4)
+         * while plainly running alpha-3 code. The file is the truth. */
+        try {
+            String path = ctx.getApplicationInfo().sourceDir;
+            android.content.pm.PackageInfo apk = ctx.getPackageManager()
+                    .getPackageArchiveInfo(path, 0);
+            if (apk != null && apk.versionName != null) {
+                return apk.versionName + " (" + apk.versionCode + ")";
+            }
+        } catch (Throwable t) {
+            // fall through to PM's record
+        }
         try {
             android.content.pm.PackageInfo pi = ctx.getPackageManager()
                     .getPackageInfo(ctx.getPackageName(), 0);
-            return pi.versionName + " (" + pi.versionCode + ")";
+            return pi.versionName + " (" + pi.versionCode + ") [pm]";
         } catch (Throwable t) {
             return "unknown";
         }
