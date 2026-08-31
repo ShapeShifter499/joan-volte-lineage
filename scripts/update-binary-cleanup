@@ -13,18 +13,31 @@ ui_print() {
 
 ui_print "joan-volte uninstall: removing ImsService"
 
-mount -o rw,remount / 2>/dev/null || true
-rm -rf /system/priv-app/JoanIms
-rm -f /system/etc/permissions/org.joan.ims.xml
-rm -f /system/bin/joan-ims /system/bin/joan-ims-ua \
-      /system/etc/init/joan-ims.rc /system/etc/init/joan-imsd.rc
-rm -f /system_ext/bin/joan-ims-ua /system_ext/etc/init/joan-ims.rc
+SYSMNT=/mnt/joan_system
+mkdir -p "$SYSMNT"
+mount | grep -q " $SYSMNT " || \
+  mount -o rw /dev/block/mapper/system "$SYSMNT" 2>/dev/null || \
+  mount -o rw /dev/block/by-name/system "$SYSMNT" 2>/dev/null || true
+SYS="$SYSMNT/system"
+rm -rf "$SYS/priv-app/JoanIms"
+rm -f "$SYS/etc/permissions/org.joan.ims.xml"
+rm -f "$SYS/bin/joan-ims" "$SYS/bin/joan-ims-ua" \
+      "$SYS/etc/init/joan-ims.rc" "$SYS/etc/init/joan-imsd.rc"
+rm -f "$SYSMNT/system_ext/bin/joan-ims-ua" "$SYSMNT/system_ext/etc/init/joan-ims.rc"
 ui_print "  /system: JoanIms + leftovers removed (or absent)"
 
-mount -o rw,remount /product 2>/dev/null || true
-rm -f /product/overlay/JoanImsPhoneDefault.apk
+PRODMNT=/mnt/joan_product
+mkdir -p "$PRODMNT"
+mount | grep -q " $PRODMNT " || \
+  mount -o rw /dev/block/mapper/product "$PRODMNT" 2>/dev/null || \
+  mount -o rw /dev/block/by-name/product "$PRODMNT" 2>/dev/null || true
+rm -f "$PRODMNT/overlay/JoanImsPhoneDefault.apk"
 ui_print "  /product: overlay removed (or absent)"
 
 sync
 ui_print "Uninstall done. Reboot system."
 exit 0
+
+sync
+umount "$PRODMNT" 2>/dev/null || true
+umount "$SYSMNT" 2>/dev/null || true

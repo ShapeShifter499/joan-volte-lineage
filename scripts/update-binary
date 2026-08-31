@@ -59,87 +59,94 @@ unzip -o "$ZIP" -d "$TMP" || error "unzip failed"
 
 need_file "$TMP/app/joan-ims.apk" 5000
 
-# --- Mount verification -------------------------------------------------
-# The real /system must be a mounted block device (dm-*, e.g. dm-0),
-# NOT the recovery ramdisk rootfs. After remount, a write test must
-# succeed and read back identically.
-ui_print "Mounting system rw"
-mount -o rw,remount / 2>/dev/null || true
-mount -o rw,remount /system 2>/dev/null || true
-mount -o rw,remount /system/priv-app 2>/dev/null || true
+# --- Mount the real partitions -----------------------------------------
+# Recovery does not mount /system or /product for a sideload on this
+# device: in recovery / is the rootfs ramdisk and /system/priv-app does
+# not exist at all. v5 wrote there anyway, into the ramdisk, and the
+# files were gone at reboot -- "Install completed with status 0" and
+# nothing installed. v6 refused, correctly, but could not install either.
+#
+# The partitions are logical (dynamic/super). Recovery creates them as
+# /dev/block/mapper/<name>, and they mount read-write: dm-verity is not
+# in the way on this build. Mount them ourselves at private mountpoints.
+SYSMNT=/mnt/joan_system
+PRODMNT=/mnt/joan_product
+TMPDM=$(stat -c %d /tmp 2>/dev/null)
 
-SYSDM=$(stat -c %d /system/priv-app 2>/dev/null)
-ROOTDM=$(stat -c %d / 2>/dev/null)
-ui_print "  system st_dev=$SYSDM root st_dev=$ROOTDM"
-if [ "$SYSDM" != "$ROOTDM" ]; then
-  error "/system is not on the root device (SAR); refusing to write"
-fi
+mount_part() {
+  name="$1"
+  mp="$2"
+  mkdir -p "$mp"
+  if ! mount | grep -q " $mp "; then
+    for dev in /dev/block/mapper/$name /dev/block/by-name/$name; do
+      [ -b "$dev" ] || continue
+      mount -o rw "$dev" "$mp" 2>/dev/null && break
+    done
+  fi
+  mount | grep -q " $mp " || error "cannot mount $name (looked in /dev/block/mapper and by-name)"
+  mount -o rw,remount "$mp" 2>/dev/null || true
 
-# Write test on the actual target filesystem.
-WT=/system/priv-app/.joan_write_test
-if echo joan > "$WT" 2>/dev/null; then
-  got=$(cat "$WT" 2>/dev/null)
-  rm -f "$WT"
-  [ "$got" = "joan" ] || error "write test failed readback on /system"
-else
-  error "/system is read-only (verity). Flash with adb remount deploy instead"
-fi
+  # It must not be the recovery ramdisk. /tmp is unambiguously the
+  # ramdisk, so this needs no assumption about what / is on SAR.
+  dm=$(stat -c %d "$mp" 2>/dev/null)
+  ui_print "  $name st_dev=$dm tmp(ramdisk) st_dev=$TMPDM"
+  if [ -z "$dm" ] || [ "$dm" = "$TMPDM" ]; then
+    error "$name resolved to the recovery ramdisk; refusing to write"
+  fi
 
-mkdir -p /system/priv-app/JoanIms
-chmod 755 /system/priv-app/JoanIms 2>/dev/null || true
+  wt="$mp/.joan_write_test"
+  if echo joan > "$wt" 2>/dev/null; then
+    got=$(cat "$wt" 2>/dev/null)
+    rm -f "$wt"
+    [ "$got" = "joan" ] || error "$name failed write readback"
+  else
+    error "$name is read-only; cannot install"
+  fi
+}
+
+ui_print "Mounting system"
+mount_part system "$SYSMNT"
+ui_print "Mounting product"
+mount_part product "$PRODMNT"
+
+# system-as-root: the partition root is /, and the /system tree sits in
+# a system/ subdirectory of it.
+SYS="$SYSMNT/system"
+[ -d "$SYS/priv-app" ] || error "$SYS/priv-app missing; unexpected system layout"
+
+mkdir -p "$SYS/priv-app/JoanIms"
+chmod 755 "$SYS/priv-app/JoanIms" 2>/dev/null || true
 
 ui_print "Removing joan-ims loopback listener"
-rm -f /system/bin/joan-ims /system/bin/joan-ims-ua \
-      /system/etc/init/joan-ims.rc /system/etc/init/joan-imsd.rc
-rm -f /system_ext/bin/joan-ims-ua /system_ext/etc/init/joan-ims.rc
+rm -f "$SYS/bin/joan-ims" "$SYS/bin/joan-ims-ua" \
+      "$SYS/etc/init/joan-ims.rc" "$SYS/etc/init/joan-imsd.rc"
+rm -f "$SYSMNT/system_ext/bin/joan-ims-ua" \
+      "$SYSMNT/system_ext/etc/init/joan-ims.rc"
 
 ui_print "Installing ImsService priv-app"
-copy_file "$TMP/app/joan-ims.apk" /system/priv-app/JoanIms/JoanIms.apk 644 u:object_r:system_file:s0
+copy_file "$TMP/app/joan-ims.apk" "$SYS/priv-app/JoanIms/JoanIms.apk" 644 u:object_r:system_file:s0
 if [ -f "$TMP/etc/permissions/org.joan.ims.xml" ]; then
   copy_file "$TMP/etc/permissions/org.joan.ims.xml" \
-    /system/etc/permissions/org.joan.ims.xml 644 u:object_r:system_file:s0
+    "$SYS/etc/permissions/org.joan.ims.xml" 644 u:object_r:system_file:s0
 fi
 if [ -f "$TMP/etc/permissions/android.hardware.telephony.ims.xml" ]; then
   copy_file "$TMP/etc/permissions/android.hardware.telephony.ims.xml" \
-    /system/etc/permissions/android.hardware.telephony.ims.xml 644 u:object_r:system_file:s0
+    "$SYS/etc/permissions/android.hardware.telephony.ims.xml" 644 u:object_r:system_file:s0
 fi
 
 # --- RRO: device-default ImsService in com.android.phone ----------------
-# Without this the ImsResolver classifies JoanIms as a carrier-style
-# service with no features and never binds it (features: [], NO_IMS_...
-# SERVICE_CONFIGURED). The overlay sets config_ims_mmtel_package so the
-# resolver treats it as the device default and reads manifest metadata.
+# Without this ImsResolver classifies JoanIms as a carrier-style service
+# with no features and never binds it.
 if [ -f "$TMP/app/joan-ims-rro.apk" ]; then
   ui_print "Installing com.android.phone overlay (device-default IMS)"
-  mount -o rw,remount /product 2>/dev/null || true
-  mkdir -p /product/overlay
-
-  # Same SAR trap as /system, on the one file that exists to fix it. A
-  # write into the recovery ramdisk succeeds, reads back byte-identical,
-  # and is gone at reboot -- copy_file's cmp cannot see it, because the
-  # bytes really are there. Only the filesystem identity can.
-  #
-  # Compare against /tmp rather than /: /tmp is unambiguously the recovery
-  # ramdisk, so this needs no assumption about what / is on a SAR device.
-  TMPDM=$(stat -c %d /tmp 2>/dev/null)
-  PRODDM=$(stat -c %d /product/overlay 2>/dev/null)
-  ui_print "  product st_dev=$PRODDM tmp(ramdisk) st_dev=$TMPDM"
-  if [ -n "$TMPDM" ] && [ "$PRODDM" = "$TMPDM" ]; then
-    error "/product/overlay is the recovery ramdisk; the overlay would not survive reboot"
-  fi
-
-  PWT=/product/overlay/.joan_write_test
-  if echo joan > "$PWT" 2>/dev/null; then
-    pgot=$(cat "$PWT" 2>/dev/null)
-    rm -f "$PWT"
-    [ "$pgot" = "joan" ] || error "write test failed readback on /product"
-  else
-    error "/product is read-only; cannot install the IMS overlay"
-  fi
-
+  mkdir -p "$PRODMNT/overlay"
   copy_file "$TMP/app/joan-ims-rro.apk" \
-    /product/overlay/JoanImsPhoneDefault.apk 644 u:object_r:system_file:s0
+    "$PRODMNT/overlay/JoanImsPhoneDefault.apk" 644 u:object_r:system_file:s0
 fi
+
+sync
+umount "$PRODMNT" 2>/dev/null || true
+umount "$SYSMNT" 2>/dev/null || true
 
 sync
 ui_print "Done. Reboot system."
