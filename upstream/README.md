@@ -36,69 +36,81 @@ point `LOCAL_PATH` at a checkout that also contains `ims-service/` and
 
 Apache-2.0. See `LICENSE`.
 
-## Optional: platform AGC for the uplink
+## Uplink gain: patch audio_effects.xml in the device tree
 
-Not required, and not done by the zip. Read this only if you are building
-in-tree and want the platform to do gain control instead of the app.
+**This app does no gain control at all.** That is deliberate -- no IMS
+implementation does it in the application; on a normal handset the ADSP
+voice topology conditions the uplink from ACDB calibration, and for the
+AP VoIP path the platform's AGC effect does it. JoanMedia reads PCM and
+encodes it, nothing more.
 
-There is no AGC on the VoIP capture path on joan. `/vendor/etc/audio_effects.xml`
-declares only Qualcomm's `aec` and `ns` from `libqcomvoiceprocessing.so`:
+joan has no AGC on that path, so without the patch below the transmitted
+level is whatever the microphone gave. Measured before any of this:
+uplink speech ranging -24 to -45 dBFS across calls against a far end
+arriving at -16 to -23, with peaks clipping. With the platform AGC
+enabled it sat at -19.6 to -24.0 against a -19.3 downlink on the same
+PSTN call.
 
-    <library name="audio_pre_processing" path="libqcomvoiceprocessing.so"/>
-    <effect name="aec" library="audio_pre_processing" uuid="0f8d0d2a-..."/>
-    <effect name="ns"  library="audio_pre_processing" uuid="1d97bb0b-..."/>
-    <preprocess>
-      <stream type="voice_communication">
-        <apply effect="aec"/><apply effect="ns"/>
-      </stream>
-    </preprocess>
+### The patch
 
-AOSP's `libaudiopreprocessing.so` — the WebRTC audio processing module,
-which does implement AGC and AGC2 — ships on the device and nothing
-references it. LG's own uplink conditioning lives in the ADSP voice
-topology loaded from ACDB (`/vendor/etc/acdbdata/`), which only the
-modem's voice path reaches, never the AP VoIP path this stack uses.
-
-JoanMedia therefore runs its own software AGC and limiter. It calls
-`AutomaticGainControl.isAvailable()` first and defers entirely to the
-platform when a ROM provides one, so enabling the effect below makes the
-app step aside automatically. No app change is needed either way.
-
-To enable it, add to the device's `audio_effects.xml` (in
-`device/lge/joan-common`, not from a flashable zip — `/vendor` writes are
-reverted by OTA and a stale copy of a vendor config breaks audio
-system-wide):
+`/vendor/etc/audio_effects.xml` is built by LineageOS -- `ro.vendor.build.date`
+matches `ro.system.build.date` -- so this belongs in `device/lge/joan-common`
+(or wherever that file is sourced) and every nightly then carries it:
 
     <library name="pre_processing" path="libaudiopreprocessing.so"/>
-    <effect name="agc" library="pre_processing" uuid="..."/>
+    <effect name="agc" library="pre_processing" uuid="aa8130e0-66fc-11e0-bad0-0002a5d5c51b"/>
     ...
     <stream type="voice_communication">
       <apply effect="aec"/><apply effect="ns"/><apply effect="agc"/>
     </stream>
 
-Take the UUID from AOSP's reference `frameworks/av/media/libeffects/data/audio_effects.xml`
-in your own tree rather than from this document; it is version-specific
-and worth checking against the library you are actually shipping.
+`libaudiopreprocessing.so` -- AOSP's WebRTC audio processing module, which
+implements AGC -- already ships on the device and nothing references it.
+The uuid was verified by finding it as a packed `effect_uuid_t` inside the
+device's own copy of that library, not taken from documentation. The
+struct is `{u32 timeLow; u16 timeMid; u16 timeHiVer; u16 clockSeq; u8
+node[6]}`, first four fields little-endian -- pack clockSeq the wrong way
+round and every uuid appears absent.
 
-This is arguably the *correct* shape rather than a risky addition. Most
-Android devices expose an AGC on `voice_communication` --
-`AutomaticGainControl.isAvailable()` returns true on the majority of
-handsets -- and WebRTC-based apps are built and shipped against that
-majority. An app that pumped whenever a platform AGC was present would be
-broken on most phones. joan lacking one is the anomaly, and it exists
-because LG's voice path went through the ADSP: the `voice_communication`
-block was only ever for third-party apps, so it was never tuned.
+Once it lands, `AutomaticGainControl.isAvailable()` returns true and the
+trace line `media record ok src=7 platform_agc=true` confirms it.
 
-Two things to check, neither a blocker:
+### Why the flashable zip cannot do this
 
-- `<preprocess>` applies to every app using `voice_communication`, not
-  just this one. Make a Signal or Meet call before and after and listen.
-- Qualcomm AEC/NS feeding an AOSP AGC is not a combination anyone has
-  validated on this device specifically.
+Recorded so nobody re-derives it. The config search path, read out of
+`libaudiopolicyenginedefault.so` on the device, is:
 
-If it works, it is the better home for gain control than an app doing it
-in software, and the app gets out of the way on its own.
+    /odm/etc  ->  /vendor/etc  ->  /system/etc
 
-Measured before deciding: with the app's software AGC, uplink speech sits
-at -21.3 dBFS against a far end arriving at -19.5 dBFS. Level is not
-currently the limiting factor on this handset; narrowband PCMU is.
+**First file wins.** It is not a merge and not per-element overriding: a
+file at a higher-priority location displaces the lower one entirely.
+
+- `/odm/etc` -- highest priority, and a 1.3 MB image with 8 KB free.
+  Returns ENOSPC. Dynamic partitions are sized to their contents; the
+  slack lives in `super`, not in the partitions.
+- `/vendor/etc` -- ENOSPC as well, including for an in-place rewrite of a
+  file that already exists. It is also replaced by every OTA.
+- `/system/etc` -- writable, but last in priority and always shadowed by
+  vendor's copy.
+
+### Do not delete the vendor file so /system/etc wins
+
+It looks attractive, because `/system/etc/audio_effects.xml` already
+declares `agc` with the correct uuid. It is a trap.
+
+That file's `<preprocess>` block is **inside an XML comment** -- it is
+AOSP's documentation example, not live configuration. Fall back to it and
+`aec`, `ns` and `agc` are declared and never applied: no echo
+cancellation, no noise suppression and no gain control on the VoIP path.
+You also lose everything the vendor config carries and the system one
+does not -- the `music` / `ring` / `alarm` / `notification` / `voice_call`
+postprocess chains, Qualcomm's `volume_listener` speaker protection,
+`offload_bundle`, `audiosphere`, the hardware visualizer, and the SW/HW
+`effectProxy` routing for bassboost/equalizer/virtualizer/reverb.
+
+Worse, `AutomaticGainControl.isAvailable()` would return **true**, since
+the effect is declared. Anything deferring to the platform on that basis
+stands down while nothing is applied.
+
+And vendor cannot be written back: it returns ENOSPC even for blocks it
+has just freed. Such a deletion is only repaired by the next nightly.
