@@ -111,8 +111,32 @@ fi
 # resolver treats it as the device default and reads manifest metadata.
 if [ -f "$TMP/app/joan-ims-rro.apk" ]; then
   ui_print "Installing com.android.phone overlay (device-default IMS)"
-  mkdir -p /product/overlay
   mount -o rw,remount /product 2>/dev/null || true
+  mkdir -p /product/overlay
+
+  # Same SAR trap as /system, on the one file that exists to fix it. A
+  # write into the recovery ramdisk succeeds, reads back byte-identical,
+  # and is gone at reboot -- copy_file's cmp cannot see it, because the
+  # bytes really are there. Only the filesystem identity can.
+  #
+  # Compare against /tmp rather than /: /tmp is unambiguously the recovery
+  # ramdisk, so this needs no assumption about what / is on a SAR device.
+  TMPDM=$(stat -c %d /tmp 2>/dev/null)
+  PRODDM=$(stat -c %d /product/overlay 2>/dev/null)
+  ui_print "  product st_dev=$PRODDM tmp(ramdisk) st_dev=$TMPDM"
+  if [ -n "$TMPDM" ] && [ "$PRODDM" = "$TMPDM" ]; then
+    error "/product/overlay is the recovery ramdisk; the overlay would not survive reboot"
+  fi
+
+  PWT=/product/overlay/.joan_write_test
+  if echo joan > "$PWT" 2>/dev/null; then
+    pgot=$(cat "$PWT" 2>/dev/null)
+    rm -f "$PWT"
+    [ "$pgot" = "joan" ] || error "write test failed readback on /product"
+  else
+    error "/product is read-only; cannot install the IMS overlay"
+  fi
+
   copy_file "$TMP/app/joan-ims-rro.apk" \
     /product/overlay/JoanImsPhoneDefault.apk 644 u:object_r:system_file:s0
 fi
