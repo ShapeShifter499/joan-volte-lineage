@@ -33,8 +33,16 @@ import java.security.SecureRandom;
  */
 final class JoanMedia {
     private static final String TAG = "JoanIms";
-    private static final int SAMPLE_HZ = 8000;
-    private static final int PTIME_SAMPLES = 160;
+    /* PCMU: 8 kHz, 160 samples per 20 ms. AMR-WB moves both. Held as
+     * fields rather than constants because the codec is negotiated. */
+    private static final int PCMU_HZ = 8000;
+    private static final int PCMU_SAMPLES = 160;
+    private static volatile int sRate = PCMU_HZ;
+    private static volatile int sFrame = PCMU_SAMPLES;
+    /** RTP payload type actually negotiated; 0 for PCMU. */
+    private static volatile int sPt;
+    /** Non-null when the call negotiated AMR rather than G.711. */
+    private static volatile JoanAmrCodec sAmr;
 
     private static volatile boolean sRun;
     private static Thread sCap;
@@ -59,7 +67,36 @@ final class JoanMedia {
     static void startRtp(Context ctx, Network net, InetAddress local,
                          InetAddress dest, int destPort, int rtcpPort,
                          boolean mux) {
+        startRtp(ctx, net, local, dest, destPort, rtcpPort, mux, 0, null);
+    }
+
+    /**
+     * @param payloadType the RTP payload type the answer selected
+     * @param amrWideband TRUE for AMR-WB, FALSE for AMR-NB, null for PCMU.
+     *        When AMR is asked for and the codec will not open, the call
+     *        falls back to PCMU rather than running with no media -- the
+     *        codec is negotiated, so a silent failure here is a silent
+     *        call.
+     */
+    static void startRtp(Context ctx, Network net, InetAddress local,
+                         InetAddress dest, int destPort, int rtcpPort,
+                         boolean mux, int payloadType, Boolean amrWideband) {
         stop();
+        sPt = payloadType;
+        sAmr = null;
+        sRate = PCMU_HZ;
+        sFrame = PCMU_SAMPLES;
+        if (amrWideband != null) {
+            JoanAmrCodec c = JoanAmrCodec.open(amrWideband);
+            if (c != null) {
+                sAmr = c;
+                sRate = c.sampleRate();
+                sFrame = c.samplesPerFrame();
+            } else {
+                JoanTrace.note("amr requested but unavailable; PCMU");
+                sPt = 0;
+            }
+        }
         Context app = ctx.getApplicationContext();
         sDest = dest;
         sDestPort = destPort;
@@ -91,7 +128,10 @@ final class JoanMedia {
         sCap.start();
         sPlay.start();
         JoanTrace.note("media start rtp mux=" + mux
-                + " rtcp_port=" + (sMux ? sDestPort : sRtcpPort));
+                + " rtcp_port=" + (sMux ? sDestPort : sRtcpPort)
+                + " codec=" + (sAmr == null ? "PCMU"
+                        : (sAmr.wideband() ? "AMR-WB" : "AMR-NB"))
+                + " pt=" + sPt + " rate=" + sRate);
     }
 
     static void stop() {
@@ -114,6 +154,11 @@ final class JoanMedia {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
+        }
+        JoanAmrCodec amr = sAmr;
+        sAmr = null;
+        if (amr != null) {
+            amr.close();
         }
         JoanTrace.note("media stop");
     }
@@ -150,9 +195,9 @@ final class JoanMedia {
         boolean ulLogged = false;
         audioPriority("cap");
         try {
-            int minIn = AudioRecord.getMinBufferSize(SAMPLE_HZ,
+            int minIn = AudioRecord.getMinBufferSize(sRate,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-            rec = openRecord(Math.max(minIn, PTIME_SAMPLES * 8));
+            rec = openRecord(Math.max(minIn, sFrame * 8));
             if (rec == null) {
                 JoanTrace.note("media no AudioRecord");
                 return;
@@ -164,20 +209,26 @@ final class JoanMedia {
             }
             InetAddress dest = sDest;
             int dport = sDestPort;
-            short[] pcm = new short[PTIME_SAMPLES];
-            byte[] ulaw = new byte[PTIME_SAMPLES];
-            byte[] rtp = new byte[RTP_HDR + PTIME_SAMPLES];
+            JoanAmrCodec amr = sAmr;
+            short[] pcm = new short[sFrame];
+            byte[] ulaw = new byte[sFrame];
+            /* AMR-WB's largest frame is 60 bytes plus a ToC; the RTP
+             * payload is far smaller than a PCMU frame, but the buffer has
+             * to fit whichever codec is running. */
+            byte[] storage = new byte[80];
+            byte[] payload = new byte[96];
+            byte[] rtp = new byte[RTP_HDR + Math.max(sFrame, 96)];
             DatagramPacket out = new DatagramPacket(
                     rtp, rtp.length, dest, dport);
             AudioManager cam = app.getSystemService(AudioManager.class);
             JoanTrace.note("media cap rolling src=" + rec.getAudioSource()
                     + " mode=" + (cam == null ? -1 : cam.getMode()));
             while (sRun) {
-                int n = rec.read(pcm, 0, PTIME_SAMPLES);
+                int n = rec.read(pcm, 0, sFrame);
                 if (n <= 0) {
                     continue;
                 }
-                int m = Math.min(n, PTIME_SAMPLES);
+                int m = Math.min(n, sFrame);
                 long rawSq = 0;
                 for (int i = 0; i < m; i++) {
                     int a = pcm[i] < 0 ? -pcm[i] : pcm[i];
@@ -190,7 +241,9 @@ final class JoanMedia {
                     if (a > ulPeak) {
                         ulPeak = a;
                     }
-                    ulaw[i] = linearToUlaw(pcm[i]);
+                    if (amr == null) {
+                        ulaw[i] = linearToUlaw(pcm[i]);
+                    }
                 }
                 ulSumSq += frameSq;
                 ulSamples += m;
@@ -198,24 +251,44 @@ final class JoanMedia {
                     ulActSq += frameSq;
                     ulActSamples += m;
                 }
-                if (!ulLogged && ulSamples >= SAMPLE_HZ * 5L) {
+                if (!ulLogged && ulSamples >= sRate * 5L) {
                     JoanTrace.note("media ul level " + level(ulSumSq,
                             ulSamples, ulPeak, ulActSq, ulActSamples)
                             + " platform_agc=" + sPlatformAgc);
                     ulLogged = true;
                 }
+                int paylen;
+                if (amr != null) {
+                    int slen = amr.encode(pcm, m, storage);
+                    if (slen < 0) {
+                        break;
+                    }
+                    if (slen == 0) {
+                        /* Encoder still filling its pipeline. Send nothing
+                         * this tick rather than a malformed packet. */
+                        continue;
+                    }
+                    paylen = JoanAmr.pack(storage, 0, slen, JoanAmr.CMR_NONE,
+                            amr.wideband(), payload);
+                    if (paylen < 0) {
+                        continue;
+                    }
+                    System.arraycopy(payload, 0, rtp, RTP_HDR, paylen);
+                } else {
+                    System.arraycopy(ulaw, 0, rtp, RTP_HDR, m);
+                    paylen = m;
+                }
                 rtp[0] = (byte) 0x80;
-                rtp[1] = 0; /* PCMU */
+                rtp[1] = (byte) sPt;
                 rtp[2] = (byte) (sSeq >> 8);
                 rtp[3] = (byte) sSeq;
                 sSeq = (sSeq + 1) & 0xffff;
                 put32(rtp, 4, sTs);
                 sTs += m;
                 put32(rtp, 8, sSsrc);
-                System.arraycopy(ulaw, 0, rtp, RTP_HDR, m);
-                out.setLength(RTP_HDR + m);
+                out.setLength(RTP_HDR + paylen);
                 sSent++;
-                sOctets += m;
+                sOctets += paylen;
                 if (System.currentTimeMillis() >= sRtcpNext) {
                     sendRtcp(sock, dest, dport);
                 }
@@ -247,9 +320,9 @@ final class JoanMedia {
         audioPriority("play");
         try {
             AudioManager am = app.getSystemService(AudioManager.class);
-            int minOut = AudioTrack.getMinBufferSize(SAMPLE_HZ,
+            int minOut = AudioTrack.getMinBufferSize(sRate,
                     AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
-            int outBuf = Math.max(minOut, PTIME_SAMPLES * 16);
+            int outBuf = Math.max(minOut, sFrame * 16);
             trk = openVoiceTrack(outBuf);
             if (trk == null) {
                 JoanTrace.note("media no play track");
@@ -261,7 +334,9 @@ final class JoanMedia {
                 return;
             }
             byte[] down = new byte[512];
-            short[] pcm = new short[PTIME_SAMPLES];
+            JoanAmrCodec amr = sAmr;
+            short[] pcm = new short[sFrame];
+            byte[] storage = new byte[80];
             DatagramPacket in = new DatagramPacket(down, down.length);
             JoanTrace.note("media play rolling voice mode="
                     + (am == null ? -1 : am.getMode()));
@@ -293,15 +368,31 @@ final class JoanMedia {
                 }
                 int off = RTP_HDR;
                 m -= RTP_HDR;
-                if (m > PTIME_SAMPLES) {
-                    m = PTIME_SAMPLES;
-                }
                 if (m <= 0) {
                     continue;
                 }
+                if (amr != null) {
+                    int slen = JoanAmr.unpack(down, off, m, amr.wideband(),
+                            storage);
+                    if (slen < 0) {
+                        continue;
+                    }
+                    m = amr.decode(storage, slen, pcm);
+                    if (m < 0) {
+                        break;
+                    }
+                    if (m == 0) {
+                        continue;
+                    }
+                } else {
+                    if (m > sFrame) {
+                        m = sFrame;
+                    }
+                }
                 long dFrameSq = 0;
                 for (int i = 0; i < m; i++) {
-                    short v = ulawToLinear(down[off + i]);
+                    short v = (amr != null) ? pcm[i]
+                            : ulawToLinear(down[off + i]);
                     int a = v < 0 ? -v : v;
                     dFrameSq += (long) a * a;
                     if (a > dlPeak) {
@@ -315,7 +406,7 @@ final class JoanMedia {
                     dlActSq += dFrameSq;
                     dlActSamples += m;
                 }
-                if (!dlLogged && dlSamples >= SAMPLE_HZ * 5L) {
+                if (!dlLogged && dlSamples >= sRate * 5L) {
                     JoanTrace.note("media dl level " + level(dlSumSq,
                             dlSamples, dlPeak, dlActSq, dlActSamples));
                     dlLogged = true;
@@ -356,7 +447,7 @@ final class JoanMedia {
                 rec = new AudioRecord.Builder()
                         .setAudioSource(src)
                         .setAudioFormat(new AudioFormat.Builder()
-                                .setSampleRate(SAMPLE_HZ)
+                                .setSampleRate(sRate)
                                 .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
                                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                                 .build())
@@ -419,7 +510,7 @@ final class JoanMedia {
             AudioTrack t = new AudioTrack.Builder()
                     .setAudioAttributes(voiceAttrs())
                     .setAudioFormat(new AudioFormat.Builder()
-                            .setSampleRate(SAMPLE_HZ)
+                            .setSampleRate(sRate)
                             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                             .build())
