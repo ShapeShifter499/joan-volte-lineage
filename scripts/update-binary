@@ -100,7 +100,14 @@ mount_part() {
     rm -f "$wt"
     [ "$got" = "joan" ] || error "$name failed write readback"
   else
-    error "$name is read-only; cannot install"
+    # Distinguish the two, because they need different answers and
+    # guessing sent me chasing verity when /odm was simply full.
+    free=$(df -k "$mp" 2>/dev/null | tail -1 | awk "{print \$4}")
+    if mount | grep " $mp " | grep -q "[(,]ro[,)]"; then
+      error "$name is mounted read-only; cannot install"
+    else
+      error "$name is writable but the write failed (${free:-?} KB free); cannot install"
+    fi
   fi
 }
 
