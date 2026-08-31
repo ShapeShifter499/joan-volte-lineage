@@ -239,12 +239,14 @@ final class JoanDriver {
         // If the modem is not camped on LTE/NR and no IMS network is exposed,
         // do not fetch ISIM identity or run AKA yet. This covers the user's
         // "LTE off after reboot" case gracefully.
+        /* The RAT check is applied further down, only when no usable IMS
+         * network was found. It exists to stop this spinning AKA and xfrm
+         * when the user has turned the radio down, not to veto a PDN that
+         * is demonstrably up: getDataNetworkType() reports the default
+         * data bearer, which on a marginal cell flaps to HSPA while the
+         * IMS PDN is still there. Checking it first meant alternating
+         * between "not LTE/NR (15)" and a working network, forever. */
         int dataNetwork = safeDataNetworkType(tm);
-        if (dataNetwork != TelephonyManager.NETWORK_TYPE_UNKNOWN
-                && !isLteLike(dataNetwork)) {
-            return Discovery.waitFor("cellular data network is not LTE/NR ("
-                    + dataNetwork + ")");
-        }
 
         Network ims = null;
         LinkProperties imsLp = null;
@@ -278,14 +280,20 @@ final class JoanDriver {
         }
 
         if (ims == null || imsLp == null) {
+            if (dataNetwork != TelephonyManager.NETWORK_TYPE_UNKNOWN
+                    && !isLteLike(dataNetwork)) {
+                return Discovery.waitFor(
+                        "no IMS network and data is not LTE/NR ("
+                                + dataNetwork + ")");
+            }
             ensureImsRequest(cm);
             return Discovery.waitFor("LTE on, IMS APN/network requested; waiting");
         }
 
-        Inet6Address local = pickLocalV6(imsLp);
+        InetAddress local = pickLocal(imsLp);
         String pcscf = collectPcscfs(imsLp);
         if (local == null) {
-            return Discovery.waitFor("IMS network has no usable IPv6 local address");
+            return Discovery.waitFor("IMS network has no usable local address");
         }
         if (pcscf == null) {
             return Discovery.waitFor("IMS network has no P-CSCF yet");
@@ -586,12 +594,28 @@ final class JoanDriver {
         }
     }
 
-    private static Inet6Address pickLocalV6(LinkProperties lp) {
+    /**
+     * A usable local address on the IMS PDN: IPv6 preferred, IPv4 accepted.
+     *
+     * This used to demand IPv6 and stop otherwise, which was stricter than
+     * the code behind it -- JoanAppRegister.findIms() has always fallen
+     * back to IPv4. A handset whose IMS PDN is v4-only was refused at the
+     * readiness check for a capability the registration path had, and the
+     * only sign was "IMS network has no usable IPv6 local address"
+     * repeating forever.
+     */
+    private static InetAddress pickLocal(LinkProperties lp) {
         for (android.net.LinkAddress la : lp.getLinkAddresses()) {
             InetAddress a = la.getAddress();
             if (a instanceof Inet6Address && !a.isLinkLocalAddress()
                     && !a.isLoopbackAddress()) {
-                return (Inet6Address) a;
+                return a;
+            }
+        }
+        for (android.net.LinkAddress la : lp.getLinkAddresses()) {
+            InetAddress a = la.getAddress();
+            if (!a.isLinkLocalAddress() && !a.isLoopbackAddress()) {
+                return a;
             }
         }
         return null;
