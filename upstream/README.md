@@ -80,13 +80,24 @@ Take the UUID from AOSP's reference `frameworks/av/media/libeffects/data/audio_e
 in your own tree rather than from this document; it is version-specific
 and worth checking against the library you are actually shipping.
 
-Two things to weigh before doing it:
+This is arguably the *correct* shape rather than a risky addition. Most
+Android devices expose an AGC on `voice_communication` --
+`AutomaticGainControl.isAvailable()` returns true on the majority of
+handsets -- and WebRTC-based apps are built and shipped against that
+majority. An app that pumped whenever a platform AGC was present would be
+broken on most phones. joan lacking one is the anomaly, and it exists
+because LG's voice path went through the ADSP: the `voice_communication`
+block was only ever for third-party apps, so it was never tuned.
 
-- `<preprocess>` applies to **every** app using `voice_communication`, not
-  just this one. Signal, WhatsApp and Meet bring their own WebRTC AGC;
-  stacking a platform AGC on top of theirs can pump.
+Two things to check, neither a blocker:
+
+- `<preprocess>` applies to every app using `voice_communication`, not
+  just this one. Make a Signal or Meet call before and after and listen.
 - Qualcomm AEC/NS feeding an AOSP AGC is not a combination anyone has
-  validated on this device.
+  validated on this device specifically.
+
+If it works, it is the better home for gain control than an app doing it
+in software, and the app gets out of the way on its own.
 
 Measured before deciding: with the app's software AGC, uplink speech sits
 at -21.3 dBFS against a far end arriving at -19.5 dBFS. Level is not
