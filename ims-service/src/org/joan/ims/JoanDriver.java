@@ -43,6 +43,11 @@ final class JoanDriver {
     private static final long REG_RETRY_MAX_MS = 15 * 60_000L;
 
     private static String sLastState = "";
+    /* The full REGISTER summary, surfaced by JoanStateProvider. The trace
+     * file needs root and logcat gets lost; the content provider is the
+     * artifact a user can actually produce, so the line that says why
+     * registration failed belongs in it. */
+    private static volatile String sLastRegister = "";
     private static final Object NET_LOCK = new Object();
     private static ConnectivityManager.NetworkCallback sImsCallback;
     private static boolean sImsRequested;
@@ -70,6 +75,10 @@ final class JoanDriver {
 
     static String lastState() {
         return sLastState;
+    }
+
+    static String lastRegister() {
+        return sLastRegister;
     }
 
     static boolean imsRequested() {
@@ -109,6 +118,7 @@ final class JoanDriver {
                 logState(refreshing ? "refreshing REGISTER via app UA"
                         : "attempt REGISTER via app UA");
                 String r = JoanSipUa.register(app);
+                sLastRegister = (r == null) ? "null" : r;
                 boolean ok = r != null && r.contains("reg2=200");
                 JoanTrace.note("app register: "
                         + (r == null ? "null" : r));

@@ -116,6 +116,7 @@ public class JoanStateProvider extends ContentProvider {
         c.addRow(new Object[] { "ims_requested", String.valueOf(JoanDriver.imsRequested()) });
         c.addRow(new Object[] { "last_state", JoanDriver.lastState() });
         c.addRow(new Object[] { "aka_stage", JoanTrace.akaStage() });
+        c.addRow(new Object[] { "last_register", JoanDriver.lastRegister() });
         c.addRow(new Object[] { "sub_debug", JoanDriver.subscriptionDebug(ctx) });
         return c;
     }
