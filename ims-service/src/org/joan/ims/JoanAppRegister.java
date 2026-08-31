@@ -275,6 +275,7 @@ final class JoanAppRegister {
                     .append(pcscfSec.portS).append(' ');
             String r2 = sendRecv(sockC, sockS, pcscf, pcscfSec.portS,
                     reg2Bytes, REG2_TIMEOUT_MS);
+            sb.append("reg2retx=").append(sRetx).append(' ');
             if (r2 == null) {
                 return sb + "FAIL: reg2 timeout";
             }
@@ -475,18 +476,48 @@ final class JoanAppRegister {
         return s;
     }
 
+    /** Retransmissions used by the last sendRecv, for the summary line. */
+    private static int sRetx;
+
+    /**
+     * Send and wait, retransmitting on RFC 3261 timers.
+     *
+     * SIP over UDP is not reliable and the transaction layer is supposed to
+     * retransmit: T1 = 500 ms, doubling, capped at T2 = 4 s. This sent once
+     * and waited, so a single lost datagram was indistinguishable from a
+     * core that never answers -- and the protected REGISTER goes out
+     * immediately after the security associations are installed, which is
+     * exactly when a packet is most likely to be dropped while the peer
+     * finishes plumbing its inbound SA.
+     */
     private static String sendRecv(DatagramSocket primary, DatagramSocket alt,
                                    InetAddress dest, int dport, byte[] pkt,
                                    int timeoutMs) throws Exception {
         DatagramPacket out = new DatagramPacket(pkt, pkt.length, dest, dport);
         primary.send(out);
-        long deadline = System.currentTimeMillis() + timeoutMs;
+        sRetx = 0;
+        long start = System.currentTimeMillis();
+        long deadline = start + timeoutMs;
+        long interval = 500;
+        long nextTx = start + interval;
         byte[] buf = new byte[4096];
         while (System.currentTimeMillis() < deadline) {
+            long now = System.currentTimeMillis();
+            if (now >= nextTx) {
+                try {
+                    primary.send(out);
+                    sRetx++;
+                } catch (Exception e) {
+                    /* Keep listening: the first send may still be in
+                     * flight and the answer can still arrive. */
+                }
+                interval = Math.min(interval * 2, 4000);
+                nextTx = now + interval;
+            }
             int slice = (int) Math.min(200,
-                    deadline - System.currentTimeMillis());
+                    Math.min(deadline, nextTx) - System.currentTimeMillis());
             if (slice <= 0) {
-                break;
+                continue;
             }
             String got = tryRecv(primary, buf, slice);
             if (got != null) {
