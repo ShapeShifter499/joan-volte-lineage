@@ -57,6 +57,31 @@ final class JoanSecAgree {
         return best;
     }
 
+    /**
+     * The mechanisms the P-CSCF offered, as "alg/ealg" pairs with the
+     * chosen one marked. Algorithm names only -- no SPIs, no ports.
+     *
+     * Which mechanism was selected decides whether the ESP SA carries
+     * encryption at all, and a network offering only null encryption
+     * exercises a path an aes-cbc network never touches. When a REGISTER
+     * dies inside the SA, knowing what else was available is the
+     * difference between a guess and a next step.
+     */
+    static String offerSummary(String value, JoanSecAgree chosen) {
+        StringBuilder sb = new StringBuilder();
+        for (JoanSecAgree m : parseAll(value)) {
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(m.alg).append('/').append(m.ealg);
+            if (chosen != null && m.alg.equals(chosen.alg)
+                    && m.ealg.equals(chosen.ealg)) {
+                sb.append('*');
+            }
+        }
+        return sb.length() == 0 ? "none" : sb.toString();
+    }
+
     static List<JoanSecAgree> parseAll(String value) {
         List<JoanSecAgree> out = new ArrayList<>();
         if (value == null) {

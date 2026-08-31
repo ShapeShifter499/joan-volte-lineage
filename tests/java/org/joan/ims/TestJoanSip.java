@@ -18,6 +18,7 @@ public final class TestJoanSip {
         testDerivedIdentity();
         testSecAgreeOnInvite();
         testAmrPayload();
+        testOfferSummary();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -538,6 +539,23 @@ public final class TestJoanSip {
                 "refuses to pack a short storage frame");
         check(JoanAmr.requestedMode(new byte[] { (byte) 0x20 }, 0, 1) == 2,
                 "CMR is read from the top nibble");
+    }
+
+    private static void testOfferSummary() {
+        String hdr = "ipsec-3gpp; alg=hmac-sha-1-96; ealg=null; prot=esp;"
+                + " mod=trans; spi-c=1; spi-s=2; port-c=100; port-s=200; q=0.8,"
+                + " ipsec-3gpp; alg=hmac-sha-1-96; ealg=aes-cbc; prot=esp;"
+                + " mod=trans; spi-c=3; spi-s=4; port-c=101; port-s=201; q=0.2";
+        JoanSecAgree pick = JoanSecAgree.select(hdr);
+        String sum = JoanSecAgree.offerSummary(hdr, pick);
+        check(sum.contains("hmac-sha-1-96/null")
+                && sum.contains("hmac-sha-1-96/aes-cbc"),
+                "offer summary lists every mechanism");
+        check(sum.indexOf('*') > 0, "offer summary marks the chosen one");
+        check(sum.indexOf("spi") < 0 && sum.indexOf("port") < 0,
+                "offer summary carries no SPIs or ports");
+        check("none".equals(JoanSecAgree.offerSummary(null, null)),
+                "no offer reads as none");
     }
 
     private static void testImei() {

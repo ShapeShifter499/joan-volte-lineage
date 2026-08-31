@@ -144,7 +144,10 @@ final class JoanAppRegister {
             return sb + "FAIL: no supported Security-Server mechanism";
         }
         sb.append("ealg=").append(pcscfSec.ealg)
-                .append(" alg=").append(pcscfSec.alg).append(' ');
+                .append(" alg=").append(pcscfSec.alg)
+                .append(" offered=")
+                .append(JoanSecAgree.offerSummary(p1.secServer, pcscfSec))
+                .append(' ');
 
         String authHex;
         try {
@@ -162,12 +165,25 @@ final class JoanAppRegister {
         byte[] res = JoanSipCrypto.hexBytes(parts[0]);
         byte[] ck = JoanSipCrypto.hexBytes(parts[1]);
         byte[] ik = JoanSipCrypto.hexBytes(parts[2]);
+        /* CK and IK are always 128 bits in UMTS AKA. RES varies (4..16
+         * octets), so its length alone cannot tell a good parse from a bad
+         * one -- but if RES were read too long, CK and IK would be shifted
+         * and come out the wrong size. Reporting all three turns a silent
+         * "reg2 timeout" from wrong ESP keys into something legible. */
+        sb.append("reslen=").append(res == null ? -1 : res.length)
+                .append(" cklen=").append(ck == null ? -1 : ck.length)
+                .append(" iklen=").append(ik == null ? -1 : ik.length)
+                .append(' ');
         if (res == null || ck == null || ik == null
-                || (res.length != 8 && res.length != 16)
-                || ck.length < 16 || ik.length < 16) {
+                || res.length < 4 || res.length > 16) {
             return sb + "FAIL: aka lengths";
         }
-        sb.append("reslen=").append(res.length).append(' ');
+        if (ck.length != 16 || ik.length != 16) {
+            /* Not a length quirk: the AKA response was parsed wrongly, and
+             * proceeding would install ESP keys the network cannot match,
+             * which shows up only as a REGISTER that never answers. */
+            return sb + "FAIL: aka parse shape (CK/IK must be 16 octets)";
+        }
 
         JoanSipCrypto.EspKeys keys;
         try {
