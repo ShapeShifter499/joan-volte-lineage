@@ -672,6 +672,25 @@ final class JoanSipBuilder {
 
     static String buildInvite(Id id, Dialog dlg, String dest, String route,
                               String secVerify, int rtpPort, String pani) {
+        return buildInvite(id, dlg, dest, route, secVerify, rtpPort, pani,
+                true);
+    }
+
+    /**
+     * @param requireSecAgree emit Require/Proxy-Require: sec-agree.
+     *   sec-agree is hop-by-hop between UE and P-CSCF, but Proxy-Require is
+     *   examined by every proxy on the path, so a downstream one that does
+     *   not implement it answers 420 Bad Extension. The P-CSCF is supposed
+     *   to strip the option tags before forwarding; not all do. RFC 3329's
+     *   model is to negotiate once on REGISTER and carry Security-Verify
+     *   afterwards, which is what the in-dialog requests here already do.
+     *   Sent by default because the C UA did and it works on the one core
+     *   this was built against; invite() drops it and retries on a 420
+     *   rather than guessing which reading a given network takes.
+     */
+    static String buildInvite(Id id, Dialog dlg, String dest, String route,
+                              String secVerify, int rtpPort, String pani,
+                              boolean requireSecAgree) {
         if (id.impu == null || id.impu.isEmpty()) {
             return null;
         }
@@ -710,8 +729,10 @@ final class JoanSipBuilder {
         a.append("P-Preferred-Identity: <").append(aor).append(">\r\n");
         a.append("P-Access-Network-Info: ").append(pani).append("\r\n");
         a.append("Allow: ").append(ALLOW).append("\r\n");
-        a.append("Require: sec-agree\r\n");
-        a.append("Proxy-Require: sec-agree\r\n");
+        if (requireSecAgree) {
+            a.append("Require: sec-agree\r\n");
+            a.append("Proxy-Require: sec-agree\r\n");
+        }
         if (secVerify != null && !secVerify.isEmpty()) {
             a.append("Security-Verify: ").append(secVerify).append("\r\n");
         }

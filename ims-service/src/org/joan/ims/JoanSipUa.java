@@ -201,8 +201,9 @@ final class JoanSipUa {
                 sId.impi, sPublicId, sId.realm, sId.localIp,
                 sId.viaPort, sId.contactPort, sId.imei);
         JoanSipBuilder.Dialog dlg = new JoanSipBuilder.Dialog();
+        boolean secAgree = true;
         String msg = JoanSipBuilder.buildInvite(id, dlg, dest, sServiceRoute,
-                sSecVerify, RTP_PORT, sPani);
+                sSecVerify, RTP_PORT, sPani, secAgree);
         if (msg == null) {
             return "ERR build invite";
         }
@@ -315,6 +316,29 @@ final class JoanSipUa {
                         + (sMediaIp != null ? "yes" : "no")
                         + " mux=" + sMediaMux);
                 return "OK";
+            }
+            if (p.status == 420 && secAgree) {
+                /* Bad Extension. Some proxy on the path did not understand
+                 * an option tag; sec-agree is the only one we send, and it
+                 * is hop-by-hop and should have been stripped by the
+                 * P-CSCF. Retry once without it as a fresh transaction
+                 * rather than failing the call. */
+                secAgree = false;
+                JoanTrace.note("app invite 420; retrying without sec-agree");
+                dlg = new JoanSipBuilder.Dialog();
+                String retry = JoanSipBuilder.buildInvite(id, dlg, dest,
+                        sServiceRoute, sSecVerify, RTP_PORT, sPani, false);
+                if (retry == null) {
+                    return "ERR build invite";
+                }
+                try {
+                    send(sSockC, sPcscf, sPcscfPortS,
+                            retry.getBytes(StandardCharsets.US_ASCII));
+                } catch (Exception e) {
+                    return "ERR invite send";
+                }
+                deadline = System.currentTimeMillis() + 30000;
+                continue;
             }
             if (p.status >= 300) {
                 return "ERR invite " + p.status;

@@ -16,6 +16,7 @@ public final class TestJoanSip {
         testAdvertisedCapabilities();
         testCodecHonesty();
         testDerivedIdentity();
+        testSecAgreeOnInvite();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -435,6 +436,34 @@ public final class TestJoanSip {
                 && JoanSipBuilder.derivedImpi("abc460001234", "46000") == null
                 && JoanSipBuilder.derivedImpi(null, "46000") == null,
                 "malformed IMSI returns null");
+    }
+
+    /** sec-agree is hop-by-hop; a 420 must be retriable without it. */
+    private static void testSecAgreeOnInvite() {
+        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                "user@ims.example", "sip:+15555550100@ims.example",
+                "ims.example", "2600::5", 5000, 5001, "123456789012345");
+        String with = JoanSipBuilder.buildInvite(id,
+                new JoanSipBuilder.Dialog(), "tel:+15555550111", null,
+                "ipsec-3gpp;alg=hmac-sha-1-96", 40000, "3GPP-E-UTRAN-FDD",
+                true);
+        String without = JoanSipBuilder.buildInvite(id,
+                new JoanSipBuilder.Dialog(), "tel:+15555550111", null,
+                "ipsec-3gpp;alg=hmac-sha-1-96", 40000, "3GPP-E-UTRAN-FDD",
+                false);
+        check(with.contains("Require: sec-agree")
+                && with.contains("Proxy-Require: sec-agree"),
+                "INVITE carries sec-agree by default");
+        check(!without.contains("Require: sec-agree")
+                && !without.contains("Proxy-Require: sec-agree"),
+                "retry INVITE drops both sec-agree option tags");
+        /* Security-Verify is not an option tag and must survive: it is how
+         * the P-CSCF matches the request to the security association. */
+        check(without.contains("Security-Verify: ipsec-3gpp"),
+                "retry INVITE keeps Security-Verify");
+        check(JoanSipBuilder.buildInvite(id, new JoanSipBuilder.Dialog(),
+                "tel:+1", null, null, 40000, "x").contains("Require: sec-agree"),
+                "the 7-arg form still defaults to sending it");
     }
 
     private static void testImei() {
