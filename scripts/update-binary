@@ -151,66 +151,7 @@ if [ -f "$TMP/app/joan-ims-rro.apk" ]; then
     "$PRODMNT/overlay/JoanImsPhoneDefault.apk" 644 u:object_r:system_file:s0
 fi
 
-# --- Platform AGC ------------------------------------------------------
-# Gain control belongs in the platform audio path; JoanMedia does none.
-# joan's audio_effects.xml declares only Qualcomm's aec and ns, so the
-# uplink would otherwise be whatever the microphone gave us -- measured
-# swings of 20 dB between calls. AOSP's libaudiopreprocessing.so, which
-# implements AGC, ships on the device unreferenced.
-#
-# Derive rather than ship a copy: read the device's live vendor config and
-# inject three lines. Nothing static is carried, so a ROM update is
-# handled by re-running this zip rather than by us tracking their file.
-# /odm/etc takes precedence over /vendor/etc in the effects search path
-# (verified on a US998: the app reports platform_agc=true), so /vendor is
-# never written.
-AGC_UUID=aa8130e0-66fc-11e0-bad0-0002a5d5c51b
-VENDMNT=/mnt/joan_vendor
-ODMMNT=/mnt/joan_odm
-
-mount_ro() {
-  mkdir -p "$2"
-  mount | grep -q " $2 " && return 0
-  for dev in /dev/block/mapper/$1 /dev/block/by-name/$1; do
-    [ -b "$dev" ] || continue
-    mount -o ro "$dev" "$2" 2>/dev/null && return 0
-  done
-  return 1
-}
-
-if mount_ro vendor "$VENDMNT" && [ -f "$VENDMNT/etc/audio_effects.xml" ]; then
-  SRC="$VENDMNT/etc/audio_effects.xml"
-  if grep -q "name=\"agc\"" "$SRC"; then
-    ui_print "Platform AGC already declared by the ROM; leaving it alone"
-  elif ! grep -q "<stream type=\"voice_communication\">" "$SRC"; then
-    ui_print "WARN: no voice_communication preprocess block; skipping AGC"
-  elif mount_part odm "$ODMMNT"; then
-    ui_print "Enabling platform AGC (derived from the live vendor config)"
-    mkdir -p "$ODMMNT/etc"
-    OUT="$ODMMNT/etc/audio_effects.xml"
-    sed -e "s|</libraries>|    <library name=\"pre_processing\" path=\"libaudiopreprocessing.so\"/>\n    </libraries>|" \
-        -e "s|</effects>|    <effect name=\"agc\" library=\"pre_processing\" uuid=\"$AGC_UUID\"/>\n    </effects>|" \
-        -e "/<stream type=\"voice_communication\">/,/<\/stream>/ s|<apply effect=\"ns\"/>|&\n            <apply effect=\"agc\"/>|" \
-        "$SRC" > "$OUT" || error "could not write $OUT"
-    chmod 644 "$OUT"
-    chcon u:object_r:system_file:s0 "$OUT" 2>/dev/null || true
-    # Every injection must have landed, or we have written a config that
-    # silently does nothing -- the failure mode this whole installer
-    # exists to stop.
-    for pat in "libaudiopreprocessing.so" "name=\"agc\"" "<apply effect=\"agc\"/>"; do
-      grep -q "$pat" "$OUT" || error "AGC override missing $pat; not enabled"
-    done
-    ui_print "  audio_effects.xml derived ($(wc -c < "$OUT" | tr -d " ") bytes)"
-  else
-    ui_print "WARN: no writable /odm; platform AGC not enabled"
-  fi
-else
-  ui_print "WARN: cannot read the vendor audio config; AGC not enabled"
-fi
-umount "$VENDMNT" 2>/dev/null || true
-
 sync
-umount "$ODMMNT" 2>/dev/null || true
 umount "$PRODMNT" 2>/dev/null || true
 umount "$SYSMNT" 2>/dev/null || true
 

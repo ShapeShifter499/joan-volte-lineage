@@ -38,15 +38,6 @@ sync
 ui_print "Uninstall done. Reboot system."
 exit 0
 
-ODMMNT=/mnt/joan_odm
-mkdir -p "$ODMMNT"
-mount | grep -q " $ODMMNT " || \
-  mount -o rw /dev/block/mapper/odm "$ODMMNT" 2>/dev/null || \
-  mount -o rw /dev/block/by-name/odm "$ODMMNT" 2>/dev/null || true
-rm -f "$ODMMNT/etc/audio_effects.xml"
-ui_print "  /odm: audio_effects.xml override removed (or absent)"
-
 sync
-umount "$ODMMNT" 2>/dev/null || true
 umount "$PRODMNT" 2>/dev/null || true
 umount "$SYSMNT" 2>/dev/null || true
