@@ -35,3 +35,59 @@ point `LOCAL_PATH` at a checkout that also contains `ims-service/` and
 ## Licence
 
 Apache-2.0. See `LICENSE`.
+
+## Optional: platform AGC for the uplink
+
+Not required, and not done by the zip. Read this only if you are building
+in-tree and want the platform to do gain control instead of the app.
+
+There is no AGC on the VoIP capture path on joan. `/vendor/etc/audio_effects.xml`
+declares only Qualcomm's `aec` and `ns` from `libqcomvoiceprocessing.so`:
+
+    <library name="audio_pre_processing" path="libqcomvoiceprocessing.so"/>
+    <effect name="aec" library="audio_pre_processing" uuid="0f8d0d2a-..."/>
+    <effect name="ns"  library="audio_pre_processing" uuid="1d97bb0b-..."/>
+    <preprocess>
+      <stream type="voice_communication">
+        <apply effect="aec"/><apply effect="ns"/>
+      </stream>
+    </preprocess>
+
+AOSP's `libaudiopreprocessing.so` — the WebRTC audio processing module,
+which does implement AGC and AGC2 — ships on the device and nothing
+references it. LG's own uplink conditioning lives in the ADSP voice
+topology loaded from ACDB (`/vendor/etc/acdbdata/`), which only the
+modem's voice path reaches, never the AP VoIP path this stack uses.
+
+JoanMedia therefore runs its own software AGC and limiter. It calls
+`AutomaticGainControl.isAvailable()` first and defers entirely to the
+platform when a ROM provides one, so enabling the effect below makes the
+app step aside automatically. No app change is needed either way.
+
+To enable it, add to the device's `audio_effects.xml` (in
+`device/lge/joan-common`, not from a flashable zip — `/vendor` writes are
+reverted by OTA and a stale copy of a vendor config breaks audio
+system-wide):
+
+    <library name="pre_processing" path="libaudiopreprocessing.so"/>
+    <effect name="agc" library="pre_processing" uuid="..."/>
+    ...
+    <stream type="voice_communication">
+      <apply effect="aec"/><apply effect="ns"/><apply effect="agc"/>
+    </stream>
+
+Take the UUID from AOSP's reference `frameworks/av/media/libeffects/data/audio_effects.xml`
+in your own tree rather than from this document; it is version-specific
+and worth checking against the library you are actually shipping.
+
+Two things to weigh before doing it:
+
+- `<preprocess>` applies to **every** app using `voice_communication`, not
+  just this one. Signal, WhatsApp and Meet bring their own WebRTC AGC;
+  stacking a platform AGC on top of theirs can pump.
+- Qualcomm AEC/NS feeding an AOSP AGC is not a combination anyone has
+  validated on this device.
+
+Measured before deciding: with the app's software AGC, uplink speech sits
+at -21.3 dBFS against a far end arriving at -19.5 dBFS. Level is not
+currently the limiting factor on this handset; narrowband PCMU is.
