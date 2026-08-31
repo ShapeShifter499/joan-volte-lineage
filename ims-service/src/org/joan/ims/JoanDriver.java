@@ -672,7 +672,13 @@ final class JoanDriver {
                 return null;
             }
             if (list.isEmpty()) {
-                sPcscfReason = "PDN advertised no P-CSCF (empty list)";
+                /* The usual cause is not a fault here: a network hands out
+                 * no P-CSCF to a subscriber it has not provisioned for
+                 * VoLTE. Confirmed once on an old SIM that connected the
+                 * IMS PDN and advertised nothing. Say so, or the next
+                 * person spends a day looking for a bug on this side. */
+                sPcscfReason = "PDN advertised none -- SIM may not be "
+                        + "provisioned for VoLTE";
                 return null;
             }
             sPcscfReason = "";
