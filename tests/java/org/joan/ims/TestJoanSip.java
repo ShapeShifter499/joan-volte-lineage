@@ -15,6 +15,7 @@ public final class TestJoanSip {
         testRefreshLead();
         testAdvertisedCapabilities();
         testCodecHonesty();
+        testDerivedIdentity();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -406,6 +407,34 @@ public final class TestJoanSip {
         m = JoanSipBuilder.parseSdp(multiOffer);
         check(m != null && m.payloadType == 96 && m.offersPcmu,
                 "an offer listing PCMU anywhere is answerable");
+    }
+
+    /** TS 23.003 13.3 derivation, used when the card has no ISIM. */
+    private static void testDerivedIdentity() {
+        check("ims.mnc260.mcc310.3gppnetwork.org".equals(
+                JoanSipBuilder.derivedDomain("310260")),
+                "3-digit MNC domain");
+        /* China Mobile is 460/00 -- a 2-digit MNC that must pad to 3.
+         * Getting this wrong yields ims.mnc00.mcc460 and a realm the core
+         * has never heard of. */
+        check("ims.mnc000.mcc460.3gppnetwork.org".equals(
+                JoanSipBuilder.derivedDomain("46000")),
+                "2-digit MNC pads to 3");
+        check("ims.mnc007.mcc460.3gppnetwork.org".equals(
+                JoanSipBuilder.derivedDomain("46007")),
+                "2-digit MNC 07 pads to 007");
+        check(JoanSipBuilder.derivedDomain("4600") == null
+                && JoanSipBuilder.derivedDomain("4600001") == null
+                && JoanSipBuilder.derivedDomain("46x00") == null
+                && JoanSipBuilder.derivedDomain(null) == null,
+                "malformed operator numeric returns null, not a guess");
+        check(("460001234567890@ims.mnc000.mcc460.3gppnetwork.org").equals(
+                JoanSipBuilder.derivedImpi("460001234567890", "46000")),
+                "derived IMPI is IMSI@domain");
+        check(JoanSipBuilder.derivedImpi("46000", "46000") == null
+                && JoanSipBuilder.derivedImpi("abc460001234", "46000") == null
+                && JoanSipBuilder.derivedImpi(null, "46000") == null,
+                "malformed IMSI returns null");
     }
 
     private static void testImei() {

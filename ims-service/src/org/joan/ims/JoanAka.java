@@ -19,6 +19,11 @@ final class JoanAka {
 
     /** ISIM AID used by pmOS on this modem (proven with QMI UIM). */
     private static final String ISIM_AID = "A0000000871004FFFFFFFF8907030000";
+    /* Cards without an ISIM authenticate on the USIM instead. TS 33.203
+     * allows IMS AKA against the USIM when no ISIM is present, and plenty
+     * of operators ship USIM-only cards -- the stack was ISIM-only and
+     * simply stopped on those. */
+    private static final String USIM_AID = "A0000000871002FFFFFFFF8907090000";
 
     private JoanAka() {}
 
@@ -122,24 +127,53 @@ final class JoanAka {
         // number here would transmit on an unopened channel — bug fixed.)
         String apduAuth = apduAuthenticate(tm, nonceRaw, 0, 0);
         if (apduAuth != null) {
+            JoanTrace.note("aka via ISIM apdu");
             return apduAuth;
         }
 
         // Fallback: TelephonyManager.getIccAuthentication with the correct
         // TLV (both tags 0x10 per TS 31.102), for devices whose modem path
         // accepts it. Kept after the proven APDU route.
-        return runIccAuthViaGet(tm, nonceRaw);
+        String viaIsim = runIccAuthViaGet(tm, nonceRaw,
+                TelephonyManager.APPTYPE_ISIM);
+        if (viaIsim != null) {
+            JoanTrace.note("aka via ISIM getIccAuthentication");
+            return viaIsim;
+        }
+
+        /* Cards with no ISIM. TS 33.203 allows IMS AKA against the USIM,
+         * and an ISIM-only stack simply stops on such a card -- which is
+         * what "no ISIM IMPI on this device/SIM yet" was reporting. Try
+         * the USIM applet by AID first, then the framework route. */
+        String usimApdu = apduAuthenticate(tm, nonceRaw, 0, 0, USIM_AID);
+        if (usimApdu != null) {
+            JoanTrace.note("aka via USIM apdu");
+            return usimApdu;
+        }
+        String viaUsim = runIccAuthViaGet(tm, nonceRaw,
+                TelephonyManager.APPTYPE_USIM);
+        if (viaUsim != null) {
+            JoanTrace.note("aka via USIM getIccAuthentication");
+            return viaUsim;
+        }
+        JoanTrace.note("aka: no ISIM or USIM route succeeded");
+        return null;
     }
 
     /** AUTHENTICATE over a logical channel; returns "RES=.. CK=.. IK=.." */
     private static String apduAuthenticate(TelephonyManager tm, byte[] randAutn,
                                            int off, int channel) {
+        return apduAuthenticate(tm, randAutn, off, channel, ISIM_AID);
+    }
+
+    private static String apduAuthenticate(TelephonyManager tm, byte[] randAutn,
+                                           int off, int channel, String aid) {
         try {
             int ch = channel;
             boolean owned = false;
             if (ch <= 0) {
                 android.telephony.IccOpenLogicalChannelResponse r =
-                        tm.iccOpenLogicalChannel(ISIM_AID);
+                        tm.iccOpenLogicalChannel(aid);
                 if (r == null || r.getChannel() <= 0) {
                     JoanTrace.note("apdu: open failed status="
                             + (r == null ? "null" : r.getStatus()));
@@ -276,7 +310,7 @@ final class JoanAka {
 
     /** Legacy path kept as fallback; corrected TLV tags (both 0x10). */
     private static String runIccAuthViaGet(TelephonyManager tm,
-                                           byte[] nonceRaw) {
+                                           byte[] nonceRaw, int appType) {
         try {
             byte[] tlv34 = new byte[34];
             tlv34[0] = 0x10;
@@ -288,7 +322,7 @@ final class JoanAka {
             Method m = TelephonyManager.class.getMethod(
                     "getIccAuthentication", int.class, int.class,
                     String.class);
-            Object r = m.invoke(tm, TelephonyManager.APPTYPE_ISIM,
+            Object r = m.invoke(tm, appType,
                     TelephonyManager.AUTHTYPE_EAP_AKA, b64);
             if (r == null) {
                 return null;

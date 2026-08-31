@@ -157,6 +157,50 @@ final class JoanSipBuilder {
         return "00000000-000000-0";
     }
 
+    /**
+     * TS 23.003 13.3: when the card has no ISIM, the private identity and
+     * the home domain are derived from the IMSI.
+     *
+     *   domain = ims.mnc<MNC>.mcc<MCC>.3gppnetwork.org   (MNC padded to 3)
+     *   IMPI   = <IMSI>@<domain>
+     *
+     * mccMnc is the SIM operator numeric: MCC (3 digits) then MNC (2 or 3).
+     * Returns null rather than guessing if either input is malformed -- a
+     * wrong realm produces a REGISTER that fails in a way nobody can read.
+     */
+    static String derivedDomain(String mccMnc) {
+        if (mccMnc == null || mccMnc.length() < 5 || mccMnc.length() > 6) {
+            return null;
+        }
+        for (int i = 0; i < mccMnc.length(); i++) {
+            char c = mccMnc.charAt(i);
+            if (c < '0' || c > '9') {
+                return null;
+            }
+        }
+        String mcc = mccMnc.substring(0, 3);
+        String mnc = mccMnc.substring(3);
+        if (mnc.length() == 2) {
+            mnc = "0" + mnc;
+        }
+        return "ims.mnc" + mnc + ".mcc" + mcc + ".3gppnetwork.org";
+    }
+
+    /** Derived IMPI, or null. The IMSI is an authenticator: never log it. */
+    static String derivedImpi(String imsi, String mccMnc) {
+        String domain = derivedDomain(mccMnc);
+        if (domain == null || imsi == null || imsi.length() < 6) {
+            return null;
+        }
+        for (int i = 0; i < imsi.length(); i++) {
+            char c = imsi.charAt(i);
+            if (c < '0' || c > '9') {
+                return null;
+            }
+        }
+        return imsi + "@" + domain;
+    }
+
     static String bracket(String ip) {
         if (ip != null && ip.indexOf(':') >= 0) {
             return "[" + ip + "]";

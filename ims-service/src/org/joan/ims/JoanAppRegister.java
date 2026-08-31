@@ -401,6 +401,24 @@ final class JoanAppRegister {
         String domain = hidden(tm, "getIsimDomain");
         String imei = hidden(tm, "getImei");
         if (impi == null || !impi.contains("@")) {
+            /* USIM-only card: derive per TS 23.003 13.3. impu stays null,
+             * so the public identity must come from P-Associated-URI in
+             * the 200 OK -- a derived IMPI contains the IMSI and must
+             * never become a display identity. */
+            String mccMnc;
+            try {
+                mccMnc = tm.getSimOperator();
+            } catch (Throwable t) {
+                mccMnc = null;
+            }
+            impi = JoanSipBuilder.derivedImpi(
+                    hidden(tm, "getSubscriberId"), mccMnc);
+            if (domain == null || domain.isEmpty()) {
+                domain = JoanSipBuilder.derivedDomain(mccMnc);
+            }
+            JoanTrace.note("identity derived from IMSI (no ISIM)");
+        }
+        if (impi == null || !impi.contains("@")) {
             return null;
         }
         if (impu == null || impu.isEmpty()) {

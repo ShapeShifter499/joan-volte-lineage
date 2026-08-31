@@ -284,9 +284,25 @@ final class JoanDriver {
         // Only after radio+IMS prerequisites are met do we ask for identity.
         String domain = hiddenString(tm, "getIsimDomain");
         String impi = hiddenString(tm, "getIsimImpi");
+        String idSource = "isim";
         if (impi == null || !impi.contains("@")) {
-            return Discovery.waitFor("no ISIM IMPI on this device/SIM yet");
+            /* No ISIM on the card. TS 23.003 13.3 derives the private
+             * identity and home domain from the IMSI, which is what a
+             * handset does with a USIM-only card. Requiring an ISIM was
+             * why such cards stopped here with "no ISIM IMPI". */
+            String mccMnc = safeSimOperator(tm);
+            impi = JoanSipBuilder.derivedImpi(
+                    hiddenString(tm, "getSubscriberId"), mccMnc);
+            if (domain == null || domain.isEmpty()) {
+                domain = JoanSipBuilder.derivedDomain(mccMnc);
+            }
+            idSource = "derived";
         }
+        if (impi == null || !impi.contains("@")) {
+            return Discovery.waitFor(
+                    "no ISIM IMPI, and none derivable from the IMSI");
+        }
+        logState("identity=" + idSource);
 
         String realm = (domain != null && !domain.isEmpty())
                 ? domain : realmFromImpi(impi);
@@ -304,6 +320,16 @@ final class JoanDriver {
                     Settings.Global.AIRPLANE_MODE_ON, 0) != 0;
         } catch (Throwable t) {
             return false;
+        }
+    }
+
+    /** MCC+MNC as reported by the SIM, or null. Not an identity. */
+    private static String safeSimOperator(TelephonyManager tm) {
+        try {
+            String s = tm.getSimOperator();
+            return (s == null || s.isEmpty()) ? null : s;
+        } catch (Throwable t) {
+            return null;
         }
     }
 
