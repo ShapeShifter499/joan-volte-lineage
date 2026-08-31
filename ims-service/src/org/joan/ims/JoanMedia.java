@@ -169,7 +169,6 @@ final class JoanMedia {
             byte[] rtp = new byte[RTP_HDR + PTIME_SAMPLES];
             DatagramPacket out = new DatagramPacket(
                     rtp, rtp.length, dest, dport);
-            double agcGain = 1.0;
             AudioManager cam = app.getSystemService(AudioManager.class);
             JoanTrace.note("media cap rolling src=" + rec.getAudioSource()
                     + " mode=" + (cam == null ? -1 : cam.getMode()));
@@ -185,38 +184,13 @@ final class JoanMedia {
                     rawSq += (long) a * a;
                 }
                 boolean speech = m > 0 && rawSq / m > ACTIVE_MEAN_SQ;
-                if (speech && !sPlatformAgc) {
-                    /* Adapt on speech only, so silence is never amplified
-                     * into audible noise. Come down fast to catch a shout,
-                     * go up slowly so the gain does not breathe. */
-                    double rms = Math.sqrt((double) rawSq / m);
-                    double want = Math.max(1.0, Math.min(AGC_MAX_GAIN,
-                            AGC_TARGET / Math.max(1.0, rms)));
-                    agcGain += (want - agcGain) * (want < agcGain ? 0.25 : 0.02);
-                }
-                long frameSq = 0;
+                long frameSq = rawSq;
                 for (int i = 0; i < m; i++) {
-                    int v;
-                    if (sPlatformAgc) {
-                        /* The platform conditioned this already. Touch
-                         * nothing -- not the gain, and not the limiter,
-                         * which was still squaring off every peak above
-                         * -3 dBFS and damaging audio that was fine. */
-                        v = pcm[i];
-                    } else {
-                        v = (int) (pcm[i] * agcGain);
-                        if (v > AGC_LIMIT) {
-                            v = AGC_LIMIT;
-                        } else if (v < -AGC_LIMIT) {
-                            v = -AGC_LIMIT;
-                        }
-                    }
-                    int a = v < 0 ? -v : v;
-                    frameSq += (long) a * a;
+                    int a = pcm[i] < 0 ? -pcm[i] : pcm[i];
                     if (a > ulPeak) {
                         ulPeak = a;
                     }
-                    ulaw[i] = linearToUlaw((short) v);
+                    ulaw[i] = linearToUlaw(pcm[i]);
                 }
                 ulSumSq += frameSq;
                 ulSamples += m;
@@ -227,8 +201,7 @@ final class JoanMedia {
                 if (!ulLogged && ulSamples >= SAMPLE_HZ * 5L) {
                     JoanTrace.note("media ul level " + level(ulSumSq,
                             ulSamples, ulPeak, ulActSq, ulActSamples)
-                            + String.format(java.util.Locale.US,
-                                    " agc=%+.1fdB", 20 * Math.log10(agcGain)));
+                            + " platform_agc=" + sPlatformAgc);
                     ulLogged = true;
                 }
                 rtp[0] = (byte) 0x80;
@@ -480,15 +453,19 @@ final class JoanMedia {
      */
     private static final long ACTIVE_MEAN_SQ = 10000L;
 
-    /* Software AGC. This platform has no AGC effect: audio_effects.xml
-     * declares only Qualcomm's aec and ns, and LG's uplink conditioning
-     * lives in the ADSP voice topology (ACDB), which the AP VoIP path we
-     * use does not reach. Measured uplink speech swung between -24 and
-     * -45 dBFS across calls while the far end arrived at -16 to -23,
-     * because nothing between AudioRecord and the encoder touches level. */
-    private static final double AGC_TARGET = 32768.0 * 0.1;   /* -20 dBFS */
-    private static final double AGC_MAX_GAIN = 16.0;          /* +24 dB */
-    private static final int AGC_LIMIT = 23197;               /* -3 dBFS */
+    /* Gain control belongs in the platform audio path, not here. No other
+     * IMS implementation does it in the application: the ADSP voice
+     * topology conditions the uplink from ACDB calibration, and for the
+     * AP VoIP path the platform's own AGC effect does it. This class
+     * carried a software AGC for a while because joan's audio_effects.xml
+     * declares only Qualcomm's aec and ns. It is gone -- it ran 10-13 dB
+     * hotter than the platform's and sounded worse, and its limiter was
+     * squaring off peaks the platform had already levelled. The zip
+     * enables the platform AGC instead.
+     *
+     * Still reported in the trace, so a false value makes it obvious the
+     * audio_effects.xml override is missing or was wiped by a ROM update
+     * and the uplink is whatever the microphone happened to give us. */
     private static volatile boolean sPlatformAgc;
 
     private static String level(long sumSq, long samples, int peak,
