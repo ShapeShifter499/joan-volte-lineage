@@ -13,6 +13,49 @@ loopback control socket.
 > and earpiece follow Dialer. Caller ID is the asserted number; Dialer
 > can still overlay a matching contact.
 
+## Emergency calling — read this
+
+**Emergency calls do not go through this app, by design.** 911/112 on this
+handset are placed by the modem over the circuit-switched domain, exactly
+as they are on a stock LineageOS install with none of this flashed. This
+app declines them: it does not advertise emergency MMTEL, and
+`shouldProcessCall()` pushes any number the platform reports as an
+emergency number to CS fallback. A number it cannot classify also goes to
+CS.
+
+Earlier releases were worse than that. Up to and including v0.2.1 the app
+declared `EMERGENCY_MMTEL_FEATURE` and returned `PROCESS_CALL_IMS` for
+*every* number, which invited telephony to hand an emergency dial to a UA
+with no emergency registration, no `urn:service:sos` request-URI, no PSAP
+callback handling and no location conveyance. That is fixed.
+
+**This has not been tested against a PSAP, and it should not be.** Do not
+dial emergency services to try it. If you want assurance, watch the domain
+telephony selects with `logcat -s Telecom` on a carrier test number, or
+test with a lab SIM.
+
+**Residual risk worth understanding:** in LTE-only coverage with no CS
+available, emergency calling depends on the modem's own emergency attach.
+That path is the modem's and is unchanged by this app — the same with it
+installed or not — but "911 is fine because CS is there" only holds where
+CS is there. If emergency calling on this handset matters to you, satisfy
+yourself about it on your own network before relying on this phone.
+
+## What changed in 0.3.0
+
+**The zip installs now.** Every earlier release — v0.1.0, v0.2.0, v0.2.1 —
+wrote into the recovery ramdisk and reported success, so nothing landed.
+Recovery does not mount `/system` or `/product` for a sideload here; the
+installer now mounts the real logical partitions, refuses to write if the
+target resolves to the ramdisk, write-tests each one and byte-compares
+every file it copies. It also ships a static RRO setting
+`config_ims_mmtel_package`, without which `ImsResolver` never binds the
+service even when the files are present.
+
+Verified end to end on a US998: sideload, reboot, both APKs on the real
+partitions, overlay enabled, MmTel bound, IMS registered — no manual
+commands.
+
 ## What changed in 0.2.0
 
 A review pass over the 0.1.0 release, with every claim below verified on
@@ -53,7 +96,8 @@ playback thread; the dead native-daemon control plane is gone, along with
 a reconnect loop that ran every three seconds forever.
 
 Emergency calling and SMS/MMS over IMS remain unimplemented. The
-difference is that the app no longer claims otherwise.
+difference is that the app no longer claims otherwise -- see the
+Emergency calling section above.
 
 Proven first on postmarketOS on this handset, then ported to a
 stock-shaped Android ROM.
@@ -117,10 +161,9 @@ so far been exercised on one live IMS core.
 
 ## Not in this zip
 
-- **Emergency calling.** Not implemented and, as of 0.2.0, not
-  advertised: emergency dials are pushed to CS fallback. Verify the
-  domain your carrier selects from `logcat -s Telecom` rather than by
-  calling a PSAP.
+- **Emergency calling.** Not carried by this app and not advertised;
+  emergency dials go to CS fallback. Not tested against a PSAP. See the
+  "Emergency calling" section above before relying on this handset.
 - **SMS / MMS over IMS.** Not implemented and no longer advertised, so
   the core keeps delivering SMS over CS/SGs, which works and owes nothing
   to this app. MMS rides the data APN and is likewise unaffected.
