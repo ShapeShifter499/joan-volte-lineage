@@ -121,6 +121,16 @@ The zip installs:
 
 To undo, sideload `joan-volte-uninstall.zip` and reboot.
 
+**Re-flash after a ROM update.** A LineageOS update replaces the
+partitions this installs into, so the app and the IMS overlay go with it.
+Sideload the zip again after each update.
+
+**If a future ROM ships this stack itself, uninstall first.** Run
+`joan-volte-uninstall.zip` *before* upgrading to a build that includes it
+in-tree. Otherwise the sideloaded copy and the in-tree one both claim
+`config_ims_mmtel_package` and the priv-app path, and which one wins is
+not something you want decided by scan order.
+
 Do not flash `abl` / `xbl` / `tz` / `hyp` / `keymaster` / `laf` from
 stock.
 
