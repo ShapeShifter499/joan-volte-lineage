@@ -13,6 +13,49 @@ loopback control socket.
 > and earpiece follow Dialer. Caller ID is the asserted number; Dialer
 > can still overlay a matching contact.
 
+## Help wanted: USIM-only cards
+
+**If your SIM has no ISIM application, this needs testers and logs.**
+
+Support for deriving the IMS identity from the IMSI (3GPP TS 23.003
+§13.3) and authenticating against the USIM instead of an ISIM landed in
+the `v0.4.0-alpha*` prereleases. Both halves are confirmed working on one
+handset: the identity is derived and AKA succeeds. Registration then
+fails at the protected REGISTER on that network, and we do not yet know
+whether that is general or specific to it.
+
+The open question is IPsec with **NULL encryption**. Android exposes no
+NULL cipher constant, so an authentication-only `IpSecTransform` is
+*assumed* to produce ESP-NULL, and that has never been verified anywhere.
+It cannot be reproduced on the development handset, whose network offers
+only `aes-cbc`. A report from a network that selects `null` and *works*
+would settle it as fast as one that fails.
+
+If you are on a USIM-only card, please try the latest `v0.4.0-alpha`
+prerelease and send:
+
+```
+adb shell content query --uri content://org.joan.ims.state
+```
+
+The `last_register` row carries the whole diagnosis — how many P-CSCFs
+were advertised and tried, the reg1 status, the AKA algorithm, the
+selected cipher and integrity algorithm, RES/CK/IK lengths, whether the
+IPsec SAs applied, the retransmission count and the reg2 status. It
+contains counts, status codes and algorithm names only: no IMPI, no IMSI,
+no P-CSCF address, no nonce, no keys. It is safe to paste in an issue.
+
+Two results that are especially useful:
+
+- **`ealg=null` and `reg2=200 OK`** — NULL-encryption ESP works, and the
+  remaining failure is something else
+- **`reg2retx=4` with `FAIL: reg2 timeout`** — four retransmissions and
+  genuine silence, which points at ESP-NULL
+
+If registration never starts and the state says the PDN advertised no
+P-CSCF, that usually means the SIM is not provisioned for VoLTE rather
+than a fault here.
+
 ## Emergency calling — read this
 
 **Emergency calls do not go through this app, by design.** 911/112 on this
