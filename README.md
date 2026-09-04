@@ -20,16 +20,20 @@ loopback control socket.
 Support for deriving the IMS identity from the IMSI (3GPP TS 23.003
 §13.3) and authenticating against the USIM instead of an ISIM landed in
 the `v0.4.0-alpha*` prereleases. Both halves are confirmed working on one
-handset: the identity is derived and AKA succeeds. Registration then
-fails at the protected REGISTER on that network, and we do not yet know
-whether that is general or specific to it.
+handset: the identity is derived and AKA succeeds. On China Mobile the
+protected REGISTER was then sent over UDP and timed out.
+`v0.4.0-alpha7` sends that second REGISTER over TCP to P-CSCF `port-s`
+on MCC 460 only, keeps the TCP client for later SIP, and advances to
+the next advertised P-CSCF if that REG2 is silent (T-Mobile stays on
+the proven UDP path).
 
-The open question is IPsec with **NULL encryption**. Android exposes no
-NULL cipher constant, so an authentication-only `IpSecTransform` is
-*assumed* to produce ESP-NULL, and that has never been verified anywhere.
-It cannot be reproduced on the development handset, whose network offers
-only `aes-cbc`. A report from a network that selects `null` and *works*
-would settle it as fast as one that fails.
+The remaining open question is IPsec with **NULL encryption**. Android
+exposes no NULL cipher constant, so an authentication-only
+`IpSecTransform` is *assumed* to produce ESP-NULL, and that has never
+been verified anywhere. It cannot be reproduced on the development
+handset, whose network offers only `aes-cbc`. A report from a network
+that selects `null` and *works* would settle it as fast as one that
+fails.
 
 If you are on a USIM-only card, please try the latest `v0.4.0-alpha`
 prerelease and send:
@@ -49,8 +53,12 @@ Two results that are especially useful:
 
 - **`ealg=null` and `reg2=200 OK`** — NULL-encryption ESP works, and the
   remaining failure is something else
-- **`reg2retx=4` with `FAIL: reg2 timeout`** — four retransmissions and
-  genuine silence, which points at ESP-NULL
+- **`tpt=tcp` then `reg2=200 OK`** — protected TCP REGISTER is what that
+  core wanted
+- **`tpt=tcp tcp_fail=timeout` with `FAIL: reg2 timeout`** — TCP connected
+  and the core still stayed silent; ESP-NULL is still a live suspect
+- **`tpt=tcp tcp_fail=connect tpt=udp reg2retx=4`** — TCP never
+  established, UDP retried and also timed out
 
 If registration never starts and the state says the PDN advertised no
 P-CSCF, that usually means the SIM is not provisioned for VoLTE rather

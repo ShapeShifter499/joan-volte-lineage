@@ -171,11 +171,66 @@ public final class TestJoanSip {
                 "reg1 Security-Client offers 3GPP set including null ealg");
         check(msg.contains("P-Access-Network-Info: 3GPP-E-UTRAN-FDD"),
                 "reg1 default PANI is radio token");
+        check(msg.contains("Via: SIP/2.0/UDP "),
+                "default REGISTER Via is UDP (T-Mobile path)");
+        check(!msg.contains("Via: SIP/2.0/TCP "),
+                "default REGISTER does not advertise TCP");
         String nr = JoanSipBuilder.buildRegister(id, txn, 1, null, null,
                 null, null, "3GPP-NR-FDD");
         check(nr.contains("P-Access-Network-Info: 3GPP-NR-FDD"),
                 "reg1 PANI follows radio not carrier");
+        testProtectedTcpChoice();
         testInvite();
+    }
+
+    /**
+     * MCC 460 cores (China Mobile live traces, TS 33.203 TCP case) take
+     * the protected REGISTER over TCP. T-Mobile must stay on UDP.
+     */
+    private static void testProtectedTcpChoice() {
+        check(JoanSipBuilder.preferProtectedTcp(
+                        "ims.mnc000.mcc460.3gppnetwork.org"),
+                "CMCC home realm prefers protected TCP");
+        check(JoanSipBuilder.preferProtectedTcp(
+                        "ims.mnc002.mcc460.3gppnetwork.org"),
+                "other MCC 460 MNC also prefers protected TCP");
+        check(!JoanSipBuilder.preferProtectedTcp("msg.pc.t-mobile.com"),
+                "T-Mobile realm stays UDP");
+        check(!JoanSipBuilder.preferProtectedTcp(null)
+                        && !JoanSipBuilder.preferProtectedTcp(""),
+                "empty realm does not flip transport");
+        check(JoanSipBuilder.plmnOf("ims.mnc000.mcc460.3gppnetwork.org") == 460,
+                "CMCC realm parses MCC 460");
+        check(JoanSipBuilder.plmnOf("ims.mnc260.mcc310.3gppnetwork.org") == 310,
+                "T-Mobile home MCC 310");
+        check(JoanSipBuilder.plmnOf("msg.pc.t-mobile.com") == -1,
+                "non-3GPP realm has no MCC");
+        java.security.SecureRandom rng = new java.security.SecureRandom();
+        JoanSipBuilder.Params mine = new JoanSipBuilder.Params(
+                1111, 2222, 15000, 16000);
+        JoanSipBuilder.Txn txn = new JoanSipBuilder.Txn(mine, rng);
+        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                "user@ims.mnc000.mcc460.3gppnetwork.org",
+                "sip:user@ims.mnc000.mcc460.3gppnetwork.org",
+                "ims.mnc000.mcc460.3gppnetwork.org", "2001:db8::2",
+                15000, 16000, "123456789012345");
+        JoanSipBuilder.Challenge ch = new JoanSipBuilder.Challenge(
+                "dGVzdG5vbmNlMTIzNA==", "AKAv1-MD5",
+                "ipsec-3gpp;alg=hmac-md5-96;ealg=null;spi-c=1;spi-s=2;"
+                        + "port-c=9950;port-s=9900");
+        byte[] res = JoanSipCrypto.hexBytes("00112233445566778899aabbccddeeff");
+        String tcp = JoanSipBuilder.buildRegister(id, txn, 2, ch, res,
+                null, null, "3GPP-E-UTRAN-TDD", true);
+        check(tcp.contains("Via: SIP/2.0/TCP [2001:db8::2]:15000"),
+                "protected CMCC REGISTER Via is TCP from port-c");
+        check(tcp.contains("Security-Verify:"),
+                "protected TCP REGISTER still carries Security-Verify");
+        check(!tcp.contains("Via: SIP/2.0/UDP "),
+                "TCP REGISTER does not also claim UDP");
+        String udp = JoanSipBuilder.buildRegister(id, txn, 2, ch, res,
+                null, null, "3GPP-E-UTRAN-TDD", false);
+        check(udp.contains("Via: SIP/2.0/UDP [2001:db8::2]:15000"),
+                "explicit UDP REGISTER keeps UDP Via");
     }
 
     private static void testInvite() {

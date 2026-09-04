@@ -12,11 +12,14 @@ import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 
 import java.lang.reflect.Method;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -36,6 +39,11 @@ import java.util.List;
  * joan pmOS helper. IpSecManager application follows PhhIms' public
  * pattern (pad SHA-1 IK to 160 bits; omit setEncryption when ealg=null)
  * without importing that GPL tree.
+ *
+ * Transport is carrier-scoped: T-Mobile's proven REG2 stays UDP. MCC 460
+ * cores (China Mobile live traces) take the protected REGISTER over TCP
+ * to P-CSCF port-s, which TS 33.203 requires the UE to open if no TCP
+ * connection exists yet. Connect/RST failure falls back to UDP.
  *
  * Never logs IMPI, nonce, RES, CK, IK, or SIP request lines.
  */
@@ -70,57 +78,79 @@ final class JoanAppRegister {
         }
 
         String pani = paniFor(ctx);
+        StringBuilder sb = new StringBuilder();
+        sb.append("addrs=ims pani=").append(pani)
+                .append(" pcscf_n=").append(n.pcscfs.size()).append(' ');
+
+        /* One P-CSCF at a time: REG1 then protected REG2. Stock
+         * CMCCAoSRegistration.RecoverPCSCF / ProcessFlowRecoveryWithNewPCSCF
+         * advances after a silent protected REGISTER instead of dying on
+         * the first advertised node (CMCC dumps had pcscf_n=2). T-Mobile
+         * succeeds on the first, so this loop is a no-op there. */
+        int perTry = n.pcscfs.size() > 1
+                ? REG1_TIMEOUT_MS / 2 : REG1_TIMEOUT_MS;
+        int tried = 0;
+        String last = null;
+        for (InetAddress cand : n.pcscfs) {
+            tried++;
+            String one = tryPcscf(ctx, n, id, pani, cand, perTry);
+            if (one == null) {
+                continue;
+            }
+            last = one;
+            if (one.indexOf(" OK") >= 0) {
+                sb.append("pcscf_tried=").append(tried).append(' ');
+                return sb.append(one).toString();
+            }
+            if (one.indexOf("FAIL: aka") >= 0
+                    || one.indexOf("FAIL: no IpSecManager") >= 0
+                    || one.indexOf("FAIL: aka parse") >= 0
+                    || one.indexOf("FAIL: aka lengths") >= 0) {
+                sb.append("pcscf_tried=").append(tried).append(' ');
+                return sb.append(one).toString();
+            }
+        }
+        sb.append("pcscf_tried=").append(tried).append(' ');
+        if (last == null) {
+            return sb + "FAIL: reg1 no answer from any of " + n.pcscfs.size();
+        }
+        return sb.append(last).toString();
+    }
+
+    /**
+     * REG1 + AKA + IPsec + REG2 against one advertised P-CSCF.
+     * @return null if REG1 was silent (try the next); otherwise a
+     *         diagnosis string, with {@code OK} on REGISTER 200.
+     */
+    private static String tryPcscf(Context ctx, Net n, Id id, String pani,
+                                   InetAddress pcscf, int reg1TimeoutMs) {
         SecureRandom rng = new SecureRandom();
         JoanSipBuilder.Params mine = JoanSipBuilder.Params.random(rng);
         JoanSipBuilder.Txn txn = new JoanSipBuilder.Txn(mine, rng);
         JoanSipBuilder.Id sipId = new JoanSipBuilder.Id(
                 id.impi, id.impu, id.realm, n.localHost,
                 JoanSipBuilder.REG1_PORT, JoanSipBuilder.REG1_PORT, id.imei);
-
         StringBuilder sb = new StringBuilder();
-        sb.append("addrs=ims pani=").append(pani)
-                .append(" pcscf_n=").append(n.pcscfs.size()).append(' ');
-
-        /* Try every P-CSCF the PDN advertised, not just the first.
-         * collectPcscfs() has always carried the reason -- when the carrier
-         * drains a node, registration stays down until the radio is bounced
-         * even though the other advertised addresses answer immediately --
-         * but that list only ever fed the native daemon. This handset's PDN
-         * advertises three. Shorten the per-candidate wait when there is
-         * more than one so working through them stays bounded. */
-        int perTry = n.pcscfs.size() > 1
-                ? REG1_TIMEOUT_MS / 2 : REG1_TIMEOUT_MS;
-        InetAddress pcscf = null;
+        byte[] reg1Bytes = JoanSipBuilder
+                .buildRegister(sipId, txn, 1, null, null, null, null, pani)
+                .getBytes(StandardCharsets.US_ASCII);
         String r1 = null;
-        int tried = 0;
-        for (InetAddress cand : n.pcscfs) {
-            tried++;
-            /* Fresh branch per attempt: a new transaction to a new host. */
-            byte[] reg1Bytes = JoanSipBuilder
-                    .buildRegister(sipId, txn, 1, null, null, null, null, pani)
-                    .getBytes(StandardCharsets.US_ASCII);
-            DatagramSocket s1 = null;
-            try {
-                s1 = boundUdp(n.network, n.local, JoanSipBuilder.REG1_PORT);
-                r1 = sendRecv(s1, null, cand, JoanSipBuilder.PCSCF_SIP_PORT,
-                        reg1Bytes, perTry);
-            } catch (Exception e) {
-                r1 = null;
-            } finally {
-                closeQuietly(s1);
-            }
-            if (r1 != null) {
-                pcscf = cand;
-                break;
-            }
+        DatagramSocket s1 = null;
+        try {
+            s1 = boundUdp(n.network, n.local, JoanSipBuilder.REG1_PORT);
+            r1 = sendRecv(s1, null, pcscf, JoanSipBuilder.PCSCF_SIP_PORT,
+                    reg1Bytes, reg1TimeoutMs);
+        } catch (Exception e) {
+            r1 = null;
+        } finally {
+            closeQuietly(s1);
         }
-        sb.append("pcscf_tried=").append(tried).append(' ');
-        if (r1 == null || pcscf == null) {
-            return sb + "FAIL: reg1 no answer from any of " + n.pcscfs.size();
+        if (r1 == null) {
+            return null;
         }
         JoanSipBuilder.Reply p1 = JoanSipBuilder.parseReply(r1);
         if (p1 == null) {
-            return sb + "FAIL: reg1 parse";
+            return "FAIL: reg1 parse";
         }
         sb.append("reg1=").append(p1.status).append(' ');
         if (p1.status != 401) {
@@ -165,11 +195,6 @@ final class JoanAppRegister {
         byte[] res = JoanSipCrypto.hexBytes(parts[0]);
         byte[] ck = JoanSipCrypto.hexBytes(parts[1]);
         byte[] ik = JoanSipCrypto.hexBytes(parts[2]);
-        /* CK and IK are always 128 bits in UMTS AKA. RES varies (4..16
-         * octets), so its length alone cannot tell a good parse from a bad
-         * one -- but if RES were read too long, CK and IK would be shifted
-         * and come out the wrong size. Reporting all three turns a silent
-         * "reg2 timeout" from wrong ESP keys into something legible. */
         sb.append("reslen=").append(res == null ? -1 : res.length)
                 .append(" cklen=").append(ck == null ? -1 : ck.length)
                 .append(" iklen=").append(ik == null ? -1 : ik.length)
@@ -179,9 +204,6 @@ final class JoanAppRegister {
             return sb + "FAIL: aka lengths";
         }
         if (ck.length != 16 || ik.length != 16) {
-            /* Not a length quirk: the AKA response was parsed wrongly, and
-             * proceeding would install ESP keys the network cannot match,
-             * which shows up only as a REGISTER that never answers. */
             return sb + "FAIL: aka parse shape (CK/IK must be 16 octets)";
         }
 
@@ -206,6 +228,7 @@ final class JoanAppRegister {
         IpSecManager.SecurityParameterIndex spiPeerS = null;
         IpSecTransform outC = null, inC = null, outS = null, inS = null;
         DatagramSocket sockC = null, sockS = null;
+        Socket tcpKeep = null;
         try {
             spiUeC = ipsec.allocateSecurityParameterIndex(n.local, (int) mine.spiC);
             spiUeS = ipsec.allocateSecurityParameterIndex(n.local, (int) mine.spiS);
@@ -228,12 +251,6 @@ final class JoanAppRegister {
                         IpSecAlgorithm.CRYPT_AES_CBC, keys.encKey));
             }
 
-            /* Four SAs, same matrix as native xfrm.c:
-             *  OUT port-c -> pcscf port-s  spi=pcscf spi-s
-             *  IN  pcscf port-s -> port-c  spi=ue spi-c
-             *  OUT port-s -> pcscf port-c  spi=pcscf spi-c
-             *  IN  pcscf port-c -> port-s  spi=ue spi-s
-             */
             outC = b.buildTransportModeTransform(n.local, spiPeerS);
             inC = b.buildTransportModeTransform(pcscf, spiUeC);
             outS = b.buildTransportModeTransform(n.local, spiPeerC);
@@ -253,8 +270,6 @@ final class JoanAppRegister {
                 ipsec.applyTransportModeTransform(sockS,
                         IpSecManager.DIRECTION_OUT, outS);
             } catch (Exception e) {
-                /* C daemon omits inbound xfrm policy because it dropped
-                 * decrypted replies. Socket-scoped IN may need the same. */
                 inNote = "in=FAIL(" + brief(e) + ")";
             }
             sb.append(inNote).append(' ');
@@ -268,13 +283,44 @@ final class JoanAppRegister {
             JoanSipBuilder.Id sip2 = new JoanSipBuilder.Id(
                     id.impi, id.impu, id.realm, n.localHost,
                     mine.portC, mine.portS, id.imei);
-            String reg2 = JoanSipBuilder.buildRegister(sip2, txn, 2, ch,
-                    res, ck, ik, pani);
-            byte[] reg2Bytes = reg2.getBytes(StandardCharsets.US_ASCII);
-            sb.append("reg2send=").append(mine.portC).append("->")
-                    .append(pcscfSec.portS).append(' ');
-            String r2 = sendRecv(sockC, sockS, pcscf, pcscfSec.portS,
-                    reg2Bytes, REG2_TIMEOUT_MS);
+            boolean tcpReg2 = JoanSipBuilder.preferProtectedTcp(id.realm)
+                    || JoanSipBuilder.preferProtectedTcp(realm);
+            String r2 = null;
+            sTcpAttempted = false;
+            sTcpConnected = false;
+            sTcpKeep = null;
+            if (tcpReg2) {
+                String reg2Tcp = JoanSipBuilder.buildRegister(sip2, txn, 2,
+                        ch, res, ck, ik, pani, true);
+                byte[] tcpBytes = reg2Tcp.getBytes(StandardCharsets.US_ASCII);
+                sb.append("reg2send=").append(mine.portC).append("->")
+                        .append(pcscfSec.portS).append(" tpt=tcp ");
+                r2 = sendRecvTcp(n.network, n.local, mine.portC,
+                        pcscf, pcscfSec.portS, tcpBytes, REG2_TIMEOUT_MS,
+                        ipsec, inC, outC);
+                if (r2 == null) {
+                    if (sTcpAttempted && !sTcpConnected) {
+                        sb.append("tcp_fail=connect ");
+                    } else if (sTcpConnected) {
+                        sb.append("tcp_fail=timeout ");
+                    } else {
+                        sb.append("tcp_fail=setup ");
+                    }
+                }
+            }
+            if (r2 == null && !sTcpConnected) {
+                String reg2 = JoanSipBuilder.buildRegister(sip2, txn, 2, ch,
+                        res, ck, ik, pani, false);
+                byte[] reg2Bytes = reg2.getBytes(StandardCharsets.US_ASCII);
+                if (!tcpReg2) {
+                    sb.append("reg2send=").append(mine.portC).append("->")
+                            .append(pcscfSec.portS).append(" tpt=udp ");
+                } else {
+                    sb.append("tpt=udp ");
+                }
+                r2 = sendRecv(sockC, sockS, pcscf, pcscfSec.portS,
+                        reg2Bytes, REG2_TIMEOUT_MS);
+            }
             sb.append("reg2retx=").append(sRetx).append(' ');
             if (r2 == null) {
                 return sb + "FAIL: reg2 timeout";
@@ -286,13 +332,16 @@ final class JoanAppRegister {
             sb.append("reg2=").append(p2.status);
             if (p2.status >= 200 && p2.status < 300) {
                 sb.append(" OK");
+                tcpKeep = sTcpKeep;
+                sTcpKeep = null;
                 JoanSipUa.adopt(ctx, n.network, n.local, pcscf, pcscfSec.portS,
                         sip2, pani, p1.secServer, r2,
-                        sockC, sockS, ipsec,
+                        sockC, sockS, tcpKeep, ipsec,
                         new AutoCloseable[] { outC, inC, outS, inS,
                                 spiUeC, spiUeS, spiPeerC, spiPeerS });
                 sockC = null;
                 sockS = null;
+                tcpKeep = null;
                 outC = inC = outS = inS = null;
                 spiUeC = spiUeS = spiPeerC = spiPeerS = null;
             }
@@ -306,6 +355,7 @@ final class JoanAppRegister {
             }
             closeQuietly(sockC);
             closeQuietly(sockS);
+            closeQuietly(tcpKeep);
             closeQuietly(outC);
             closeQuietly(inC);
             closeQuietly(outS);
@@ -314,6 +364,14 @@ final class JoanAppRegister {
             closeQuietly(spiUeS);
             closeQuietly(spiPeerC);
             closeQuietly(spiPeerS);
+            if (sTcpKeep != null) {
+                try {
+                    sTcpKeep.close();
+                } catch (Exception ignored) {
+                    // ignore
+                }
+                sTcpKeep = null;
+            }
         }
     }
 
@@ -478,6 +536,11 @@ final class JoanAppRegister {
 
     /** Retransmissions used by the last sendRecv, for the summary line. */
     private static int sRetx;
+    /** Last protected-TCP attempt: attempted connect, and whether it completed. */
+    private static boolean sTcpAttempted;
+    private static boolean sTcpConnected;
+    /** Successful REG2 TCP client, handed to the UA. Closed on failure. */
+    private static Socket sTcpKeep;
 
     /**
      * Send and wait, retransmitting on RFC 3261 timers.
@@ -531,6 +594,100 @@ final class JoanAppRegister {
             }
         }
         return null;
+    }
+
+    /**
+     * Protected REGISTER over TCP: bind UE port-c, apply the same
+     * client-port transforms as the UDP socket, connect to P-CSCF
+     * port-s, write once, read until a complete SIP message or timeout.
+     *
+     * TCP has no SIP retransmission (RFC 3261 §18.2.2 / Timer E is UDP
+     * only). A failed connect is reported via {@link #sTcpConnected} so
+     * the caller can fall back to UDP; a completed handshake that never
+     * answers is a transaction timeout.
+     */
+    private static String sendRecvTcp(Network network, InetAddress local,
+                                      int localPort, InetAddress dest,
+                                      int dport, byte[] pkt, int timeoutMs,
+                                      IpSecManager ipsec,
+                                      IpSecTransform inXf,
+                                      IpSecTransform outXf) {
+        sTcpAttempted = true;
+        sTcpConnected = false;
+        sRetx = 0;
+        Socket sock = new Socket();
+        try {
+            sock.setReuseAddress(true);
+            sock.setSoTimeout(Math.max(1, timeoutMs));
+            if (network != null) {
+                network.bindSocket(sock);
+            }
+            sock.bind(new InetSocketAddress(local, localPort));
+            if (ipsec != null) {
+                if (outXf != null) {
+                    ipsec.applyTransportModeTransform(sock,
+                            IpSecManager.DIRECTION_OUT, outXf);
+                }
+                if (inXf != null) {
+                    try {
+                        ipsec.applyTransportModeTransform(sock,
+                                IpSecManager.DIRECTION_IN, inXf);
+                    } catch (Exception e) {
+                        /* Same as the UDP path: inbound transform may
+                         * fail on this kernel; keep the outbound SA. */
+                    }
+                }
+            }
+            sock.connect(new InetSocketAddress(dest, dport),
+                    Math.min(4000, Math.max(1, timeoutMs)));
+            sTcpConnected = true;
+            OutputStream os = sock.getOutputStream();
+            os.write(pkt);
+            os.flush();
+            InputStream is = sock.getInputStream();
+            StringBuilder acc = new StringBuilder();
+            byte[] buf = new byte[4096];
+            long deadline = System.currentTimeMillis() + timeoutMs;
+            while (System.currentTimeMillis() < deadline) {
+                int n;
+                try {
+                    n = is.read(buf);
+                } catch (SocketTimeoutException e) {
+                    break;
+                }
+                if (n <= 0) {
+                    break;
+                }
+                acc.append(new String(buf, 0, n, StandardCharsets.US_ASCII));
+                String got = JoanSipBuilder.extractOne(acc);
+                if (got != null) {
+                    /* Keep this client: stock libims reuses SIPoTCP
+                     * ("TCP client is re-used") for INVITE after REG2. */
+                    sock.setSoTimeout(0);
+                    sTcpKeep = sock;
+                    sock = null;
+                    return got;
+                }
+            }
+            return null;
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (sock != null) {
+                if (ipsec != null) {
+                    try {
+                        ipsec.removeTransportModeTransforms(sock);
+                    } catch (Exception ignored) {
+                        // ignore
+                    }
+                }
+                try {
+                    sock.close();
+                } catch (Exception ignored) {
+                    // ignore
+                }
+            }
+        }
     }
 
     static String tryRecv(DatagramSocket s, byte[] buf, int timeoutMs) {

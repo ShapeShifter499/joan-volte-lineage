@@ -9,11 +9,15 @@ import android.system.OsConstants;
 import android.system.StructPollfd;
 
 import java.io.FileDescriptor;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -36,6 +40,8 @@ final class JoanSipUa {
     private static InetAddress sPcscf;
     private static DatagramSocket sSockC;
     private static DatagramSocket sSockS;
+    private static Socket sTcpClient;
+    private static final StringBuilder sTcpClientAcc = new StringBuilder();
     private static IpSecManager sIpsec;
     private static AutoCloseable[] sHeld;
     private static IpSecTransform sOutC, sInC, sOutS, sInS;
@@ -150,6 +156,7 @@ final class JoanSipUa {
                       JoanSipBuilder.Id id, String pani, String secVerify,
                       String reg2Msg,
                       DatagramSocket sockC, DatagramSocket sockS,
+                      Socket tcpClient,
                       IpSecManager ipsec, AutoCloseable[] held) {
         synchronized (LOCK) {
             releaseLocked();
@@ -170,6 +177,8 @@ final class JoanSipUa {
             }
             sSockC = sockC;
             sSockS = sockS;
+            sTcpClient = tcpClient;
+            sTcpClientAcc.setLength(0);
             sIpsec = ipsec;
             sHeld = held;
             if (held != null && held.length >= 4) {
@@ -882,6 +891,12 @@ final class JoanSipUa {
 
     private static void send(DatagramSocket s, InetAddress dest, int port,
                              byte[] pkt) throws Exception {
+        if (sTcpClient != null && !sTcpClient.isClosed()) {
+            OutputStream os = sTcpClient.getOutputStream();
+            os.write(pkt);
+            os.flush();
+            return;
+        }
         s.send(new DatagramPacket(pkt, pkt.length, dest, port));
     }
 
@@ -889,12 +904,37 @@ final class JoanSipUa {
         if (timeoutMs <= 0) {
             return null;
         }
+        String tcp = recvTcpClient(Math.min(200, timeoutMs));
+        if (tcp != null) {
+            return tcp;
+        }
         byte[] buf = new byte[4096];
         String a = JoanAppRegister.tryRecv(sSockC, buf, Math.min(200, timeoutMs));
         if (a != null) {
             return a;
         }
         return JoanAppRegister.tryRecv(sSockS, buf, Math.min(200, timeoutMs));
+    }
+
+    private static String recvTcpClient(int timeoutMs) {
+        if (sTcpClient == null || sTcpClient.isClosed()) {
+            return null;
+        }
+        try {
+            sTcpClient.setSoTimeout(Math.max(1, timeoutMs));
+            InputStream is = sTcpClient.getInputStream();
+            byte[] buf = new byte[4096];
+            int n = is.read(buf);
+            if (n <= 0) {
+                return null;
+            }
+            sTcpClientAcc.append(new String(buf, 0, n, StandardCharsets.US_ASCII));
+            return JoanSipBuilder.extractOne(sTcpClientAcc);
+        } catch (SocketTimeoutException e) {
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private static int headerRseq(String msg) {
@@ -924,6 +964,15 @@ final class JoanSipUa {
         closeFd(sTcpC);
         sTcpPeer = sTcpS = sTcpC = null;
         sReplyTcp = false;
+        if (sTcpClient != null) {
+            try {
+                sTcpClient.close();
+            } catch (Exception ignored) {
+                // ignore
+            }
+            sTcpClient = null;
+        }
+        sTcpClientAcc.setLength(0);
         if (sListen != null) {
             sListen.interrupt();
             sListen = null;

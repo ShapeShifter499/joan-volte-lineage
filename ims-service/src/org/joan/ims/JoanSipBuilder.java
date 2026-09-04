@@ -201,6 +201,46 @@ final class JoanSipBuilder {
         return imsi + "@" + domain;
     }
 
+    /**
+     * Protected-REGISTER transport, from stock {@code libims.lge.so}
+     * (read-only: {@code CMCCAoS*} vs {@code TMUSAoS*}).
+     *
+     * MCC 460 (CMCCAoSIPSecHelper + live traces) opens SIPoTCP to
+     * P-CSCF port-s. T-Mobile's proven path is UDP; TMUS
+     * {@code AdjustTcpCriterionPerMtu} must not flip that.
+     */
+    static boolean preferProtectedTcp(String realm) {
+        return plmnOf(realm) == 460;
+    }
+
+    /**
+     * Home MCC from an IMS realm ({@code ims.mncXXX.mccYYY.3gppnetwork.org}),
+     * or -1. Used only for routing; never logged.
+     */
+    static int plmnOf(String realm) {
+        if (realm == null || realm.isEmpty()) {
+            return -1;
+        }
+        String r = realm.toLowerCase(java.util.Locale.ROOT);
+        int i = r.indexOf(".mcc");
+        if (i < 0) {
+            return -1;
+        }
+        int from = i + 4;
+        int to = from;
+        while (to < r.length() && r.charAt(to) >= '0' && r.charAt(to) <= '9') {
+            to++;
+        }
+        if (to - from != 3) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(r.substring(from, to));
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
     static String bracket(String ip) {
         if (ip != null && ip.indexOf(':') >= 0) {
             return "[" + ip + "]";
@@ -221,6 +261,13 @@ final class JoanSipBuilder {
     static String buildRegister(Id id, Txn txn, int cseq,
                                 Challenge ch, byte[] res,
                                 byte[] ck, byte[] ik, String pani) {
+        return buildRegister(id, txn, cseq, ch, res, ck, ik, pani, false);
+    }
+
+    static String buildRegister(Id id, Txn txn, int cseq,
+                                Challenge ch, byte[] res,
+                                byte[] ck, byte[] ik, String pani,
+                                boolean tcp) {
         txn.newBranch(RNG);
         String publicId = id.impu;
         String aor;
@@ -272,7 +319,8 @@ final class JoanSipBuilder {
 
         StringBuilder a = new StringBuilder(1600);
         a.append("REGISTER ").append(requestUri).append(" SIP/2.0\r\n");
-        a.append("Via: SIP/2.0/UDP ").append(viaHost).append(':')
+        a.append("Via: SIP/2.0/").append(tcp ? "TCP" : "UDP").append(' ')
+                .append(viaHost).append(':')
                 .append(id.viaPort).append(";branch=").append(txn.branch)
                 .append(";rport\r\n");
         a.append("Max-Forwards: 70\r\n");
