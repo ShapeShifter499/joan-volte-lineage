@@ -934,6 +934,12 @@ final class JoanSipUa {
             r = reInviteLive(true, heldCid);
         } finally {
         }
+        if ("INFLIGHT".equals(r)) {
+            /* Lost the atomic claim race: another hold is already in
+             * flight on this dialog. Success-in-progress. */
+            JoanTrace.note("app hold skip (race) cid=" + heldCid);
+            return "OK";
+        }
         if (r != null && r.startsWith("OK")) {
             synchronized (LOCK) {
                 /* If the swap already moved on (parked leg resumed), the
@@ -1001,6 +1007,12 @@ final class JoanSipUa {
             JoanTrace.note("app resume skipping hold (in flight)");
         }
         String r = reInviteLive(false);
+        if ("INFLIGHT".equals(r)) {
+            /* A transaction on the same dialog is still pending; refuse
+             * rather than race it. The framework can retry resume. */
+            JoanTrace.note("app resume refused (in flight)");
+            return "ERR reinvite in flight";
+        }
         if (r != null && r.startsWith("OK")) {
             sLiveHeld = false;
             JoanTrace.note("app resume");
@@ -1089,6 +1101,20 @@ final class JoanSipUa {
         if (target == null || target.isEmpty()) {
             return "ERR no target";
         }
+        /* Atomic one-INVITE-per-dialog claim. pjsip refuses a second
+         * INVITE while one is pending (sip_inv.c: PJ_EINVALIDOP when
+         * inv->invite_tsx is set); check-then-set outside a lock left a
+         * window where two hold threads both built and sent. */
+        synchronized (LOCK) {
+            if (sInviteFlightCid != null
+                    && sInviteFlightCid.equals(dlg.callId)) {
+                JoanTrace.note("app reinvite refused (in flight) cid="
+                        + dlg.callId);
+                return "INFLIGHT";
+            }
+            sInviteFlightCid = dlg.callId;
+            sInviteFlightCseq = 0;
+        }
         JoanSipBuilder.Id id = new JoanSipBuilder.Id(sId.impi, sPublicId,
                 sId.realm, sId.localIp, sId.viaPort, sId.contactPort,
                 sId.imei);
@@ -1114,20 +1140,20 @@ final class JoanSipUa {
                 target, route);
         InviteWait wait = new InviteWait(dlg.callId, inviteCseq);
         registerInviteWait(wait);
+        /* The claim was made in reInviteLive(); record the CSeq so the
+         * finally below releases only this transaction. Every exit path
+         * (including send failure) must run through the finally or the
+         * dialog stays marked in-flight forever. */
+        sInviteFlightCseq = inviteCseq;
         JoanTrace.note("app reinvite send held=" + held
                 + " cseq=" + inviteCseq + " cid=" + dlg.callId);
         try {
-            sendReply(inv.getBytes(StandardCharsets.US_ASCII));
-        } catch (Exception e) {
-            clearInviteWait(wait);
-            JoanTrace.note("app reinvite ERR send");
-            return "ERR reinvite send";
-        }
-        /* One INVITE in flight per dialog (RFC 3261 14.1). Set only
-         * after the send succeeded; cleared on every exit below. */
-        sInviteFlightCid = dlg.callId;
-        sInviteFlightCseq = inviteCseq;
-        try {
+            try {
+                sendReply(inv.getBytes(StandardCharsets.US_ASCII));
+            } catch (Exception e) {
+                JoanTrace.note("app reinvite ERR send");
+                return "ERR reinvite send";
+            }
             return awaitReinviteFinal(id, dlg, target, route, toHdr,
                     fromHdr, held, wait, inviteCseq, inviteBranch);
         } finally {
@@ -1293,7 +1319,10 @@ final class JoanSipUa {
      */
     private static boolean reAckFinal(String callId, int inviteCseq,
                                       int status) {
-        if (status < 200) {
+        if (status < 200 || inviteCseq <= 0) {
+            /* Non-INVITE finals (e.g. a BYE 200 parses to cseq=-1) are
+             * not INVITE transactions; nothing to re-ACK, and logging
+             * them as archive misses is noise. */
             return false;
         }
         String ack = status < 300
@@ -1342,7 +1371,7 @@ final class JoanSipUa {
      */
     private static boolean ackLateFinal(String callId, int inviteCseq,
                                         int status, String rx) {
-        if (status < 200) {
+        if (status < 200 || inviteCseq <= 0) {
             return false;
         }
         String ack = status < 300
@@ -1392,10 +1421,12 @@ final class JoanSipUa {
                 w.replies.offer(rx);
                 return;
             }
-            if (p.status >= 200) {
+            if (p.status >= 200 && cseq > 0) {
                 /* Do not manufacture an ACK for a transaction we never
                  * sent (unknown Call-ID/CSeq pair). Known-but-late finals
-                 * were handled above from their send-time snapshot. */
+                 * were handled above from their send-time snapshot.
+                 * cseq<=0 finals (e.g. BYE 200s) are not INVITE
+                 * transactions at all and are silently ignored. */
                 JoanTrace.note("unmatched final status=" + p.status
                         + " cseq=" + cseq + " cid=" + cid);
             }
