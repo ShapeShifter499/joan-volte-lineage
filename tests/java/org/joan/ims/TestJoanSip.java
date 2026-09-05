@@ -359,9 +359,19 @@ public final class TestJoanSip {
                         + dlg.fromTag, reinviteCseq);
 
         JoanSipBuilder.InviteAckArchive a = new JoanSipBuilder.InviteAckArchive();
-        a.begin(dlg.callId, firstCseq);
+        JoanSipBuilder.Dialog d1 = new JoanSipBuilder.Dialog();
+        d1.callId = dlg.callId;
+        d1.fromTag = dlg.fromTag;
+        d1.branch = firstBranch;
+        d1.cseq = firstCseq;
+        a.begin(dlg.callId, firstCseq, d1, null, null, "sip:peer@host", null);
         a.remember2xx(dlg.callId, firstCseq, ack2xx);
-        a.begin(dlg.callId, reinviteCseq);
+        JoanSipBuilder.Dialog d2 = new JoanSipBuilder.Dialog();
+        d2.callId = dlg.callId;
+        d2.fromTag = dlg.fromTag;
+        d2.branch = reinviteBranch;
+        d2.cseq = reinviteCseq;
+        a.begin(dlg.callId, reinviteCseq, d2, null, null, "sip:peer@host", null);
         a.remember2xx(dlg.callId, reinviteCseq, reAck2xx);
         String newer = JoanSipBuilder.buildReInvite(id, dlg, "sip:peer@host",
                 "<sip:[2001:db8::1];lr>", "ipsec-3gpp",
@@ -382,6 +392,76 @@ public final class TestJoanSip {
                         && JoanSipBuilder.cseqForMethod(
                 "SIP/2.0 200 OK\r\nCSeq: 2 ACK\r\n\r\n", "INVITE") < 0,
                 "CSeq parser keys replies by INVITE method as well as number");
+
+        /* Late finals: a 2xx that arrives after the waiter gave up must
+         * still be ACKed, from the send-time snapshot (pjsip's last_ack +
+         * late-200 pattern), byte-identical on every retransmission. */
+        JoanSipBuilder.Dialog lateDlg = new JoanSipBuilder.Dialog();
+        lateDlg.callId = "late-1";
+        lateDlg.fromTag = "lft";
+        lateDlg.branch = "z9hG4bK-invite-br";
+        lateDlg.cseq = 2;
+        JoanSipBuilder.InviteAckArchive la = new JoanSipBuilder.InviteAckArchive();
+        la.begin("late-1", 2, lateDlg, "<sip:x@y>;tag=abc",
+                "<sip:a@b>;tag=lft", "sip:peer@host", "<sip:r>;lr");
+        String late200 = "SIP/2.0 200 OK\r\n"
+                + "To: <sip:x@y>;tag=abc\r\n"
+                + "From: <sip:a@b>;tag=lft\r\n"
+                + "Call-ID: late-1\r\n"
+                + "CSeq: 2 INVITE\r\n"
+                + "Contact: <sip:peer@host>\r\n\r\n";
+        String la1 = la.ackLate2xx(id, "late-1", 2, "ipsec-3gpp", late200);
+        check(la1 != null && la1.startsWith("ACK "),
+                "late 2xx gets ACKed");
+        check(la1.contains("CSeq: 2 ACK"),
+                "late 2xx ACK carries the INVITE CSeq");
+        check(!lateDlg.branch.equals(viaBranch(la1)),
+                "late 2xx ACK gets a fresh Via branch");
+        String la2 = la.ackLate2xx(id, "late-1", 2, "ipsec-3gpp", late200);
+        check(la1.equals(la2),
+                "late 2xx ACK resends byte-identical on retransmission");
+        check(la.ackLate2xx(id, "late-1", 99, "ipsec-3gpp", late200) == null,
+                "an INVITE we never sent is never ACKed");
+
+        JoanSipBuilder.Dialog lateDlg2 = new JoanSipBuilder.Dialog();
+        lateDlg2.callId = "late-2";
+        lateDlg2.fromTag = "lft2";
+        lateDlg2.branch = "z9hG4bK-invite-br2";
+        lateDlg2.cseq = 3;
+        JoanSipBuilder.InviteAckArchive la2x = new JoanSipBuilder.InviteAckArchive();
+        la2x.begin("late-2", 3, lateDlg2, "<sip:x@y>;tag=abc2",
+                "<sip:a@b>;tag=lft2", "sip:peer@host", "<sip:r>;lr");
+        String late486 = "SIP/2.0 486 Busy Here\r\n"
+                + "To: <sip:x@y>;tag=abc2\r\n"
+                + "From: <sip:a@b>;tag=lft2\r\n"
+                + "Call-ID: late-2\r\n"
+                + "CSeq: 3 INVITE\r\n"
+                + "Contact: <sip:peer@host>\r\n\r\n";
+        String ln = la2x.ackLateNon2xx(id, "late-2", 3, "ipsec-3gpp", late486);
+        check(ln != null && ln.contains("CSeq: 3 ACK"),
+                "late non-2xx final gets ACKed");
+        check(viaBranch(ln).equals(lateDlg2.branch),
+                "late non-2xx ACK reuses its INVITE Via branch");
+
+        /* Initial INVITE snapshot has no To/From/Contact yet: the late
+         * response itself fills those in. */
+        JoanSipBuilder.Dialog lateDlg3 = new JoanSipBuilder.Dialog();
+        lateDlg3.callId = "late-3";
+        lateDlg3.fromTag = "lft3";
+        lateDlg3.branch = "z9hG4bK-invite-br3";
+        lateDlg3.cseq = 1;
+        JoanSipBuilder.InviteAckArchive la3 = new JoanSipBuilder.InviteAckArchive();
+        la3.begin("late-3", 1, lateDlg3, "", "", "sip:dest@host", null);
+        String late200b = "SIP/2.0 200 OK\r\n"
+                + "To: <sip:b@x>;tag=bt\r\n"
+                + "From: <sip:a@x>;tag=lft3\r\n"
+                + "Call-ID: late-3\r\n"
+                + "CSeq: 1 INVITE\r\n"
+                + "Contact: <sip:b@1.2.3.4:5060>\r\n\r\n";
+        String lg = la3.ackLate2xx(id, "late-3", 1, "ipsec-3gpp", late200b);
+        check(lg != null && lg.contains("sip:b@1.2.3.4:5060")
+                        && lg.contains("tag=bt"),
+                "late initial-invite ACK takes To/Contact from the response");
     }
 
     private static String viaBranch(String msg) {

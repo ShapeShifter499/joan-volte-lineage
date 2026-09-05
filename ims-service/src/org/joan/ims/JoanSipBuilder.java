@@ -730,30 +730,133 @@ final class JoanSipBuilder {
             long untilMs;
             String ack2xx;
             String ackNon2xx;
+            /* Snapshot of the dialog and routing taken when the INVITE
+             * went out. A final response can arrive after the waiting
+             * transaction has given up (slow SBC chain): the ACK must
+             * then be built from THIS state, not from the live dialog
+             * that later hold/resume requests have advanced. */
+            final Dialog sendDlg;
+            final String toHdr;
+            final String fromHdr;
+            final String target;
+            final String route;
 
-            Record(String callId, int cseq, long untilMs) {
+            Record(String callId, int cseq, long untilMs, Dialog sendDlg,
+                   String toHdr, String fromHdr, String target, String route) {
                 this.callId = callId;
                 this.cseq = cseq;
                 this.untilMs = untilMs;
+                this.sendDlg = sendDlg;
+                this.toHdr = toHdr;
+                this.fromHdr = fromHdr;
+                this.target = target;
+                this.route = route;
             }
         }
 
         private final java.util.LinkedHashMap<String, Record> records =
                 new java.util.LinkedHashMap<>(MAX_RECORDS, 0.75f, true);
 
-        synchronized void begin(String callId, int cseq) {
+        synchronized void begin(String callId, int cseq, Dialog sendDlg,
+                                String toHdr, String fromHdr, String target,
+                                String route) {
             if (callId == null || callId.isEmpty() || cseq <= 0) {
                 return;
             }
             long now = System.currentTimeMillis();
             purge(now);
+            Dialog d = new Dialog();
+            if (sendDlg != null) {
+                d.callId = sendDlg.callId;
+                d.fromTag = sendDlg.fromTag;
+                d.branch = sendDlg.branch;
+                d.cseq = sendDlg.cseq;
+            }
             records.put(key(callId, cseq), new Record(callId, cseq,
-                    now + RETAIN_MS));
+                    now + RETAIN_MS, d, toHdr, fromHdr, target, route));
             while (records.size() > MAX_RECORDS) {
                 java.util.Iterator<String> it = records.keySet().iterator();
                 it.next();
                 it.remove();
             }
+        }
+
+        /** ACK for a late 2xx of a known INVITE: built once from the
+         * send-time snapshot (response headers fill any gaps, e.g. the
+         * initial INVITE that had no To-tag yet), then resent verbatim. */
+        synchronized String ackLate2xx(Id id, String callId, int cseq,
+                                       String secVerify, String rx) {
+            Record r = get(callId, cseq);
+            if (r == null || id == null) {
+                return null;
+            }
+            if (r.ack2xx != null) {
+                return r.ack2xx;
+            }
+            /* Established dialog: the send-time snapshot is authoritative
+             * (re-INVITEs). Initial INVITE: the dialog did not exist yet,
+             * so To/From/Contact come from the late response itself. */
+            boolean established = r.toHdr != null && !r.toHdr.isEmpty();
+            String to = established ? r.toHdr : rxFirst(r.toHdr, rx, "To");
+            String from = established ? r.fromHdr
+                    : rxFirst(r.fromHdr, rx, "From");
+            String tgt = established ? r.target
+                    : rxFirst(r.target, rx, "Contact");
+            if (tgt == null || tgt.isEmpty()) {
+                return null;
+            }
+            String ack = buildAck2xx(id, r.sendDlg, tgt,
+                    r.route != null && !r.route.isEmpty() ? r.route : null,
+                    secVerify, to, from, cseq);
+            if (ack == null) {
+                return null;
+            }
+            r.ack2xx = ack;
+            r.untilMs = System.currentTimeMillis() + RETAIN_MS;
+            return ack;
+        }
+
+        /** ACK for a late non-2xx final: transaction-scoped, so it must
+         * reuse the INVITE's own Via branch (RFC 3261 17.1.1.3). */
+        synchronized String ackLateNon2xx(Id id, String callId, int cseq,
+                                          String secVerify, String rx) {
+            Record r = get(callId, cseq);
+            if (r == null || id == null) {
+                return null;
+            }
+            if (r.ackNon2xx != null) {
+                return r.ackNon2xx;
+            }
+            boolean established = r.toHdr != null && !r.toHdr.isEmpty();
+            String to = established ? r.toHdr : rxFirst(r.toHdr, rx, "To");
+            String from = established ? r.fromHdr
+                    : rxFirst(r.fromHdr, rx, "From");
+            String tgt = established ? r.target
+                    : rxFirst(r.target, rx, "Contact");
+            if (tgt == null || tgt.isEmpty()) {
+                return null;
+            }
+            String ack = buildAckNon2xx(id, r.sendDlg, tgt,
+                    r.route != null && !r.route.isEmpty() ? r.route : null,
+                    secVerify, to, from, cseq, r.sendDlg.branch);
+            if (ack == null) {
+                return null;
+            }
+            r.ackNon2xx = ack;
+            r.untilMs = System.currentTimeMillis() + RETAIN_MS;
+            return ack;
+        }
+
+        /** Response header first, snapshot as fallback: before the dialog
+         * exists (initial INVITE), only the response knows To/From/Contact. */
+        private String rxFirst(String snap, String rx, String hdr) {
+            if (rx != null) {
+                String v = header(rx, hdr);
+                if (v != null) {
+                    return hdr.equals("Contact") ? contactUri(v) : v;
+                }
+            }
+            return snap;
         }
 
         synchronized void remember2xx(String callId, int cseq, String ack) {

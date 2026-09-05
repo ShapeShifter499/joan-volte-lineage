@@ -212,9 +212,20 @@ public class JoanCallSession extends ImsCallSessionImplBase {
     public void hold(ImsStreamMediaProfile mediaProfile) {
         Log.i(TAG, "call session hold");
         new Thread(() -> {
+            boolean optimistic = JoanSipUa.swapInProgress();
+            if (optimistic) {
+                /* Mid-swap: the framework will resume the parked leg the
+                 * moment it hears 'held'. Confirm now; the hold re-INVITE
+                 * final lands asynchronously (a failure is reported
+                 * late). This halves swap wall-time: hold and resume
+                 * re-INVITEs fly concurrently on their two dialogs. */
+                notifyHeld();
+            }
             String r = JoanSipUa.hold(sipCallId);
             if (r != null && r.startsWith("OK")) {
-                notifyHeld();
+                if (!optimistic) {
+                    notifyHeld();
+                }
             } else {
                 notifyHoldFailed(r);
             }
