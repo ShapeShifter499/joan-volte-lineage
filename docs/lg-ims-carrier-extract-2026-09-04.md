@@ -73,7 +73,11 @@ Joan already derives these (TS 23.003 §13.3).
 
 ## What we replicated (no blobs)
 
-1. MCC 460 protected REG2 over TCP to P-CSCF `port-s` (`preferProtectedTcp`).
+1. Stock `GetTCPCriterionLength` semantics (`v0.4.0-alpha9`): transport
+   per message by size — TCP only when it exceeds the carrier's XML
+   criterion (CMCC 1300; TMUS per-reg 0 = disabled), else UDP with TCP
+   fallback. Replaces alpha7's blanket MCC-460 forced-TCP, which the
+   CMCC field trace disproved (`tcp_fail=connect` then silent UDP).
 2. Keep that TCP client after REG2 200; INVITE/ACK/BYE reuse it (LG
    “TCP client is re-used”). T-Mobile stays UDP.
 3. REG1+REG2 as one attempt per advertised P-CSCF; silent REG2 advances
@@ -120,8 +124,10 @@ XML `aos_reg_0` knobs (per-reg `tcp_criterion_length_ipv4/6` is **0** = use comm
 | LGU / KT / SKT KR | true | `0x00040002` | **4096** |
 
 Korea keeps IPsec but a high TCP threshold (UDP unless SIP is huge). CMCC 1300
-is the “prefer TCP” knob already mapped to Joan MCC 460 REG2. Do not copy the
-Korea 4096 onto MCC 460, and do not flip T-Mobile onto TCP.
+is the size criterion Joan now enforces per message on MCC 460 (alpha7's
+blanket forced-TCP REG2 misread it and died `tcp_fail=connect`). Do not copy
+the Korea 4096 onto MCC 460, and do not flip T-Mobile onto TCP (its per-reg
+criterion is 0 = disabled; `AdjustTcpCriterionPerMtu` stays unreplicated).
 
 L-01K still has no public KDZ listing. H930DS HK Pie was identified but not
 downloaded.

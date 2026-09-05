@@ -9,6 +9,8 @@ import android.telephony.ims.feature.MmTelFeature;
 import android.telephony.ims.stub.ImsCallSessionImplBase;
 import android.util.Log;
 
+import java.util.concurrent.ConcurrentHashMap;
+
 /**
  * MmTel feature: the capability surface Dialer and telephony query, plus
  * call sessions in both directions.
@@ -56,13 +58,46 @@ public class JoanMmTelFeature extends MmTelFeature {
      * MmTelFeature per subscription and joan is single-SIM. */
     private static volatile JoanMmTelFeature sInstance;
     private static volatile JoanCallSession sIncoming;
+    private static final ConcurrentHashMap<String, JoanCallSession> sBySip =
+            new ConcurrentHashMap<>();
+
+    static void track(String sipCallId, JoanCallSession s) {
+        if (sipCallId != null && s != null) {
+            sBySip.put(sipCallId, s);
+        }
+    }
+
+    static void untrack(String sipCallId) {
+        if (sipCallId != null) {
+            sBySip.remove(sipCallId);
+        }
+    }
+
+    static void onDialogEnded(String sipCallId) {
+        JoanCallSession s = sipCallId != null ? sBySip.remove(sipCallId) : null;
+        if (s != null) {
+            s.onRemoteEnded();
+            if (sIncoming == s) {
+                sIncoming = null;
+            }
+            return;
+        }
+        onCallEndedRemotely();
+    }
+
+    static void onDialogHeld(String sipCallId) {
+        JoanCallSession s = sipCallId != null ? sBySip.get(sipCallId) : null;
+        if (s != null) {
+            s.onHeldByUa();
+        }
+    }
 
     /**
      * An inbound INVITE is being held at 180 while we ring. Build a session
      * for it and hand it to Telecom.
      */
     static void onIncomingCall(Context ctx, String callerUri,
-                               String callerName) {
+                               String callerName, String sipCallId) {
         JoanMmTelFeature f = sInstance;
         if (f == null) {
             Log.w(TAG, "incoming call but no MmTelFeature; cannot ring");
@@ -76,8 +111,11 @@ public class JoanMmTelFeature extends MmTelFeature {
                     ImsCallProfile.SERVICE_TYPE_NORMAL,
                     ImsCallProfile.CALL_TYPE_VOICE);
             applyCallerId(p, callerUri, callerName);
-            JoanCallSession s = JoanCallSession.incoming(ctx, f, p);
+            JoanCallSession s = JoanCallSession.incoming(ctx, f, p, sipCallId);
             sIncoming = s;
+            if (sipCallId != null) {
+                track(sipCallId, s);
+            }
             Bundle extras = new Bundle();
             f.notifyIncoming(s, extras);
             Log.i(TAG, "notifyIncomingCall delivered");

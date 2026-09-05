@@ -10,6 +10,7 @@ public final class TestJoanSip {
         testEspKeys();
         testSecAgreeSelect();
         testRegisterOffer();
+        testInviteAckTransactions();
         testImei();
         testGrantedExpires();
         testRefreshLead();
@@ -184,20 +185,32 @@ public final class TestJoanSip {
     }
 
     /**
-     * MCC 460 cores (China Mobile live traces, TS 33.203 TCP case) take
-     * the protected REGISTER over TCP. T-Mobile must stay on UDP.
+     * Transport follows stock GetTCPCriterionLength: TCP only when the
+     * message exceeds the carrier's size criterion. A ~1 kB REGISTER
+     * stays UDP on every known core (CMCC 1300, TMUS 1200, Korea
+     * 4096). Alpha7's blanket MCC-460 forced-TCP produced
+     * tcp_fail=connect + silent UDP fallback in the field.
      */
     private static void testProtectedTcpChoice() {
+        check(!JoanSipBuilder.preferProtectedTcp(
+                        "ims.mnc000.mcc460.3gppnetwork.org", 1024),
+                "CMCC REGISTER under criterion stays UDP");
         check(JoanSipBuilder.preferProtectedTcp(
-                        "ims.mnc000.mcc460.3gppnetwork.org"),
-                "CMCC home realm prefers protected TCP");
-        check(JoanSipBuilder.preferProtectedTcp(
-                        "ims.mnc002.mcc460.3gppnetwork.org"),
-                "other MCC 460 MNC also prefers protected TCP");
-        check(!JoanSipBuilder.preferProtectedTcp("msg.pc.t-mobile.com"),
-                "T-Mobile realm stays UDP");
-        check(!JoanSipBuilder.preferProtectedTcp(null)
-                        && !JoanSipBuilder.preferProtectedTcp(""),
+                        "ims.mnc000.mcc460.3gppnetwork.org", 1400),
+                "CMCC oversized message goes TCP");
+        check(!JoanSipBuilder.preferProtectedTcp(
+                        "ims.mnc002.mcc460.3gppnetwork.org", 1024),
+                "other MCC 460 MNC also criterion-bound");
+        check(!JoanSipBuilder.preferProtectedTcp(
+                        "ims.mnc260.mcc310.3gppnetwork.org", 1024),
+                "T-Mobile home REGISTER stays UDP");
+        check(!JoanSipBuilder.preferProtectedTcp(
+                        "ims.mnc260.mcc310.3gppnetwork.org", 9216),
+                "T-Mobile registration never leaves UDP (criterion off)");
+        check(!JoanSipBuilder.preferProtectedTcp("msg.pc.t-mobile.com", 9216),
+                "non-3GPP realm never flips transport");
+        check(!JoanSipBuilder.preferProtectedTcp(null, 9216)
+                        && !JoanSipBuilder.preferProtectedTcp("", 9216),
                 "empty realm does not flip transport");
         check(JoanSipBuilder.plmnOf("ims.mnc000.mcc460.3gppnetwork.org") == 460,
                 "CMCC realm parses MCC 460");
@@ -251,10 +264,10 @@ public final class TestJoanSip {
                 + "t".repeat(81) + "\r\n\r\n";
         check(JoanSipBuilder.extractToTag(to).length() == 81,
                 "81-char To-tag survives");
-        String ack = JoanSipBuilder.buildAck(id, dlg, "sip:peer@host",
+        String ack = JoanSipBuilder.buildAck2xx(id, dlg, "sip:peer@host",
                 "<sip:[2001:db8::1];lr>", "ipsec-3gpp",
-                "<sip:x@y>;tag=abc", "<sip:+15555550100@ims.example.net>;tag="
-                        + dlg.fromTag);
+                "<sip:x@y>;tag=abc", "<sip:+155****0100@ims.example.net>;tag="
+                        + dlg.fromTag, dlg.cseq);
         check(ack.startsWith("ACK sip:peer@host SIP/2.0"), "ack r-uri is Contact");
         check(ack.contains("To: <sip:x@y>;tag=abc"), "ack echoes To");
         check(ack.contains("CSeq: 1 ACK"), "ack reuses INVITE CSeq");
@@ -263,6 +276,23 @@ public final class TestJoanSip {
                 "<sip:x@y>;tag=abc", "<sip:+15555550100@ims.example.net>;tag="
                         + dlg.fromTag);
         check(bye.contains("CSeq: 2 BYE"), "bye increments CSeq");
+        String holdSdp = JoanSipBuilder.sdpHold("2001:db8::2", 40000, true);
+        check(holdSdp.contains("a=sendonly") && !holdSdp.contains("a=sendrecv"),
+                "hold SDP is sendonly");
+        String resumeSdp = JoanSipBuilder.sdpHold("2001:db8::2", 40000, false);
+        check(resumeSdp.contains("a=sendrecv") && !resumeSdp.contains("a=sendonly"),
+                "resume SDP is sendrecv");
+        String reinv = JoanSipBuilder.buildReInvite(id, dlg, "sip:peer@host",
+                "<sip:[2001:db8::1];lr>", "ipsec-3gpp",
+                "<sip:x@y>;tag=abc",
+                "<sip:+155****0100@ims.example.net>;tag=" + dlg.fromTag,
+                holdSdp);
+        check(reinv.startsWith("INVITE sip:peer@host SIP/2.0"),
+                "re-INVITE request-line");
+        check(reinv.contains("CSeq: 2 INVITE"), "re-INVITE increments CSeq");
+        check(reinv.contains("a=sendonly"), "re-INVITE carries hold SDP");
+        check(reinv.contains("Content-Type: application/sdp"),
+                "re-INVITE has SDP");
         String sdp = "SIP/2.0 200 OK\r\n\r\nv=0\r\nc=IN IP6 2001:db8::9\r\n"
                 + "m=audio 20000 RTP/AVP 0\r\na=sendrecv\r\n";
         JoanSipBuilder.Media m = JoanSipBuilder.parseSdp(sdp);
@@ -284,6 +314,88 @@ public final class TestJoanSip {
         check(JoanSipBuilder.extractOne(acc).startsWith("INVITE"),
                 "tcp extract remainder");
         testCli();
+    }
+
+    /**
+     * A 2xx ACK is a fresh in-dialog request, while a non-2xx ACK belongs
+     * to the INVITE transaction. A later re-INVITE must not change either
+     * archived ACK for the earlier transaction.
+     */
+    private static void testInviteAckTransactions() {
+        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                "user@ims.example.net", "sip:+155****0100@ims.example.net",
+                "ims.example.net", "2001:db8::2", 25000, 26000,
+                "123456789012345");
+        JoanSipBuilder.Dialog dlg = new JoanSipBuilder.Dialog();
+        String first = JoanSipBuilder.buildInvite(id, dlg, "tel:+155****0999",
+                "<sip:[2001:db8::1]:5060;lr>", "ipsec-3gpp", 40000,
+                "3GPP-E-UTRAN-FDD");
+        int firstCseq = dlg.cseq;
+        String firstBranch = viaBranch(first);
+        String ack2xx = JoanSipBuilder.buildAck2xx(id, dlg, "sip:peer@host",
+                "<sip:[2001:db8::1];lr>", "ipsec-3gpp",
+                "<sip:x@y>;tag=abc", "<sip:+155****0100@ims.example.net>;tag="
+                        + dlg.fromTag, firstCseq);
+        check(!firstBranch.equals(viaBranch(ack2xx)),
+                "2xx ACK gets a fresh Via branch");
+        check(ack2xx.contains("CSeq: 1 ACK"),
+                "2xx ACK retains its INVITE CSeq");
+        check(firstBranch.equals(viaBranch(JoanSipBuilder.buildAckNon2xx(id, dlg,
+                "sip:peer@host", "<sip:[2001:db8::1];lr>", "ipsec-3gpp",
+                "<sip:x@y>;tag=abc", "<sip:+155****0100@ims.example.net>;tag="
+                        + dlg.fromTag, firstCseq, firstBranch))),
+                "non-2xx ACK reuses its INVITE Via branch");
+
+        String reinvite = JoanSipBuilder.buildReInvite(id, dlg, "sip:peer@host",
+                "<sip:[2001:db8::1];lr>", "ipsec-3gpp",
+                "<sip:x@y>;tag=abc", "<sip:+155****0100@ims.example.net>;tag="
+                        + dlg.fromTag,
+                JoanSipBuilder.sdpHold("2001:db8::2", 40000, true));
+        int reinviteCseq = dlg.cseq;
+        String reinviteBranch = viaBranch(reinvite);
+        String reAck2xx = JoanSipBuilder.buildAck2xx(id, dlg, "sip:peer@host",
+                "<sip:[2001:db8::1];lr>", "ipsec-3gpp",
+                "<sip:x@y>;tag=abc", "<sip:+155****0100@ims.example.net>;tag="
+                        + dlg.fromTag, reinviteCseq);
+
+        JoanSipBuilder.InviteAckArchive a = new JoanSipBuilder.InviteAckArchive();
+        a.begin(dlg.callId, firstCseq);
+        a.remember2xx(dlg.callId, firstCseq, ack2xx);
+        a.begin(dlg.callId, reinviteCseq);
+        a.remember2xx(dlg.callId, reinviteCseq, reAck2xx);
+        String newer = JoanSipBuilder.buildReInvite(id, dlg, "sip:peer@host",
+                "<sip:[2001:db8::1];lr>", "ipsec-3gpp",
+                "<sip:x@y>;tag=abc", "<sip:+155****0100@ims.example.net>;tag="
+                        + dlg.fromTag,
+                JoanSipBuilder.sdpHold("2001:db8::2", 40000, false));
+        check(dlg.cseq == reinviteCseq + 1,
+                "later re-INVITE advances the mutable dialog CSeq");
+        check(ack2xx.equals(a.ack2xx(dlg.callId, firstCseq))
+                        && reAck2xx.equals(a.ack2xx(dlg.callId, reinviteCseq)),
+                "ACK archive keeps exact stale-transaction ACKs");
+        check(reinviteBranch.equals(viaBranch(reinvite))
+                        && !reinviteBranch.equals(viaBranch(reAck2xx))
+                        && newer.contains("CSeq: " + dlg.cseq + " INVITE"),
+                "stale 2xx cannot inherit a newer INVITE branch or CSeq");
+        check(JoanSipBuilder.cseqForMethod(
+                "SIP/2.0 200 OK\r\nCSeq: 2 INVITE\r\n\r\n", "INVITE") == 2
+                        && JoanSipBuilder.cseqForMethod(
+                "SIP/2.0 200 OK\r\nCSeq: 2 ACK\r\n\r\n", "INVITE") < 0,
+                "CSeq parser keys replies by INVITE method as well as number");
+    }
+
+    private static String viaBranch(String msg) {
+        String via = JoanSipBuilder.header(msg, "Via");
+        if (via == null) {
+            return "";
+        }
+        int p = via.indexOf("branch=");
+        if (p < 0) {
+            return "";
+        }
+        int start = p + "branch=".length();
+        int end = via.indexOf(';', start);
+        return end < 0 ? via.substring(start) : via.substring(start, end);
     }
 
     private static void testCli() {

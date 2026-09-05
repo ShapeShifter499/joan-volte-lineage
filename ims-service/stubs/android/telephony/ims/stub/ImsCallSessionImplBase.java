@@ -35,6 +35,10 @@ public class ImsCallSessionImplBase {
 
     public void terminate(int reason) {}
 
+    public void hold(ImsStreamMediaProfile profile) {}
+
+    public void resume(ImsStreamMediaProfile profile) {}
+
     public void close() {}
 
     public int getState() { return STATE_IDLE; }

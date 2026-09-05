@@ -203,14 +203,43 @@ final class JoanSipBuilder {
 
     /**
      * Protected-REGISTER transport, from stock {@code libims.lge.so}
-     * (read-only: {@code CMCCAoS*} vs {@code TMUSAoS*}).
+     * (read-only: {@code GetTCPCriterionLength}).
      *
-     * MCC 460 (CMCCAoSIPSecHelper + live traces) opens SIPoTCP to
-     * P-CSCF port-s. T-Mobile's proven path is UDP; TMUS
-     * {@code AdjustTcpCriterionPerMtu} must not flip that.
+     * Stock selects transport per message by SIZE, not per carrier:
+     * TCP only when the message exceeds the carrier's criterion
+     * (CMCC XML {@code common_tcp_criterion_len=1300}, per-reg 0 =
+     * fall back to common; T-Mobile 1200; Korea 4096 ≈ always UDP).
+     * A REGISTER is ~1 kB, under every shipped criterion, so REG2
+     * goes out UDP-first on every known core. Alpha7's blanket
+     * MCC-460 forced-TCP misread this (field result: TCP connect to
+     * port-s refused, silent UDP fallback after ESP SYNs had already
+     * hit port-s) -- see
+     * docs/lg-ims-carrier-extract-2026-09-04.md and the CMCC alpha7
+     * field trace reference.
+     *
+     * Returns true only when the message exceeds the carrier's
+     * criterion, mirroring GetTCPCriterionLength. TMUS
+     * {@code AdjustTcpCriterionPerMtu} must not flip T-Mobile's
+     * proven UDP REGISTER.
      */
-    static boolean preferProtectedTcp(String realm) {
-        return plmnOf(realm) == 460;
+    static boolean preferProtectedTcp(String realm, int messageLen) {
+        int criterion = tcpCriterionFor(plmnOf(realm));
+        return criterion > 0 && messageLen > criterion;
+    }
+
+    /**
+     * TCP criterion length per home MCC, from stock carrier XML
+     * (read-only). Semantics per SKU: TMUS ships per-reg criterion 0
+     * = DISABLED (registration never leaves UDP, whatever the size --
+     * protect the proven path); CMCC's common 1300 is live. Returns
+     * 0 to disable the TCP path for that PLMN.
+     */
+    private static int tcpCriterionFor(int mcc) {
+        switch (mcc) {
+            case 460: return 1300;  // CMCC common_tcp_criterion_len
+            case 310: return 0;     // TMUS per-reg criterion disabled
+            default:  return -1;    // unknown: TCP path disabled
+        }
     }
 
     /**
@@ -488,6 +517,52 @@ final class JoanSipBuilder {
         return null;
     }
 
+    /**
+     * Return the CSeq number only when this is a CSeq for {@code method}.
+     * A response can be a retransmission for an older in-dialog INVITE while
+     * a newer hold/resume is active, so Call-ID alone is never a sufficient
+     * transaction key.
+     */
+    static int cseqForMethod(String msg, String method) {
+        if (msg == null || method == null || method.isEmpty()) {
+            return -1;
+        }
+        String value = header(msg, "CSeq");
+        if (value == null) {
+            return -1;
+        }
+        int i = 0;
+        while (i < value.length() && value.charAt(i) <= ' ') {
+            i++;
+        }
+        int start = i;
+        while (i < value.length() && value.charAt(i) >= '0'
+                && value.charAt(i) <= '9') {
+            i++;
+        }
+        if (i == start) {
+            return -1;
+        }
+        int cseq;
+        try {
+            cseq = Integer.parseInt(value.substring(start, i));
+        } catch (NumberFormatException ignored) {
+            return -1;
+        }
+        if (cseq <= 0) {
+            return -1;
+        }
+        while (i < value.length() && value.charAt(i) <= ' ') {
+            i++;
+        }
+        int methodStart = i;
+        while (i < value.length() && value.charAt(i) > ' ') {
+            i++;
+        }
+        return methodStart < i && value.substring(methodStart, i)
+                .equalsIgnoreCase(method) ? cseq : -1;
+    }
+
     /** Every header line with this name, in message order. */
     static java.util.List<String> headers(String msg, String name) {
         java.util.List<String> out = new java.util.ArrayList<>();
@@ -635,6 +710,119 @@ final class JoanSipBuilder {
         int cseq = 1;
     }
 
+    /**
+     * Small, bounded archive of INVITE final-response ACKs. An ACK to a 2xx
+     * is an in-dialog request; an ACK to a non-2xx is part of the INVITE
+     * transaction. Both must be retransmitted byte-for-byte for a repeated
+     * final response, but their Via-branch rules differ. Keeping the exact
+     * wire message avoids rebuilding an old ACK from a dialog whose CSeq has
+     * already advanced for a later hold or resume.
+     */
+    static final class InviteAckArchive {
+        private static final int MAX_RECORDS = 16;
+        /* Timer G/H are at most 64*T1 (normally 32 seconds); retain twice
+         * that without turning a long-running call into an unbounded map. */
+        private static final long RETAIN_MS = 64_000L;
+
+        private static final class Record {
+            final String callId;
+            final int cseq;
+            long untilMs;
+            String ack2xx;
+            String ackNon2xx;
+
+            Record(String callId, int cseq, long untilMs) {
+                this.callId = callId;
+                this.cseq = cseq;
+                this.untilMs = untilMs;
+            }
+        }
+
+        private final java.util.LinkedHashMap<String, Record> records =
+                new java.util.LinkedHashMap<>(MAX_RECORDS, 0.75f, true);
+
+        synchronized void begin(String callId, int cseq) {
+            if (callId == null || callId.isEmpty() || cseq <= 0) {
+                return;
+            }
+            long now = System.currentTimeMillis();
+            purge(now);
+            records.put(key(callId, cseq), new Record(callId, cseq,
+                    now + RETAIN_MS));
+            while (records.size() > MAX_RECORDS) {
+                java.util.Iterator<String> it = records.keySet().iterator();
+                it.next();
+                it.remove();
+            }
+        }
+
+        synchronized void remember2xx(String callId, int cseq, String ack) {
+            remember(callId, cseq, ack, true);
+        }
+
+        synchronized void rememberNon2xx(String callId, int cseq, String ack) {
+            remember(callId, cseq, ack, false);
+        }
+
+        synchronized String ack2xx(String callId, int cseq) {
+            Record r = get(callId, cseq);
+            return r == null ? null : r.ack2xx;
+        }
+
+        synchronized String ackNon2xx(String callId, int cseq) {
+            Record r = get(callId, cseq);
+            return r == null ? null : r.ackNon2xx;
+        }
+
+        synchronized void clear() {
+            records.clear();
+        }
+
+        private void remember(String callId, int cseq, String ack,
+                              boolean response2xx) {
+            if (ack == null || ack.isEmpty()) {
+                return;
+            }
+            long now = System.currentTimeMillis();
+            Record r = get(callId, cseq);
+            if (r == null) {
+                return;
+            }
+            r.untilMs = now + RETAIN_MS;
+            if (response2xx) {
+                r.ack2xx = ack;
+            } else {
+                r.ackNon2xx = ack;
+            }
+        }
+
+        private Record get(String callId, int cseq) {
+            if (callId == null || callId.isEmpty() || cseq <= 0) {
+                return null;
+            }
+            purge(System.currentTimeMillis());
+            return records.get(key(callId, cseq));
+        }
+
+        private void purge(long now) {
+            java.util.Iterator<java.util.Map.Entry<String, Record>> it =
+                    records.entrySet().iterator();
+            while (it.hasNext()) {
+                if (it.next().getValue().untilMs <= now) {
+                    it.remove();
+                }
+            }
+        }
+
+        private static String key(String callId, int cseq) {
+            return callId + '\u0000' + cseq;
+        }
+    }
+
+    /** Transport of in-dialog requests; mirrors the UA's reply socket.
+     * Set by JoanSipUa before sends (sendReply / TCP peer adopt). */
+    static volatile boolean sUseTcp;
+
     static final class Media {
         String ip;
         int port;
@@ -649,6 +837,15 @@ final class JoanSipBuilder {
     }
 
     static String sdpOffer(String ip, int rtpPort) {
+        return sdpMedia(ip, rtpPort, "sendrecv");
+    }
+
+    /** Hold is a=sendonly (RFC 3264). Resume is a=sendrecv. */
+    static String sdpHold(String ip, int rtpPort, boolean held) {
+        return sdpMedia(ip, rtpPort, held ? "sendonly" : "sendrecv");
+    }
+
+    private static String sdpMedia(String ip, int rtpPort, String direction) {
         boolean v6 = ip != null && ip.indexOf(':') >= 0;
         String fam = v6 ? "IP6" : "IP4";
         long sess = System.currentTimeMillis() / 1000;
@@ -674,7 +871,7 @@ final class JoanSipBuilder {
                 + "a=maxptime:240\r\n"
                 + "a=rtcp:" + (rtpPort + 1) + "\r\n"
                 + "a=rtcp-mux\r\n"
-                + "a=sendrecv\r\n";
+                + "a=" + direction + "\r\n";
     }
 
     /** PCMU-only answer, matching native sdp_answer. */
@@ -795,16 +992,51 @@ final class JoanSipBuilder {
         return a.toString();
     }
 
-    static String buildAck(Id id, Dialog dlg, String target, String route,
-                           String secVerify, String toHdr, String fromHdr) {
+    /**
+     * ACK a 2xx to INVITE. RFC 3261 §13.2.2.4 makes this a new in-dialog
+     * request: it keeps the INVITE CSeq but gets a fresh Via branch.
+     */
+    static String buildAck2xx(Id id, Dialog dlg, String target, String route,
+                              String secVerify, String toHdr, String fromHdr,
+                              int inviteCseq) {
         return inDialog("ACK", id, dlg, target, route, secVerify,
-                toHdr, fromHdr, dlg.cseq, null);
+                toHdr, fromHdr, inviteCseq, null, null, null);
+    }
+
+    /**
+     * ACK a non-2xx to INVITE. RFC 3261 §17.1.1.3 keeps this inside the
+     * INVITE transaction, so it must use that INVITE's Via branch exactly.
+     */
+    static String buildAckNon2xx(Id id, Dialog dlg, String target, String route,
+                                 String secVerify, String toHdr, String fromHdr,
+                                 int inviteCseq, String inviteBranch) {
+        if (inviteBranch == null || inviteBranch.isEmpty()) {
+            return null;
+        }
+        return inDialog("ACK", id, dlg, target, route, secVerify,
+                toHdr, fromHdr, inviteCseq, null, null, inviteBranch);
     }
 
     static String buildBye(Id id, Dialog dlg, String target, String route,
                            String secVerify, String toHdr, String fromHdr) {
         return inDialog("BYE", id, dlg, target, route, secVerify,
                 toHdr, fromHdr, dlg.cseq + 1, null);
+    }
+
+    /**
+     * In-dialog re-INVITE for hold/resume. Increments CSeq. SDP is the
+     * same offer with a=sendonly or a=sendrecv.
+     */
+    static String buildReInvite(Id id, Dialog dlg, String target, String route,
+                                String secVerify, String toHdr, String fromHdr,
+                                String sdp) {
+        dlg.cseq++;
+        String extra = "Contact: <sip:" + contactUser(aorOf(id.impu != null
+                && !id.impu.isEmpty() ? id.impu : id.impi))
+                + "@" + bracket(id.localIp) + ":" + id.contactPort + ">\r\n"
+                + "Allow: " + ALLOW + "\r\n";
+        return inDialog("INVITE", id, dlg, target, route, secVerify,
+                toHdr, fromHdr, dlg.cseq, extra, sdp, null);
     }
 
     static String buildPrack(Id id, Dialog dlg, String target, String route,
@@ -951,14 +1183,32 @@ final class JoanSipBuilder {
                                    String target, String route, String secVerify,
                                    String toHdr, String fromHdr, int cseq,
                                    String extra) {
+        return inDialog(method, id, dlg, target, route, secVerify,
+                toHdr, fromHdr, cseq, extra, null, null);
+    }
+
+    private static String inDialog(String method, Id id, Dialog dlg,
+                                   String target, String route, String secVerify,
+                                   String toHdr, String fromHdr, int cseq,
+                                   String extra, String sdp, String branchOverride) {
         String aor = aorOf(id.impu != null && !id.impu.isEmpty()
                 ? id.impu : id.impi);
         String host = bracket(id.localIp);
         SecureRandom rng = RNG;
-        String branch = String.format("z9hG4bK%08x%08x", rng.nextInt(), rng.nextInt());
+        /* Every in-dialog request gets a new branch. The one exception is
+         * the ACK to a non-2xx INVITE final, which supplies the original
+         * transaction branch explicitly through branchOverride. */
+        String branch = branchOverride;
+        if (branch == null || branch.isEmpty()) {
+            branch = String.format("z9hG4bK%08x%08x", rng.nextInt(), rng.nextInt());
+        }
+        if ("INVITE".equals(method)) {
+            dlg.branch = branch;
+        }
         StringBuilder a = new StringBuilder(1200);
         a.append(method).append(' ').append(target).append(" SIP/2.0\r\n");
-        a.append("Via: SIP/2.0/UDP ").append(host).append(':')
+        a.append("Via: SIP/2.0/").append(sUseTcp ? "TCP" : "UDP").append(' ')
+                .append(host).append(':')
                 .append(id.viaPort).append(";branch=").append(branch)
                 .append(";rport\r\n");
         a.append("Max-Forwards: 70\r\n");
@@ -982,7 +1232,13 @@ final class JoanSipBuilder {
         if (secVerify != null && !secVerify.isEmpty()) {
             a.append("Security-Verify: ").append(secVerify).append("\r\n");
         }
-        a.append("Content-Length: 0\r\n\r\n");
+        if (sdp != null && !sdp.isEmpty()) {
+            a.append("Content-Type: application/sdp\r\n");
+            a.append("Content-Length: ").append(sdp.length()).append("\r\n\r\n");
+            a.append(sdp);
+        } else {
+            a.append("Content-Length: 0\r\n\r\n");
+        }
         return a.toString();
     }
 

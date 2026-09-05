@@ -17,15 +17,27 @@ loopback control socket.
 
 **If your SIM has no ISIM application, this needs testers and logs.**
 
-Support for deriving the IMS identity from the IMSI (3GPP TS 23.003
+Support for deriving the IMS identity from the IMSI (TS 23.003
 §13.3) and authenticating against the USIM instead of an ISIM landed in
 the `v0.4.0-alpha*` prereleases. Both halves are confirmed working on one
 handset: the identity is derived and AKA succeeds. On China Mobile the
 protected REGISTER was then sent over UDP and timed out.
-`v0.4.0-alpha7` sends that second REGISTER over TCP to P-CSCF `port-s`
-on MCC 460 only, keeps the TCP client for later SIP, and advances to
-the next advertised P-CSCF if that REG2 is silent (T-Mobile stays on
-the proven UDP path).
+`v0.4.0-alpha7` sent that second REGISTER over TCP to P-CSCF `port-s`
+on MCC 460 only; `v0.4.0-alpha9` replaces the blanket rule with stock's
+size criterion (`GetTCPCriterionLength`): TCP only when the message
+exceeds the carrier's XML value (CMCC 1300, TMUS disabled — a ~1.8 kB
+REGISTER stays UDP on both), with UDP fallback if TCP fails. It also
+advances to the next advertised P-CSCF if REG2 is silent (T-Mobile
+stays on the proven UDP path). `v0.4.0-alpha8` adds SIP hold
+(`a=sendonly`) and call waiting (a second INVITE rings instead of 486;
+accept holds the first). `v0.4.0-alpha10` repairs ACK identity: a 2xx
+ACK is a fresh in-dialog request (new Via branch), a non-2xx ACK
+belongs to the INVITE transaction, and every final response is
+re-answered from an archive of the exact ACK bytes per (Call-ID, INVITE
+CSeq) — this is what finally quenches the P-CSCF retransmission queue
+between hold/resume swaps. Conference merge is not implemented;
+`docs/call-waiting-conference-routing-2026-09-05.md` records how stock
+LG routes it (conference factory URI + REFER + conference-info).
 
 The remaining open question is IPsec with **NULL encryption**. Android
 exposes no NULL cipher constant, so an authentication-only

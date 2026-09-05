@@ -40,10 +40,13 @@ import java.util.List;
  * pattern (pad SHA-1 IK to 160 bits; omit setEncryption when ealg=null)
  * without importing that GPL tree.
  *
- * Transport is carrier-scoped: T-Mobile's proven REG2 stays UDP. MCC 460
- * cores (China Mobile live traces) take the protected REGISTER over TCP
- * to P-CSCF port-s, which TS 33.203 requires the UE to open if no TCP
- * connection exists yet. Connect/RST failure falls back to UDP.
+ * Transport follows stock GetTCPCriterionLength: per message by size.
+ * A protected REG2 measures ~1.8 kB on the wire (bench reg2len=1823),
+ * so CMCC (criterion 1300) still takes REG2 over TCP to P-CSCF port-s,
+ * with UDP fallback on connect failure — matching stock, which ships a
+ * CMCC-specific TCP IPsec helper. T-Mobile's per-reg criterion is 0
+ * (disabled): its proven REG2 stays UDP at any size. Unknown PLMNs
+ * stay UDP; no blanket per-carrier TCP rule survives.
  *
  * Never logs IMPI, nonce, RES, CK, IK, or SIP request lines.
  */
@@ -283,43 +286,59 @@ final class JoanAppRegister {
             JoanSipBuilder.Id sip2 = new JoanSipBuilder.Id(
                     id.impi, id.impu, id.realm, n.localHost,
                     mine.portC, mine.portS, id.imei);
-            boolean tcpReg2 = JoanSipBuilder.preferProtectedTcp(id.realm)
-                    || JoanSipBuilder.preferProtectedTcp(realm);
             String r2 = null;
             sTcpAttempted = false;
             sTcpConnected = false;
             sTcpKeep = null;
-            if (tcpReg2) {
-                String reg2Tcp = JoanSipBuilder.buildRegister(sip2, txn, 2,
-                        ch, res, ck, ik, pani, true);
-                byte[] tcpBytes = reg2Tcp.getBytes(StandardCharsets.US_ASCII);
-                sb.append("reg2send=").append(mine.portC).append("->")
-                        .append(pcscfSec.portS).append(" tpt=tcp ");
-                r2 = sendRecvTcp(n.network, n.local, mine.portC,
-                        pcscf, pcscfSec.portS, tcpBytes, REG2_TIMEOUT_MS,
-                        ipsec, inC, outC);
-                if (r2 == null) {
-                    if (sTcpAttempted && !sTcpConnected) {
-                        sb.append("tcp_fail=connect ");
-                    } else if (sTcpConnected) {
-                        sb.append("tcp_fail=timeout ");
-                    } else {
-                        sb.append("tcp_fail=setup ");
-                    }
-                }
-            }
-            if (r2 == null && !sTcpConnected) {
-                String reg2 = JoanSipBuilder.buildRegister(sip2, txn, 2, ch,
-                        res, ck, ik, pani, false);
-                byte[] reg2Bytes = reg2.getBytes(StandardCharsets.US_ASCII);
+            boolean tcpReg2;
+            {
+                /* Stock GetTCPCriterionLength semantics: transport is
+                 * chosen per message by size. REG2 is built first as
+                 * the UDP variant (also the fallback bytes); its
+                 * length drives the criterion. */
+                String reg2Udp = JoanSipBuilder.buildRegister(sip2, txn, 2,
+                        ch, res, ck, ik, pani, false);
+                byte[] reg2Bytes = reg2Udp.getBytes(StandardCharsets.US_ASCII);
+                tcpReg2 = JoanSipBuilder.preferProtectedTcp(
+                        id.realm, reg2Udp.length())
+                        || JoanSipBuilder.preferProtectedTcp(
+                        realm, reg2Udp.length());
+                sb.append("reg2len=").append(reg2Udp.length()).append(' ');
                 if (!tcpReg2) {
                     sb.append("reg2send=").append(mine.portC).append("->")
                             .append(pcscfSec.portS).append(" tpt=udp ");
+                    r2 = sendRecv(sockC, sockS, pcscf, pcscfSec.portS,
+                            reg2Bytes, REG2_TIMEOUT_MS);
                 } else {
-                    sb.append("tpt=udp ");
+                    /* Same message, TCP Via. Stock reuses this client
+                     * for INVITE after a 200 ("TCP client is
+                     * re-used"). */
+                    String reg2Tcp = JoanSipBuilder.buildRegister(sip2,
+                            txn, 2, ch, res, ck, ik, pani, true);
+                    byte[] tcpBytes =
+                            reg2Tcp.getBytes(StandardCharsets.US_ASCII);
+                    sb.append("reg2send=").append(mine.portC).append("->")
+                            .append(pcscfSec.portS).append(" tpt=tcp ");
+                    r2 = sendRecvTcp(n.network, n.local, mine.portC,
+                            pcscf, pcscfSec.portS, tcpBytes,
+                            REG2_TIMEOUT_MS, ipsec, inC, outC);
+                    if (r2 == null) {
+                        if (sTcpAttempted && !sTcpConnected) {
+                            sb.append("tcp_fail=connect")
+                              .append(sTcpFailWhy == null
+                                      ? " " : "(" + sTcpFailWhy + ") ");
+                        } else if (sTcpConnected) {
+                            sb.append("tcp_fail=timeout ");
+                        } else {
+                            sb.append("tcp_fail=setup ");
+                        }
+                        /* UDP fallback, matching stock TransmissionProxy
+                         * ("UDP fallback"): same protected REGISTER. */
+                        sb.append("tpt=udp ");
+                        r2 = sendRecv(sockC, sockS, pcscf, pcscfSec.portS,
+                                reg2Bytes, REG2_TIMEOUT_MS);
+                    }
                 }
-                r2 = sendRecv(sockC, sockS, pcscf, pcscfSec.portS,
-                        reg2Bytes, REG2_TIMEOUT_MS);
             }
             sb.append("reg2retx=").append(sRetx).append(' ');
             if (r2 == null) {
@@ -539,6 +558,9 @@ final class JoanAppRegister {
     /** Last protected-TCP attempt: attempted connect, and whether it completed. */
     private static boolean sTcpAttempted;
     private static boolean sTcpConnected;
+    /** Exception class from the last TCP attempt: ConnectException
+     * (RST/refused) vs SocketTimeoutException (dropped) vs other. */
+    private static String sTcpFailWhy;
     /** Successful REG2 TCP client, handed to the UA. Closed on failure. */
     private static Socket sTcpKeep;
 
@@ -614,6 +636,7 @@ final class JoanAppRegister {
                                       IpSecTransform outXf) {
         sTcpAttempted = true;
         sTcpConnected = false;
+        sTcpFailWhy = null;
         sRetx = 0;
         Socket sock = new Socket();
         try {
@@ -641,6 +664,7 @@ final class JoanAppRegister {
             sock.connect(new InetSocketAddress(dest, dport),
                     Math.min(4000, Math.max(1, timeoutMs)));
             sTcpConnected = true;
+            sTcpFailWhy = null;
             OutputStream os = sock.getOutputStream();
             os.write(pkt);
             os.flush();
@@ -671,6 +695,7 @@ final class JoanAppRegister {
             }
             return null;
         } catch (Exception e) {
+            sTcpFailWhy = e.getClass().getSimpleName();
             return null;
         } finally {
             if (sock != null) {

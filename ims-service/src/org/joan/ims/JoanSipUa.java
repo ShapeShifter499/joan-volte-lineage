@@ -66,6 +66,7 @@ final class JoanSipUa {
     private static volatile String sFromHdr;
     private static volatile String sHeldInvite;
     private static volatile String sOurToTag;
+    private static volatile String sRingingToTag;
     private static volatile InetAddress sMediaIp;
     private static volatile int sMediaPort;
     private static volatile int sMediaRtcpPort;
@@ -73,6 +74,47 @@ final class JoanSipUa {
     private static volatile int sMediaPt;
     private static volatile Boolean sMediaAmrWb;
     private static volatile boolean sMediaMux;
+    /** True when the live dialog is on hold (sendonly, no RTP). */
+    private static volatile boolean sLiveHeld;
+    /** Second established dialog, parked (held) while another is live. */
+    private static volatile Leg sParked;
+    /**
+     * Every outbound INVITE is routed by both Call-ID and INVITE CSeq. A
+     * parked leg can legitimately retransmit a 2xx while another leg has a
+     * newer re-INVITE in flight, so a single global "last 2xx" queue is not
+     * a safe transaction boundary.
+     */
+    private static volatile InviteWait sInitialInviteWait;
+    private static volatile InviteWait sReinviteWait;
+    private static final JoanSipBuilder.InviteAckArchive sInviteAcks =
+            new JoanSipBuilder.InviteAckArchive();
+
+    private static final class Leg {
+        JoanSipBuilder.Dialog dlg;
+        String dest, target, route, toHdr, fromHdr, ourToTag;
+        InetAddress mediaIp;
+        int mediaPort, mediaRtcpPort, mediaPt;
+        Boolean mediaAmrWb;
+        boolean mux;
+        boolean held;
+    }
+
+    private static final class InviteWait {
+        final String callId;
+        final int cseq;
+        final java.util.concurrent.LinkedBlockingQueue<String> replies =
+                new java.util.concurrent.LinkedBlockingQueue<>();
+
+        InviteWait(String callId, int cseq) {
+            this.callId = callId;
+            this.cseq = cseq;
+        }
+
+        boolean matches(String otherCallId, int otherCseq) {
+            return callId != null && callId.equals(otherCallId)
+                    && cseq == otherCseq;
+        }
+    }
 
     private JoanSipUa() {}
 
@@ -82,6 +124,54 @@ final class JoanSipUa {
 
     static boolean callActive() {
         return sCall;
+    }
+
+    /** True when the live dialog is already held (sendonly). answer() uses
+     * this to avoid a second hold re-INVITE when the framework already
+     * held the call during switchWaitingOrHoldingAndActive. */
+    static boolean liveHeld() {
+        return sCall && sLiveHeld;
+    }
+
+    static String currentCallId() {
+        JoanSipBuilder.Dialog d = sDlg;
+        return d != null ? d.callId : null;
+    }
+
+    static boolean dialogAlive(String sipCallId) {
+        if (sipCallId == null || sipCallId.isEmpty()) {
+            return false;
+        }
+        synchronized (LOCK) {
+            if (sDlg != null && sipCallId.equals(sDlg.callId)) {
+                return sCall;
+            }
+            if (sParked != null && sParked.dlg != null
+                    && sipCallId.equals(sParked.dlg.callId)) {
+                return true;
+            }
+            if (sHeldInvite != null && sipCallId.equals(
+                    JoanSipBuilder.header(sHeldInvite, "Call-ID"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static boolean callHeld(String sipCallId) {
+        if (sipCallId == null) {
+            return false;
+        }
+        synchronized (LOCK) {
+            if (sDlg != null && sipCallId.equals(sDlg.callId)) {
+                return sLiveHeld;
+            }
+            if (sParked != null && sParked.dlg != null
+                    && sipCallId.equals(sParked.dlg.callId)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -217,6 +307,16 @@ final class JoanSipUa {
         if (sPublicId == null || sPublicId.isEmpty()) {
             return "ERR no public identity";
         }
+        boolean addingSecond;
+        synchronized (LOCK) {
+            if (sCall && sParked != null) {
+                return "ERR two calls";
+            }
+            if (sCall && !sLiveHeld) {
+                return "ERR hold first";
+            }
+            addingSecond = sCall && sLiveHeld;
+        }
         JoanSipBuilder.Id id = new JoanSipBuilder.Id(
                 sId.impi, sPublicId, sId.realm, sId.localIp,
                 sId.viaPort, sId.contactPort, sId.imei);
@@ -227,11 +327,15 @@ final class JoanSipUa {
         if (msg == null) {
             return "ERR build invite";
         }
+        sInviteAcks.begin(dlg.callId, dlg.cseq);
+        InviteWait wait = new InviteWait(dlg.callId, dlg.cseq);
+        sInitialInviteWait = wait;
         byte[] pkt = msg.getBytes(StandardCharsets.US_ASCII);
         JoanTrace.note("app invite built bytes=" + pkt.length);
         try {
             send(sSockC, sPcscf, sPcscfPortS, pkt);
         } catch (Exception e) {
+            clearInitialInviteWait(wait);
             return "ERR invite send";
         }
         long deadline = System.currentTimeMillis() + 30000;
@@ -240,8 +344,11 @@ final class JoanSipUa {
         String target = dest;
         String route = sServiceRoute;
         while (System.currentTimeMillis() < deadline) {
-            String rx = recvEither((int) Math.min(400,
-                    deadline - System.currentTimeMillis()));
+            String rx = wait.replies.poll();
+            if (rx == null) {
+                rx = recvEither((int) Math.min(400,
+                        deadline - System.currentTimeMillis()));
+            }
             if (rx == null) {
                 continue;
             }
@@ -291,14 +398,8 @@ final class JoanSipUa {
                     JoanTrace.note("app invite answered pt="
                             + media.payloadType + " (" + enc
                             + "); not implemented");
-                    try {
-                        send(sSockC, sPcscf, sPcscfPortS,
-                                JoanSipBuilder.buildAck(id, dlg, target,
-                                        route, sSecVerify, toHdr, fromHdr)
-                                        .getBytes(StandardCharsets.US_ASCII));
-                    } catch (Exception ignored) {
-                        // ignore
-                    }
+                    sendAck2xx(id, dlg, target, route, toHdr, fromHdr,
+                            dlg.cseq);
                     synchronized (LOCK) {
                         sDlg = dlg;
                         sTarget = target;
@@ -307,18 +408,19 @@ final class JoanSipUa {
                         sFromHdr = fromHdr;
                         sCall = true;
                     }
+                    clearInitialInviteWait(wait);
                     hangup();
                     return "ERR unsupported codec " + media.payloadType;
                 }
-                String ack = JoanSipBuilder.buildAck(id, dlg, target, route,
-                        sSecVerify, toHdr, fromHdr);
-                try {
-                    send(sSockC, sPcscf, sPcscfPortS,
-                            ack.getBytes(StandardCharsets.US_ASCII));
-                } catch (Exception e) {
+                if (!sendAck2xx(id, dlg, target, route, toHdr, fromHdr,
+                        dlg.cseq)) {
+                    clearInitialInviteWait(wait);
                     return "ERR ack send";
                 }
                 synchronized (LOCK) {
+                    if (addingSecond) {
+                        sParked = snapLocked();
+                    }
                     sDlg = dlg;
                     sDest = dest;
                     sTarget = target;
@@ -326,6 +428,7 @@ final class JoanSipUa {
                     sToHdr = toHdr;
                     sFromHdr = fromHdr;
                     sCall = true;
+                    sLiveHeld = false;
                     if (media != null) {
                         try {
                             sMediaIp = InetAddress.getByName(media.ip);
@@ -346,6 +449,7 @@ final class JoanSipUa {
                 JoanTrace.note("app invite 200 media="
                         + (sMediaIp != null ? "yes" : "no")
                         + " mux=" + sMediaMux);
+                clearInitialInviteWait(wait);
                 return "OK";
             }
             if (p.status == 420 && secAgree) {
@@ -354,51 +458,104 @@ final class JoanSipUa {
                  * is hop-by-hop and should have been stripped by the
                  * P-CSCF. Retry once without it as a fresh transaction
                  * rather than failing the call. */
+                String finalTo = nullToEmpty(JoanSipBuilder.header(rx, "To"));
+                String finalFrom = nullToEmpty(JoanSipBuilder.header(rx, "From"));
+                String contact = JoanSipBuilder.header(rx, "Contact");
+                String finalTarget = contact == null ? dest
+                        : JoanSipBuilder.contactUri(contact);
+                String rr = JoanSipBuilder.header(rx, "Record-Route");
+                String finalRoute = rr == null || rr.isEmpty() ? sServiceRoute : rr;
+                sendAckNon2xx(id, dlg, finalTarget, finalRoute, finalTo,
+                        finalFrom, dlg.cseq, dlg.branch);
                 secAgree = false;
                 JoanTrace.note("app invite 420; retrying without sec-agree");
+                clearInitialInviteWait(wait);
                 dlg = new JoanSipBuilder.Dialog();
                 String retry = JoanSipBuilder.buildInvite(id, dlg, dest,
                         sServiceRoute, sSecVerify, RTP_PORT, sPani, false);
                 if (retry == null) {
                     return "ERR build invite";
                 }
+                sInviteAcks.begin(dlg.callId, dlg.cseq);
+                wait = new InviteWait(dlg.callId, dlg.cseq);
+                sInitialInviteWait = wait;
                 try {
                     send(sSockC, sPcscf, sPcscfPortS,
                             retry.getBytes(StandardCharsets.US_ASCII));
                 } catch (Exception e) {
+                    clearInitialInviteWait(wait);
                     return "ERR invite send";
                 }
                 deadline = System.currentTimeMillis() + 30000;
                 continue;
             }
             if (p.status >= 300) {
+                String finalTo = nullToEmpty(JoanSipBuilder.header(rx, "To"));
+                String finalFrom = nullToEmpty(JoanSipBuilder.header(rx, "From"));
+                String contact = JoanSipBuilder.header(rx, "Contact");
+                String finalTarget = contact == null ? dest
+                        : JoanSipBuilder.contactUri(contact);
+                String rr = JoanSipBuilder.header(rx, "Record-Route");
+                String finalRoute = rr == null || rr.isEmpty() ? sServiceRoute : rr;
+                sendAckNon2xx(id, dlg, finalTarget, finalRoute, finalTo,
+                        finalFrom, dlg.cseq, dlg.branch);
+                clearInitialInviteWait(wait);
                 return "ERR invite " + p.status;
             }
         }
+        clearInitialInviteWait(wait);
         return "ERR invite timeout";
     }
 
     static void hangup() {
+        hangup(currentCallId());
+    }
+
+    static void hangup(String sipCallId) {
         JoanSipBuilder.Dialog dlg;
         JoanSipBuilder.Id id;
         String target, route, toHdr, fromHdr;
+        boolean parkedBye = false;
         synchronized (LOCK) {
-            if (!sCall || sId == null) {
+            if (sipCallId != null && sParked != null && sParked.dlg != null
+                    && sipCallId.equals(sParked.dlg.callId)) {
+                dlg = sParked.dlg;
+                target = sParked.target != null && !sParked.target.isEmpty()
+                        ? sParked.target : sParked.dest;
+                route = sParked.route;
+                toHdr = sParked.toHdr;
+                fromHdr = sParked.fromHdr;
+                sParked = null;
+                parkedBye = true;
+            } else {
+                if (!sCall || sId == null) {
+                    sCall = false;
+                    return;
+                }
+                dlg = sDlg;
+                if (dlg == null) {
+                    sCall = false;
+                    return;
+                }
+                if (sipCallId != null && dlg.callId != null
+                        && !sipCallId.equals(dlg.callId)) {
+                    return;
+                }
+                target = sTarget != null && !sTarget.isEmpty() ? sTarget : sDest;
+                route = sRoute;
+                toHdr = sToHdr;
+                fromHdr = sFromHdr;
                 sCall = false;
-                return;
-            }
-            dlg = sDlg;
-            if (dlg == null) {
-                sCall = false;
-                return;
+                sLiveHeld = false;
+                if (sParked != null) {
+                    loadLocked(sParked);
+                    sParked = null;
+                    sCall = true;
+                    sLiveHeld = true;
+                }
             }
             id = new JoanSipBuilder.Id(sId.impi, sPublicId, sId.realm,
                     sId.localIp, sId.viaPort, sId.contactPort, sId.imei);
-            target = sTarget != null && !sTarget.isEmpty() ? sTarget : sDest;
-            route = sRoute;
-            toHdr = sToHdr;
-            fromHdr = sFromHdr;
-            sCall = false;
         }
         if (target == null || target.isEmpty()) {
             JoanTrace.note("app BYE skipped no target");
@@ -408,7 +565,7 @@ final class JoanSipUa {
                 sSecVerify, toHdr, fromHdr);
         try {
             sendReply(bye.getBytes(StandardCharsets.US_ASCII));
-            JoanTrace.note("app BYE sent");
+            JoanTrace.note(parkedBye ? "app BYE sent parked" : "app BYE sent");
         } catch (Exception e) {
             JoanTrace.note("app BYE send fail");
         }
@@ -422,16 +579,41 @@ final class JoanSipUa {
         if (invite == null) {
             return "ERR no held invite";
         }
+        if (sCall) {
+            /* The framework holds the active call itself while accepting
+             * the waiting one (switchWaitingOrHoldingAndActive). If that
+             * hold already ran, a second re-INVITE here would complete a
+             * handshake the tracker never started -- it desyncs its state
+             * machine and every later unhold dies with "Call update is in
+             * progress". Only hold if nobody else did. */
+            if (!liveHeld()) {
+                String h = hold(currentCallId());
+                if (h == null) {
+                    h = "ERR hold first";
+                }
+                if (h == null || !h.startsWith("OK")) {
+                    JoanTrace.note("app answer: hold first call failed: " + h);
+                }
+            } else {
+                JoanTrace.note("app answer: first call already held");
+            }
+            synchronized (LOCK) {
+                sParked = snapLocked();
+            }
+        }
         JoanSipBuilder.Id id = new JoanSipBuilder.Id(
                 sId.impi, sPublicId, sId.realm, sId.localIp,
                 sId.viaPort, sId.contactPort, sId.imei);
         String sdp = JoanSipBuilder.sdpAnswer(sId.localIp, RTP_PORT, invite);
-        String tag = sOurToTag;
+        String tag = sRingingToTag;
+        if (tag == null || tag.isEmpty()) {
+            tag = sOurToTag;
+        }
         if (tag == null || tag.isEmpty()) {
             tag = String.format("%012x",
                     new java.security.SecureRandom().nextLong() & 0xffffffffffffL);
-            sOurToTag = tag;
         }
+        sOurToTag = tag;
         String resp = buildResponse(invite, 200, "OK", id, tag, sdp);
         try {
             sendReply(resp.getBytes(StandardCharsets.US_ASCII));
@@ -441,6 +623,7 @@ final class JoanSipUa {
         JoanSipBuilder.Media media = JoanSipBuilder.parseSdp(invite);
         synchronized (LOCK) {
             sCall = true;
+            sLiveHeld = false;
             sHeldInvite = null;
             /* UAS dialog: From is our To+tag, To is the INVITE From.
              * Without this, hangup() has no dialog and sends no BYE. */
@@ -487,7 +670,8 @@ final class JoanSipUa {
         if (invite == null) {
             return "ERR no held invite";
         }
-        String tag = sOurToTag != null ? sOurToTag : "rej";
+        String tag = sRingingToTag != null ? sRingingToTag
+                : (sOurToTag != null ? sOurToTag : "rej");
         String resp = buildResponse(invite, code,
                 code == 603 ? "Decline" : "Busy Here", sId, tag, null);
         try {
@@ -496,6 +680,219 @@ final class JoanSipUa {
             return "ERR reject send";
         }
         return "OK";
+    }
+
+    static String hold(String sipCallId) {
+        synchronized (LOCK) {
+            if (!sCall || sDlg == null) {
+                return "ERR no call";
+            }
+            if (sipCallId != null && sDlg.callId != null
+                    && !sipCallId.equals(sDlg.callId)) {
+                if (sParked != null && sParked.dlg != null
+                        && sipCallId.equals(sParked.dlg.callId)) {
+                    return "OK";
+                }
+                return "ERR not live";
+            }
+            if (sLiveHeld) {
+                return "OK";
+            }
+        }
+        String r = reInviteLive(true);
+        if (r != null && r.startsWith("OK")) {
+            JoanMedia.stop();
+            sLiveHeld = true;
+            JoanTrace.note("app hold");
+        }
+        return r;
+    }
+
+    static String resume(String sipCallId) {
+        boolean swap;
+        synchronized (LOCK) {
+            if (!sCall || sDlg == null) {
+                return "ERR no call";
+            }
+            swap = sipCallId != null && sParked != null && sParked.dlg != null
+                    && sipCallId.equals(sParked.dlg.callId);
+            if (!swap && sipCallId != null && sDlg.callId != null
+                    && !sipCallId.equals(sDlg.callId)) {
+                return "ERR not live";
+            }
+        }
+        if (swap) {
+            String h = hold(sDlg.callId);
+            if (h == null || !h.startsWith("OK")) {
+                return h == null ? "ERR hold" : h;
+            }
+            synchronized (LOCK) {
+                Leg was = snapLocked();
+                loadLocked(sParked);
+                sParked = was;
+                sLiveHeld = true;
+            }
+        }
+        String r = reInviteLive(false);
+        if (r != null && r.startsWith("OK")) {
+            sLiveHeld = false;
+            JoanTrace.note("app resume");
+        }
+        return r;
+    }
+
+    private static Leg snapLocked() {
+        Leg l = new Leg();
+        l.dlg = sDlg;
+        l.dest = sDest;
+        l.target = sTarget;
+        l.route = sRoute;
+        l.toHdr = sToHdr;
+        l.fromHdr = sFromHdr;
+        l.ourToTag = sOurToTag;
+        l.mediaIp = sMediaIp;
+        l.mediaPort = sMediaPort;
+        l.mediaRtcpPort = sMediaRtcpPort;
+        l.mediaPt = sMediaPt;
+        l.mediaAmrWb = sMediaAmrWb;
+        l.mux = sMediaMux;
+        l.held = true;
+        return l;
+    }
+
+    private static void loadLocked(Leg l) {
+        sDlg = l.dlg;
+        sDest = l.dest;
+        sTarget = l.target;
+        sRoute = l.route;
+        sToHdr = l.toHdr;
+        sFromHdr = l.fromHdr;
+        sOurToTag = l.ourToTag;
+        sMediaIp = l.mediaIp;
+        sMediaPort = l.mediaPort;
+        sMediaRtcpPort = l.mediaRtcpPort;
+        sMediaPt = l.mediaPt;
+        sMediaAmrWb = l.mediaAmrWb;
+        sMediaMux = l.mux;
+        sLiveHeld = l.held;
+    }
+
+    private static String reInviteLive(boolean held) {
+        JoanSipBuilder.Dialog dlg;
+        JoanSipBuilder.Id id;
+        String target, route, toHdr, fromHdr;
+        synchronized (LOCK) {
+            if (sId == null || sDlg == null) {
+                return "ERR no dialog";
+            }
+            dlg = sDlg;
+            /* buildReInvite() owns the increment: it does dlg.cseq++.
+             * Incrementing here too sent +2 steps (2,4,6,8...), which a
+             * strict P-CSCF drops silently -- resume then times out.
+             * RFC 3261 12.2.2: exactly +1 per in-dialog request. */
+            id = new JoanSipBuilder.Id(sId.impi, sPublicId, sId.realm,
+                    sId.localIp, sId.viaPort, sId.contactPort, sId.imei);
+            target = sTarget != null && !sTarget.isEmpty() ? sTarget : sDest;
+            route = sRoute;
+            toHdr = sToHdr;
+            fromHdr = sFromHdr;
+        }
+        if (target == null || target.isEmpty()) {
+            return "ERR no target";
+        }
+        String sdp = JoanSipBuilder.sdpHold(id.localIp, RTP_PORT, held);
+        String inv = JoanSipBuilder.buildReInvite(id, dlg, target, route,
+                sSecVerify, toHdr, fromHdr, sdp);
+        int inviteCseq = dlg.cseq;
+        String inviteBranch = dlg.branch;
+        sInviteAcks.begin(dlg.callId, inviteCseq);
+        InviteWait wait = new InviteWait(dlg.callId, inviteCseq);
+        sReinviteWait = wait;
+        JoanTrace.note("app reinvite send held=" + held
+                + " cseq=" + inviteCseq + " cid=" + dlg.callId);
+        try {
+            sendReply(inv.getBytes(StandardCharsets.US_ASCII));
+        } catch (Exception e) {
+            clearReinviteWait(wait);
+            JoanTrace.note("app reinvite ERR send");
+            return "ERR reinvite send";
+        }
+        long deadline = System.currentTimeMillis() + 15000;
+        while (System.currentTimeMillis() < deadline) {
+            /* The reply usually lands on the accepted TCP socket, which the
+             * listen thread owns; it hands over only the matching Call-ID +
+             * INVITE CSeq instead of racing us to the ACK. */
+            String handed = wait.replies.poll();
+            if (handed != null) {
+                JoanSipBuilder.Reply hp = JoanSipBuilder.parseReply(handed);
+                String hcid = JoanSipBuilder.header(handed, "Call-ID");
+                int hcseq = JoanSipBuilder.cseqForMethod(handed, "INVITE");
+                boolean mine = wait.matches(hcid, hcseq);
+                if (mine && hp != null && hp.status >= 200
+                        && hp.status < 300) {
+                    if (!sendAck2xx(id, dlg, target, route, toHdr, fromHdr,
+                            inviteCseq)) {
+                        clearReinviteWait(wait);
+                        return "ERR reinvite ack send";
+                    }
+                    clearReinviteWait(wait);
+                    return "OK";
+                }
+                if (mine && hp != null && hp.status >= 300) {
+                    /* A non-2xx ACK is part of this INVITE transaction and
+                     * therefore uses inviteBranch, not a fresh branch. */
+                    sendAckNon2xx(id, dlg, target, route, toHdr, fromHdr,
+                            inviteCseq, inviteBranch);
+                    clearReinviteWait(wait);
+                    JoanTrace.note("app reinvite ERR " + hp.status);
+                    return "ERR reinvite " + hp.status;
+                }
+                if (hp != null && hp.status >= 200) {
+                    reAckFinal(hcid, hcseq, hp.status);
+                }
+                continue;
+            }
+            String rx = recvEither((int) Math.min(400,
+                    deadline - System.currentTimeMillis()));
+            if (rx == null) {
+                continue;
+            }
+            if (!JoanSipBuilder.requestMethod(rx).isEmpty()) {
+                handleInbound(rx);
+                continue;
+            }
+            JoanSipBuilder.Reply p = JoanSipBuilder.parseReply(rx);
+            if (p == null) {
+                continue;
+            }
+            String cid = JoanSipBuilder.header(rx, "Call-ID");
+            int cseq = JoanSipBuilder.cseqForMethod(rx, "INVITE");
+            if (!wait.matches(cid, cseq)) {
+                if (p.status >= 200) {
+                    reAckFinal(cid, cseq, p.status);
+                }
+                continue;
+            }
+            if (p.status >= 200 && p.status < 300) {
+                if (!sendAck2xx(id, dlg, target, route, toHdr, fromHdr,
+                        inviteCseq)) {
+                    clearReinviteWait(wait);
+                    return "ERR reinvite ack send";
+                }
+                clearReinviteWait(wait);
+                return "OK";
+            }
+            if (p.status >= 300) {
+                sendAckNon2xx(id, dlg, target, route, toHdr, fromHdr,
+                        inviteCseq, inviteBranch);
+                clearReinviteWait(wait);
+                JoanTrace.note("app reinvite ERR " + p.status);
+                return "ERR reinvite " + p.status;
+            }
+        }
+        clearReinviteWait(wait);
+        JoanTrace.note("app reinvite ERR timeout");
+        return "ERR reinvite timeout";
     }
 
     private static void startListen() {
@@ -524,29 +921,143 @@ final class JoanSipUa {
         }
     }
 
+    private static boolean sendAck2xx(JoanSipBuilder.Id id,
+                                      JoanSipBuilder.Dialog dlg,
+                                      String target, String route,
+                                      String toHdr, String fromHdr,
+                                      int inviteCseq) {
+        try {
+            String ack = JoanSipBuilder.buildAck2xx(id, dlg, target, route,
+                    sSecVerify, toHdr, fromHdr, inviteCseq);
+            sInviteAcks.remember2xx(dlg.callId, inviteCseq, ack);
+            sendReply(ack.getBytes(StandardCharsets.US_ASCII));
+            return true;
+        } catch (Exception e) {
+            JoanTrace.note("ACK 2xx send " + e.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    private static boolean sendAckNon2xx(JoanSipBuilder.Id id,
+                                         JoanSipBuilder.Dialog dlg,
+                                         String target, String route,
+                                         String toHdr, String fromHdr,
+                                         int inviteCseq, String inviteBranch) {
+        try {
+            String ack = JoanSipBuilder.buildAckNon2xx(id, dlg, target, route,
+                    sSecVerify, toHdr, fromHdr, inviteCseq, inviteBranch);
+            if (ack == null) {
+                return false;
+            }
+            sInviteAcks.rememberNon2xx(dlg.callId, inviteCseq, ack);
+            sendReply(ack.getBytes(StandardCharsets.US_ASCII));
+            return true;
+        } catch (Exception e) {
+            JoanTrace.note("ACK non2xx send " + e.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    /**
+     * Re-send the exact archived ACK for a repeated final response. Never
+     * reconstruct it from a mutable dialog: a newer hold/resume may already
+     * have changed that dialog's CSeq and latest INVITE branch.
+     */
+    private static boolean reAckFinal(String callId, int inviteCseq,
+                                      int status) {
+        if (status < 200) {
+            return false;
+        }
+        String ack = status < 300
+                ? sInviteAcks.ack2xx(callId, inviteCseq)
+                : sInviteAcks.ackNon2xx(callId, inviteCseq);
+        if (ack == null) {
+            JoanTrace.note("ACK archive miss status=" + status
+                    + " cseq=" + inviteCseq);
+            return false;
+        }
+        try {
+            sendReply(ack.getBytes(StandardCharsets.US_ASCII));
+            JoanTrace.note("re-ACK final status=" + status
+                    + " cseq=" + inviteCseq);
+            return true;
+        } catch (Exception e) {
+            JoanTrace.note("re-ACK send " + e.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    private static void clearInitialInviteWait(InviteWait wait) {
+        if (sInitialInviteWait == wait) {
+            sInitialInviteWait = null;
+        }
+    }
+
+    private static void clearReinviteWait(InviteWait wait) {
+        if (sReinviteWait == wait) {
+            sReinviteWait = null;
+        }
+    }
+
     private static void handleInbound(String rx) {
         String method = JoanSipBuilder.requestMethod(rx);
         if (method.isEmpty()) {
             JoanSipBuilder.Reply p = JoanSipBuilder.parseReply(rx);
-            if (p != null && p.status >= 200 && p.status < 300 && sCall
-                    && sDlg != null) {
-                try {
-                    JoanSipBuilder.Id id = new JoanSipBuilder.Id(
-                            sId.impi, sPublicId, sId.realm, sId.localIp,
-                            sId.viaPort, sId.contactPort, sId.imei);
-                    String ack = JoanSipBuilder.buildAck(id, sDlg, sTarget,
-                            sRoute, sSecVerify, sToHdr, sFromHdr);
-                    send(sSockC, sPcscf, sPcscfPortS,
-                            ack.getBytes(StandardCharsets.US_ASCII));
-                } catch (Exception ignored) {
-                    // ignore
-                }
+            if (p == null) {
+                return;
+            }
+            String cid = JoanSipBuilder.header(rx, "Call-ID");
+            int cseq = JoanSipBuilder.cseqForMethod(rx, "INVITE");
+            /* An already-completed transaction wins over an active waiter:
+             * this is a retransmitted older final, not a reply to the newer
+             * hold/resume that happens to share the dialog Call-ID. */
+            if (p.status >= 200 && reAckFinal(cid, cseq, p.status)) {
+                return;
+            }
+            InviteWait reinvite = sReinviteWait;
+            if (reinvite != null && reinvite.matches(cid, cseq)) {
+                JoanTrace.note("reply routed reinvite status=" + p.status
+                        + " cseq=" + cseq + " via="
+                        + (sReplyTcp ? "tcp" : "udp"));
+                reinvite.replies.offer(rx);
+                return;
+            }
+            InviteWait initial = sInitialInviteWait;
+            if (initial != null && initial.matches(cid, cseq)) {
+                JoanTrace.note("reply routed invite status=" + p.status
+                        + " cseq=" + cseq + " via="
+                        + (sReplyTcp ? "tcp" : "udp"));
+                initial.replies.offer(rx);
+                return;
+            }
+            if (p.status >= 200) {
+                /* Do not manufacture an ACK for an unknown transaction.
+                 * Guessing with sDlg used to send a newer CSeq/branch for a
+                 * stale response and could prolong the Timer G storm. */
+                JoanTrace.note("unmatched final status=" + p.status
+                        + " cseq=" + cseq);
             }
             return;
         }
         if ("BYE".equals(method)) {
+            String cid = JoanSipBuilder.header(rx, "Call-ID");
             JoanTrace.note("app inbound BYE");
             String tag = sOurToTag != null ? sOurToTag : "x";
+            synchronized (LOCK) {
+                if (sParked != null && sParked.dlg != null
+                        && cid != null && cid.equals(sParked.dlg.callId)) {
+                    tag = sParked.ourToTag != null ? sParked.ourToTag : tag;
+                    sParked = null;
+                    try {
+                        sendReply(buildResponse(rx, 200, "OK", sId, tag, null)
+                                .getBytes(StandardCharsets.US_ASCII));
+                    } catch (Exception ignored) {
+                        // ignore
+                    }
+                    JoanMmTelFeature.onDialogEnded(cid);
+                    return;
+                }
+            }
             try {
                 sendReply(buildResponse(rx, 200, "OK", sId, tag, null)
                         .getBytes(StandardCharsets.US_ASCII));
@@ -554,7 +1065,21 @@ final class JoanSipUa {
                 // ignore
             }
             sCall = false;
+            sLiveHeld = false;
             JoanMedia.stop();
+            synchronized (LOCK) {
+                if (sParked != null) {
+                    loadLocked(sParked);
+                    sParked = null;
+                    sCall = true;
+                    sLiveHeld = true;
+                }
+            }
+            if (cid != null) {
+                JoanMmTelFeature.onDialogEnded(cid);
+            } else {
+                JoanMmTelFeature.onCallEndedRemotely();
+            }
             return;
         }
         if ("CANCEL".equals(method)) {
@@ -589,7 +1114,44 @@ final class JoanSipUa {
             }
             return;
         }
-        if (sCall || sHeldInvite != null) {
+        if (sHeldInvite != null || (sCall && sParked != null)) {
+            /* A retransmitted INVITE is not a second call. Over UDP the
+             * P-CSCF resends on a short timer; if our 180 was delayed the
+             * copy lands here, and 486 to the same Call-ID is read by the
+             * network as a rejection: the caller falls to voicemail while
+             * the user thinks they answered. Resend the provisional reply
+             * for a retransmit, resend 200 for an established dialog. */
+            String cid = JoanSipBuilder.header(rx, "Call-ID");
+            String held = sHeldInvite;
+            if (cid != null && held != null
+                    && cid.equals(JoanSipBuilder.header(held, "Call-ID"))) {
+                String tag = sRingingToTag != null ? sRingingToTag : "ring";
+                try {
+                    sendReply(buildResponse(rx, 100, "Trying", sId, null, null)
+                            .getBytes(StandardCharsets.US_ASCII));
+                    sendReply(buildResponse(rx, 180, "Ringing", sId, tag, null)
+                            .getBytes(StandardCharsets.US_ASCII));
+                } catch (Exception ignored) {
+                    // ignore
+                }
+                JoanTrace.note("app inbound INVITE retransmit; 180 resent");
+                return;
+            }
+            if (cid != null && sDlg != null && sCall
+                    && cid.equals(sDlg.callId)) {
+                String tag = sOurToTag != null ? sOurToTag : "dlg";
+                String sdp = sId != null
+                        ? JoanSipBuilder.sdpAnswer(sId.localIp, RTP_PORT, rx)
+                        : null;
+                try {
+                    sendReply(buildResponse(rx, 200, "OK", sId, tag, sdp)
+                            .getBytes(StandardCharsets.US_ASCII));
+                } catch (Exception ignored) {
+                    // ignore
+                }
+                JoanTrace.note("app inbound INVITE retransmit; 200 resent");
+                return;
+            }
             try {
                 sendReply(buildResponse(rx, 486, "Busy Here", sId, "busy", null)
                         .getBytes(StandardCharsets.US_ASCII));
@@ -614,23 +1176,28 @@ final class JoanSipUa {
             }
             return;
         }
-        sOurToTag = String.format("%012x",
+        sRingingToTag = String.format("%012x",
                 new java.security.SecureRandom().nextLong() & 0xffffffffffffL);
+        if (!sCall) {
+            sOurToTag = sRingingToTag;
+        }
         sHeldInvite = rx;
         try {
             sendReply(buildResponse(rx, 100, "Trying", sId, null, null)
                     .getBytes(StandardCharsets.US_ASCII));
-            sendReply(buildResponse(rx, 180, "Ringing", sId, sOurToTag, null)
+            sendReply(buildResponse(rx, 180, "Ringing", sId, sRingingToTag, null)
                     .getBytes(StandardCharsets.US_ASCII));
         } catch (Exception e) {
             JoanTrace.note("app 180 send fail");
         }
         JoanSipBuilder.Cli cli = JoanSipBuilder.callingIdentity(rx);
         JoanTrace.note("app inbound INVITE tcp=" + sReplyTcp
+                + " waiting=" + sCall
                 + " number=" + (cli.withheld || cli.uri.isEmpty() ? "no" : "yes")
                 + " name=" + (cli.name.isEmpty() ? "no" : "yes"));
         if (sApp != null) {
-            JoanMmTelFeature.onIncomingCall(sApp, cli.uri, cli.name);
+            JoanMmTelFeature.onIncomingCall(sApp, cli.uri, cli.name,
+                    JoanSipBuilder.header(rx, "Call-ID"));
         }
     }
 
@@ -654,7 +1221,8 @@ final class JoanSipUa {
         String callId = JoanSipBuilder.header(rx, "Call-ID");
         boolean mine = held != null && callId != null
                 && callId.equals(JoanSipBuilder.header(held, "Call-ID"));
-        String tag = sOurToTag != null ? sOurToTag : "x";
+        String tag = sRingingToTag != null ? sRingingToTag
+                : (sOurToTag != null ? sOurToTag : "x");
         /* A UAS answers the CANCEL transaction either way. */
         try {
             sendReply(buildResponse(rx, 200, "OK", sId, tag, null)
@@ -678,8 +1246,15 @@ final class JoanSipUa {
                 sHeldInvite = null;
             }
         }
-        sOurToTag = null;
-        JoanMmTelFeature.onCallEndedRemotely();
+        if (!sCall) {
+            sOurToTag = null;
+        }
+        sRingingToTag = null;
+        if (callId != null) {
+            JoanMmTelFeature.onDialogEnded(callId);
+        } else {
+            JoanMmTelFeature.onCallEndedRemotely();
+        }
     }
 
     private static FileDescriptor tcpListen(int port, IpSecTransform inXf,
@@ -742,6 +1317,7 @@ final class JoanSipUa {
             sTcpPeer = got;
             sTcpAcc.setLength(0);
             sReplyTcp = true;
+            JoanSipBuilder.sUseTcp = true;
             JoanTrace.note("tcp accept");
         }
         peer = sTcpPeer;
@@ -761,6 +1337,7 @@ final class JoanSipUa {
                 closeFd(sTcpPeer);
                 sTcpPeer = null;
                 sReplyTcp = false;
+                JoanSipBuilder.sUseTcp = false;
                 return null;
             }
             sTcpAcc.append(new String(buf, 0, n, StandardCharsets.US_ASCII));
@@ -957,6 +1534,11 @@ final class JoanSipUa {
     private static void releaseLocked() {
         sReg = false;
         sCall = false;
+        sLiveHeld = false;
+        sParked = null;
+        sInitialInviteWait = null;
+        sReinviteWait = null;
+        sInviteAcks.clear();
         sExpiresSec = 0;
         sRegisteredAtMs = 0;
         closeFd(sTcpPeer);

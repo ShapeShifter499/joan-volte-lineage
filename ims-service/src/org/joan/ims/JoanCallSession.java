@@ -33,23 +33,27 @@ public class JoanCallSession extends ImsCallSessionImplBase {
      * rather than just telling Telecom, because the INVITE has not been
      * answered yet. */
     private final boolean incoming;
+    private volatile String sipCallId;
 
     JoanCallSession(Context app, JoanMmTelFeature feature, ImsCallProfile profile) {
-        this(app, feature, profile, false);
+        this(app, feature, profile, false, null);
     }
 
     private JoanCallSession(Context app, JoanMmTelFeature feature,
-                            ImsCallProfile profile, boolean incoming) {
+                            ImsCallProfile profile, boolean incoming,
+                            String sipCallId) {
         this.app = app.getApplicationContext();
         this.feature = feature;
         this.profile = profile;
         this.incoming = incoming;
+        this.sipCallId = sipCallId;
         this.callId = "joan-" + Long.toHexString(System.nanoTime());
     }
 
     static JoanCallSession incoming(Context app, JoanMmTelFeature feature,
-                                    ImsCallProfile profile) {
-        JoanCallSession s = new JoanCallSession(app, feature, profile, true);
+                                    ImsCallProfile profile, String sipCallId) {
+        JoanCallSession s = new JoanCallSession(app, feature, profile, true,
+                sipCallId);
         s.state = STATE_ESTABLISHING;
         return s;
     }
@@ -57,9 +61,15 @@ public class JoanCallSession extends ImsCallSessionImplBase {
     /** The caller gave up, or the far end hung up. */
     void onRemoteEnded() {
         watchHangup = false;
-        JoanMedia.stop();
+        if (sipCallId == null || sipCallId.equals(JoanSipUa.currentCallId())) {
+            JoanMedia.stop();
+        }
         state = STATE_TERMINATED;
         notifyTerminated(0);
+    }
+
+    void onHeldByUa() {
+        notifyHeld();
     }
 
     @Override
@@ -115,6 +125,8 @@ public class JoanCallSession extends ImsCallSessionImplBase {
                 failStart(resp == null ? "invite failed" : resp);
                 return;
             }
+            sipCallId = JoanSipUa.currentCallId();
+            JoanMmTelFeature.track(sipCallId, this);
             if (!hasNegotiatedMedia()) {
                 JoanSipUa.hangup();
                 failStart("no negotiated media");
@@ -155,6 +167,8 @@ public class JoanCallSession extends ImsCallSessionImplBase {
                 notifyTerminated(0);
                 return;
             }
+            sipCallId = JoanSipUa.currentCallId();
+            JoanMmTelFeature.track(sipCallId, this);
             if (!hasNegotiatedMedia()) {
                 JoanSipUa.hangup();
                 JoanTrace.note("incoming answer had no media");
@@ -194,10 +208,47 @@ public class JoanCallSession extends ImsCallSessionImplBase {
         notifyTerminated(reason);
     }
 
+    @Override
+    public void hold(ImsStreamMediaProfile mediaProfile) {
+        Log.i(TAG, "call session hold");
+        new Thread(() -> {
+            String r = JoanSipUa.hold(sipCallId);
+            if (r != null && r.startsWith("OK")) {
+                notifyHeld();
+            } else {
+                notifyHoldFailed(r);
+            }
+        }, "joan-ims-hold").start();
+    }
+
+    @Override
+    public void resume(ImsStreamMediaProfile mediaProfile) {
+        Log.i(TAG, "call session resume");
+        JoanTrace.note("call session resume invoked");
+        new Thread(() -> {
+            String r = JoanSipUa.resume(sipCallId);
+            if (r == null || !r.startsWith("OK")) {
+                JoanTrace.note("resume failed: " + r);
+                notifyResumeFailed(r);
+                return;
+            }
+            feature.useAndroidAudioHandler();
+            if (hasNegotiatedMedia()) {
+                startMedia();
+            }
+            notifyResumed();
+        }, "joan-ims-resume").start();
+    }
+
     private void hangupAsync() {
         watchHangup = false;
-        JoanMedia.stop();
-        new Thread(JoanSipUa::hangup, "joan-ims-hangup").start();
+        boolean live = sipCallId == null
+                || sipCallId.equals(JoanSipUa.currentCallId());
+        if (live) {
+            JoanMedia.stop();
+        }
+        final String id = sipCallId;
+        new Thread(() -> JoanSipUa.hangup(id), "joan-ims-hangup").start();
     }
 
     private void watchRemoteHangup() {
@@ -210,7 +261,9 @@ public class JoanCallSession extends ImsCallSessionImplBase {
                     if (!watchHangup) {
                         return;
                     }
-                    if (JoanSipUa.callActive()) {
+                    if (sipCallId != null
+                            ? JoanSipUa.dialogAlive(sipCallId)
+                            : JoanSipUa.callActive()) {
                         seenUp = true;
                         continue;
                     }
@@ -271,6 +324,7 @@ public class JoanCallSession extends ImsCallSessionImplBase {
 
     private void notifyTerminated(int reason) {
         watchHangup = false;
+        JoanMmTelFeature.untrack(sipCallId);
         ImsCallSessionListener l = listener;
         if (l == null) {
             return;
@@ -279,6 +333,68 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             l.callSessionTerminated(new ImsReasonInfo(reason, 0, "hangup"));
         } catch (Throwable t) {
             Log.w(TAG, "term notify " + t.getClass().getSimpleName());
+        }
+    }
+
+    private volatile boolean heldNotified;
+
+    private void notifyHeld() {
+        if (heldNotified) {
+            /* Exactly once per session: ImsPhoneCallTracker treats a second
+             * callSessionHeld as a stray event and wedges its handshake --
+             * later unholds then fail with "Call update is in progress". */
+            return;
+        }
+        heldNotified = true;
+        ImsCallSessionListener l = listener;
+        if (l == null) {
+            return;
+        }
+        try {
+            l.callSessionHeld(profile);
+        } catch (Throwable t) {
+            Log.w(TAG, "held notify " + t.getClass().getSimpleName());
+        }
+    }
+
+    private void notifyHoldFailed(String why) {
+        ImsCallSessionListener l = listener;
+        if (l == null) {
+            return;
+        }
+        try {
+            l.callSessionHoldFailed(new ImsReasonInfo(
+                    ImsReasonInfo.CODE_UNSPECIFIED, -1,
+                    why != null ? why : "hold failed"));
+        } catch (Throwable t) {
+            Log.w(TAG, "hold fail notify " + t.getClass().getSimpleName());
+        }
+    }
+
+    private void notifyResumed() {
+        heldNotified = false;
+        ImsCallSessionListener l = listener;
+        if (l == null) {
+            return;
+        }
+        try {
+            l.callSessionResumed(profile);
+        } catch (Throwable t) {
+            Log.w(TAG, "resumed notify " + t.getClass().getSimpleName());
+        }
+    }
+
+    private void notifyResumeFailed(String why) {
+        ImsCallSessionListener l = listener;
+        if (l == null) {
+            return;
+        }
+        try {
+            l.callSessionResumeFailed(new ImsReasonInfo(
+                    ImsReasonInfo.CODE_UNSPECIFIED, -1,
+                    why != null ? why : "resume failed"));
+        } catch (Throwable t) {
+            Log.w(TAG, "resume fail notify " + t.getClass().getSimpleName());
         }
     }
 
