@@ -91,9 +91,15 @@ final class JoanSipUa {
     private static final JoanSipBuilder.InviteAckArchive sInviteAcks =
             new JoanSipBuilder.InviteAckArchive();
 
-    /** An optimistic swap hold whose re-INVITE has not reached a final. */
-    private static volatile boolean sHoldPending;
-    private static volatile String sHoldPendingCid;
+    /** The dialog with an INVITE transaction in flight (RFC 3261 14.1:
+     * no second INVITE on a dialog while one is outstanding). */
+    private static volatile String sInviteFlightCid;
+    private static volatile int sInviteFlightCseq;
+
+    private static boolean inFlightOn(String callId) {
+        String cid = sInviteFlightCid;
+        return cid != null && callId != null && cid.equals(callId);
+    }
 
     private static final class Leg {
         JoanSipBuilder.Dialog dlg;
@@ -610,7 +616,7 @@ final class JoanSipUa {
              * handshake the tracker never started -- it desyncs its state
              * machine and every later unhold dies with "Call update is in
              * progress". Only hold if nobody else did. */
-            if (!liveHeld() && !sHoldPending) {
+            if (!liveHeld() && !inFlightOn(currentCallId())) {
                 String h = hold(currentCallId());
                 if (h == null) {
                     h = "ERR hold first";
@@ -619,7 +625,7 @@ final class JoanSipUa {
                     JoanTrace.note("app answer: hold first call failed: " + h);
                 }
             } else if (!liveHeld()) {
-                JoanTrace.note("app answer: hold already pending (swap)");
+                JoanTrace.note("app answer: hold already in flight (skip)");
             } else {
                 JoanTrace.note("app answer: first call already held");
             }
@@ -913,21 +919,20 @@ final class JoanSipUa {
             }
             heldCid = sDlg.callId;
         }
-        if (sParked != null) {
-            /* Optimistic swap hold: the framework is about to resume the
-             * parked leg; mark the hold in flight so resume() does not
-             * double-hold and media stays owned by the leg that becomes
-             * live. */
-            sHoldPending = true;
-            sHoldPendingCid = heldCid;
-            JoanTrace.note("app hold pending (swap) cid=" + heldCid);
-        }
         String r;
+        if (inFlightOn(heldCid)) {
+            /* The framework (or a retried answer) already has a hold
+             * re-INVITE in flight on this dialog. Sending another would
+             * race the CSeq and violate one-INVITE-per-dialog — that is
+             * what wedged the bench on the first alpha11 build. Treat it
+             * as success-in-progress: the in-flight transaction lands on
+             * its own. */
+            JoanTrace.note("app hold skip (in flight) cid=" + heldCid);
+            return "OK";
+        }
         try {
-            r = reInviteLive(true);
+            r = reInviteLive(true, heldCid);
         } finally {
-            sHoldPending = false;
-            sHoldPendingCid = null;
         }
         if (r != null && r.startsWith("OK")) {
             synchronized (LOCK) {
@@ -970,7 +975,7 @@ final class JoanSipUa {
                 return "ERR not live";
             }
         }
-        if (swap && !sHoldPending) {
+        if (swap && !inFlightOn(sDlg.callId)) {
             String h = hold(sDlg.callId);
             if (h == null || !h.startsWith("OK")) {
                 return h == null ? "ERR hold" : h;
@@ -982,7 +987,7 @@ final class JoanSipUa {
                 sLiveHeld = true;
             }
         }
-        if (swap && sHoldPending) {
+        if (swap && inFlightOn(sDlg.callId)) {
             /* The framework already asked us to hold the live leg and that
              * re-INVITE is still in flight; do not send a second hold on
              * the same dialog. Swap the bookkeeping now, let the pending
@@ -993,7 +998,7 @@ final class JoanSipUa {
                 sParked = was;
                 sLiveHeld = true;
             }
-            JoanTrace.note("app resume skipping hold (pending)");
+            JoanTrace.note("app resume skipping hold (in flight)");
         }
         String r = reInviteLive(false);
         if (r != null && r.startsWith("OK")) {
@@ -1118,6 +1123,31 @@ final class JoanSipUa {
             JoanTrace.note("app reinvite ERR send");
             return "ERR reinvite send";
         }
+        /* One INVITE in flight per dialog (RFC 3261 14.1). Set only
+         * after the send succeeded; cleared on every exit below. */
+        sInviteFlightCid = dlg.callId;
+        sInviteFlightCseq = inviteCseq;
+        try {
+            return awaitReinviteFinal(id, dlg, target, route, toHdr,
+                    fromHdr, held, wait, inviteCseq, inviteBranch);
+        } finally {
+            if (sInviteFlightCid != null
+                    && sInviteFlightCid.equals(dlg.callId)
+                    && sInviteFlightCseq == inviteCseq) {
+                sInviteFlightCid = null;
+                sInviteFlightCseq = 0;
+            }
+            clearInviteWait(wait);
+        }
+    }
+
+    private static String awaitReinviteFinal(JoanSipBuilder.Id id,
+                                             JoanSipBuilder.Dialog dlg,
+                                             String target, String route,
+                                             String toHdr, String fromHdr,
+                                             boolean held, InviteWait wait,
+                                             int inviteCseq,
+                                             String inviteBranch) {
         long deadline = System.currentTimeMillis() + 25000;
         while (System.currentTimeMillis() < deadline) {
             /* The reply usually lands on the accepted TCP socket, which the
@@ -1133,10 +1163,8 @@ final class JoanSipUa {
                         && hp.status < 300) {
                     if (!sendAck2xx(id, dlg, target, route, toHdr, fromHdr,
                             inviteCseq)) {
-                        clearInviteWait(wait);
                         return "ERR reinvite ack send";
                     }
-                    clearInviteWait(wait);
                     return "OK";
                 }
                 if (mine && hp != null && hp.status >= 300) {
@@ -1144,7 +1172,6 @@ final class JoanSipUa {
                      * therefore uses inviteBranch, not a fresh branch. */
                     sendAckNon2xx(id, dlg, target, route, toHdr, fromHdr,
                             inviteCseq, inviteBranch);
-                    clearInviteWait(wait);
                     JoanTrace.note("app reinvite ERR " + hp.status);
                     return "ERR reinvite " + hp.status;
                 }
@@ -1181,21 +1208,17 @@ final class JoanSipUa {
             if (p.status >= 200 && p.status < 300) {
                 if (!sendAck2xx(id, dlg, target, route, toHdr, fromHdr,
                         inviteCseq)) {
-                    clearInviteWait(wait);
                     return "ERR reinvite ack send";
                 }
-                clearInviteWait(wait);
                 return "OK";
             }
             if (p.status >= 300) {
                 sendAckNon2xx(id, dlg, target, route, toHdr, fromHdr,
                         inviteCseq, inviteBranch);
-                clearInviteWait(wait);
                 JoanTrace.note("app reinvite ERR " + p.status);
                 return "ERR reinvite " + p.status;
             }
         }
-        clearInviteWait(wait);
         JoanTrace.note("app reinvite ERR timeout");
         return "ERR reinvite timeout";
     }
@@ -1914,8 +1937,8 @@ final class JoanSipUa {
         sLiveHeld = false;
         sParked = null;
         sInviteWaits.clear();
-        sHoldPending = false;
-        sHoldPendingCid = null;
+        sInviteFlightCid = null;
+        sInviteFlightCseq = 0;
         sInviteAcks.clear();
         sExpiresSec = 0;
         sRegisteredAtMs = 0;
