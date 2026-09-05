@@ -50,6 +50,24 @@ public final class JoanRegistration {
         return sRegistered;
     }
 
+    private static volatile String sMcc;
+    private static volatile String sMnc;
+
+    /** Remember the operator the registration ran against, for the
+     * carrier profile (conference focus URI and friends). */
+    static void setOperator(String mcc, String mnc) {
+        sMcc = mcc;
+        sMnc = mnc;
+    }
+
+    static String mcc() {
+        return sMcc;
+    }
+
+    static String mnc() {
+        return sMnc;
+    }
+
     public static final class Impl extends ImsRegistrationImplBase {
         private Impl() {
             super(MAIN);

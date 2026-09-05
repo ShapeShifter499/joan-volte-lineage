@@ -6,12 +6,21 @@ public class ImsCallProfile {
     public static final int SERVICE_TYPE_NONE = 0;
     public static final int SERVICE_TYPE_NORMAL = 1;
     public static final int SERVICE_TYPE_EMERGENCY = 2;
+    public static final int SERVICE_TYPE_CONFERENCE = 3;
     public static final int CALL_TYPE_VOICE = 2;
     public static final int CALL_TYPE_VT = 4;
 
+    private int serviceType;
+
     public ImsCallProfile() {}
 
-    public ImsCallProfile(int serviceType, int callType) {}
+    public ImsCallProfile(int serviceType, int callType) {
+        this.serviceType = serviceType;
+    }
+
+    public int getServiceType() {
+        return serviceType;
+    }
 
     public void setCallExtra(String name, String value) {}
 

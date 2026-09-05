@@ -682,6 +682,192 @@ final class JoanSipUa {
         return "OK";
     }
 
+    /**
+     * Conference merge, following the stock LG model (extract-only RE):
+     * the network hosts the bridge. We INVITE the carrier's conference
+     * focus (tConfURI, or the 3GPP factory URI when the profile leaves
+     * it empty), then REFER each held leg into the focus with Replaces,
+     * then SUBSCRIBE the conference event package so NOTIFYs track the
+     * participants. Nothing here mixes audio locally.
+     *
+     * Sequence (StateIDLE_MergeConf + ConferenceRefer + SubscribeConferenceState):
+     *   1. hold both legs (they arrive held from the framework)
+     *   2. INVITE focus -> 200 (the conference exists)
+     *   3. REFER leg A: Refer-To: <focus;method=INVITE?Replaces=...>
+     *   4. REFER leg B likewise
+     *   5. SUBSCRIBE conference-info on the focus dialog
+     *
+     * The REFERs are fire-and-verify: a 202 from the far end starts the
+     * transfer; the focus sends NOTIFYs (or re-INVITEs) that end the
+     * replaced dialogs. We do not block on the transfer completing.
+     */
+    static String merge(Context ctx, String mcc, String mnc) {
+        if (!sReg) {
+            return "ERR conference before register";
+        }
+        JoanCarrierProfile prof = JoanCarrierProfile.forNetwork(ctx, mcc, mnc);
+        return merge(prof);
+    }
+
+    static String merge(JoanCarrierProfile prof) {
+        Leg live;
+        Leg parked;
+        synchronized (LOCK) {
+            if (!sCall || sDlg == null) {
+                return "ERR no call to merge";
+            }
+            if (sParked == null) {
+                return "ERR merge needs two calls";
+            }
+            if (!sLiveHeld) {
+                return "ERR hold before merge";
+            }
+            live = snapLocked();
+            parked = sParked;
+        }
+        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                sId.impi, sPublicId, sId.realm, sId.localIp,
+                sId.viaPort, sId.contactPort, sId.imei);
+        String focus = prof.confUri;
+        if (focus == null || focus.isEmpty()) {
+            return "ERR no conference focus uri";
+        }
+        JoanTrace.note("conf merge focus=" + focus
+                + (prof.srcKey != null ? " (" + prof.srcKey + ")" : ""));
+
+        /* 1. Create the conference at the focus (stock CreateOutgoingSession
+         * with the conf URI as the destination). Reuses invite(): it parks
+         * nothing because both legs are already accounted for, but it
+         * refuses when a live un-held call exists — hence hold-first. */
+        String r = invite(focus);
+        if (r == null || !r.startsWith("OK")) {
+            JoanTrace.note("conf merge focus invite failed: " + r);
+            return r == null ? "ERR focus invite" : "ERR focus " + r;
+        }
+        JoanSipBuilder.Dialog focusDlg;
+        String focusTarget, focusRoute, focusTo, focusFrom;
+        synchronized (LOCK) {
+            focusDlg = sDlg;
+            focusTarget = sTarget;
+            focusRoute = sRoute;
+            focusTo = sToHdr;
+            focusFrom = sFromHdr;
+        }
+        /* The focus dialog is now the live leg; the two calls move to
+         * sParked-adjacent bookkeeping. Refer them in. */
+        java.util.List<Leg> legs = new java.util.ArrayList<>(2);
+        legs.add(parked);
+        legs.add(live);
+        int accepted = 0;
+        for (Leg leg : legs) {
+            String referTo = focusReferTo(focusTarget != null
+                    && !focusTarget.isEmpty() ? focusTarget : focus,
+                    leg.dlg.callId, leg.dlg.fromTag, leg.ourToTag != null
+                    && !leg.ourToTag.isEmpty() ? leg.ourToTag
+                    : toTagOf(leg.toHdr));
+            String refer = JoanSipBuilder.buildReferConf(id, leg.dlg,
+                    leg.target != null && !leg.target.isEmpty()
+                            ? leg.target : leg.dest,
+                    leg.route, sSecVerify, leg.toHdr, leg.fromHdr,
+                    referTo, aorOf(id), prof.referSub);
+            try {
+                sendReply(refer.getBytes(StandardCharsets.US_ASCII));
+                JoanTrace.note("conf REFER sent cid=" + leg.dlg.callId);
+            } catch (Exception e) {
+                JoanTrace.note("conf REFER send fail");
+                continue;
+            }
+            /* REFER replies are transaction-scoped; wait briefly for a
+             * final so a refusal is visible instead of silent. */
+            long deadline = System.currentTimeMillis() + 8000;
+            boolean done = false;
+            while (System.currentTimeMillis() < deadline && !done) {
+                String rx = recvEither((int) Math.min(400,
+                        deadline - System.currentTimeMillis()));
+                if (rx == null) {
+                    continue;
+                }
+                if (!JoanSipBuilder.requestMethod(rx).isEmpty()) {
+                    handleInbound(rx);
+                    continue;
+                }
+                JoanSipBuilder.Reply p = JoanSipBuilder.parseReply(rx);
+                if (p == null) {
+                    continue;
+                }
+                String cid = JoanSipBuilder.header(rx, "Call-ID");
+                int cseq = JoanSipBuilder.cseqForMethod(rx, "REFER");
+                if (leg.dlg.callId.equals(cid)) {
+                    if (p.status >= 200 && p.status < 300) {
+                        accepted++;
+                    }
+                    done = true;
+                }
+            }
+        }
+        if (accepted == 0) {
+            JoanTrace.note("conf merge: no REFER accepted; leaving calls");
+            return "ERR refer not accepted";
+        }
+
+        /* 2. Subscribe the conference event package on the focus dialog
+         * (stock Conference::SubscribeConferenceState). */
+        if (prof.confSub) {
+            String sub = JoanSipBuilder.buildConfSubscribe(id, focusDlg,
+                    focusTarget != null && !focusTarget.isEmpty()
+                            ? focusTarget : focus,
+                    focusRoute, sSecVerify, 21600);
+            try {
+                sendReply(sub.getBytes(StandardCharsets.US_ASCII));
+                JoanTrace.note("conf SUBSCRIBE conference-info sent");
+            } catch (Exception e) {
+                JoanTrace.note("conf SUBSCRIBE send fail");
+            }
+        }
+        sConfFocusCallId = focusDlg.callId;
+        JoanTrace.note("conf merge OK refer_accepted=" + accepted);
+        return "OK";
+    }
+
+    private static volatile String sConfFocusCallId;
+
+    static String conferenceFocusCallId() {
+        return sConfFocusCallId;
+    }
+
+    /** Refer-To target: focus URI with a Replaces parameter naming the leg. */
+    private static String focusReferTo(String focusTarget, String callId,
+                                       String fromTag, String toTag) {
+        String replaces = callId + ";to-tag=" + toTag
+                + ";from-tag=" + fromTag;
+        String uri = focusTarget;
+        boolean hasQ = uri.indexOf('?') >= 0;
+        return uri + (hasQ ? ";" : "?Replaces=")
+                + (hasQ ? "" : replaces)
+                + (hasQ ? "" : "");
+    }
+
+    private static String toTagOf(String toHdr) {
+        if (toHdr == null) {
+            return "";
+        }
+        int i = toHdr.indexOf("tag=");
+        if (i < 0) {
+            return "";
+        }
+        int v = i + 4;
+        int e = v;
+        while (e < toHdr.length() && toHdr.charAt(e) != ';'
+                && toHdr.charAt(e) != '>' && toHdr.charAt(e) != ' ') {
+            e++;
+        }
+        return toHdr.substring(v, e);
+    }
+
+    private static String aorOf(JoanSipBuilder.Id id) {
+        return JoanSipBuilder.aorOfPublic(id);
+    }
+
     static String hold(String sipCallId) {
         synchronized (LOCK) {
             if (!sCall || sDlg == null) {
@@ -1098,6 +1284,44 @@ final class JoanSipUa {
             } catch (Exception ignored) {
                 // ignore
             }
+            return;
+        }
+        if ("NOTIFY".equals(method)) {
+            /* Conference event package NOTIFYs (and any dialog-scoped
+             * NOTIFY): always answer 200 so the notifier does not retry,
+             * and hand the body to the conference-info parser when it
+             * is the conference package. */
+            String event = JoanSipBuilder.header(rx, "Event");
+            try {
+                sendReply(buildResponse(rx, 200, "OK", sId,
+                        sOurToTag != null ? sOurToTag : "ntf", null)
+                        .getBytes(StandardCharsets.US_ASCII));
+            } catch (Exception ignored) {
+                // ignore
+            }
+            if (event != null && event.toLowerCase(
+                    java.util.Locale.ROOT).startsWith("conference")) {
+                java.util.List<String> users =
+                        JoanSipBuilder.parseConferenceUsers(rx);
+                if (users != null) {
+                    JoanTrace.note("conf-info users=" + users.size());
+                    JoanMmTelFeature.onConferenceUsers(users);
+                }
+            }
+            return;
+        }
+        if ("REFER".equals(method)) {
+            /* We are the referee of a transfer (e.g. the network asking
+             * us to join a conference). Answering 202 is allowed when we
+             * take no automatic action; the user decides. */
+            try {
+                sendReply(buildResponse(rx, 202, "Accepted", sId,
+                        sOurToTag != null ? sOurToTag : "ref", null)
+                        .getBytes(StandardCharsets.US_ASCII));
+            } catch (Exception ignored) {
+                // ignore
+            }
+            JoanTrace.note("app inbound REFER (answered 202)");
             return;
         }
         if (!"INVITE".equals(method)) {

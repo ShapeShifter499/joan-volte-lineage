@@ -314,6 +314,13 @@ final class JoanDriver {
         String domain = hiddenString(tm, "getIsimDomain");
         String impi = hiddenString(tm, "getIsimImpi");
         String idSource = "isim";
+        {
+            String mccMnc = safeSimOperator(tm);
+            if (mccMnc != null && mccMnc.length() >= 5) {
+                JoanRegistration.setOperator(
+                        mccMnc.substring(0, 3), mccMnc.substring(3));
+            }
+        }
         if (impi == null || !impi.contains("@")) {
             /* No ISIM on the card. TS 23.003 13.3 derives the private
              * identity and home domain from the IMSI, which is what a

@@ -1,0 +1,168 @@
+package org.joan.ims;
+
+import android.content.Context;
+import android.util.Log;
+
+import org.json.JSONObject;
+
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+
+/**
+ * Carrier behavior profile, distilled from stock LG Ims6 configuration
+ * XMLs (values transcribed as discovered facts; no LG files ship).
+ *
+ * The profile picks the conference focus URI, the REFER subscription
+ * style, and call/session knobs per carrier. Unknown carriers get the
+ * 3GPP defaults (factory conference URI, RFC-typical timers) — the
+ * same fallbacks stock's UCSessionConfig uses when a table is empty.
+ */
+public final class JoanCarrierProfile {
+    private static final String TAG = "JoanIms";
+
+    // 3GPP TS 24.147 conference factory URI (stock fallback too).
+    public final String confUri;
+    public final boolean referSub;
+    public final boolean confSub;
+    public final boolean confSubInDialog;
+    public final int maxSessions;
+    public final int cwType;
+    public final boolean use180Rpr;
+    public final int offerResCode;
+    public final String srcKey;
+
+    private static volatile JoanCarrierProfile sCached;
+    private static volatile String sCachedMccMnc;
+
+    private JoanCarrierProfile(String confUri, boolean referSub,
+                               boolean confSub, boolean confSubInDialog,
+                               int maxSessions, int cwType,
+                               boolean use180Rpr, int offerResCode,
+                               String srcKey) {
+        this.confUri = confUri;
+        this.referSub = referSub;
+        this.confSub = confSub;
+        this.confSubInDialog = confSubInDialog;
+        this.maxSessions = maxSessions;
+        this.cwType = cwType;
+        this.use180Rpr = use180Rpr;
+        this.offerResCode = offerResCode;
+        this.srcKey = srcKey;
+    }
+
+    /** 3GPP defaults when nothing better is known. */
+    static JoanCarrierProfile defaults(String mcc, String mnc) {
+        String factory = String.format(
+                "sip:mmtel@conf-factory.ims.mnc%s.mcc%s.3gppnetwork.org",
+                pad3(mnc), mcc);
+        return new JoanCarrierProfile(factory, true, true, false,
+                2, 1, true, 183, "3gpp-default");
+    }
+
+    private static String pad3(String mnc) {
+        if (mnc == null || mnc.isEmpty()) {
+            return "000";
+        }
+        if (mnc.length() >= 3) {
+            return mnc;
+        }
+        StringBuilder b = new StringBuilder(mnc);
+        while (b.length() < 3) {
+            b.insert(0, '0');
+        }
+        return b.toString();
+    }
+
+    /**
+     * Load (and cache) the profile for the current network. The JSON
+     * asset maps carrier keys like "TMO.US.NAO" to knob values; the
+     * MCC/MNC table below picks the key.
+     */
+    public static JoanCarrierProfile forNetwork(Context ctx,
+                                                String mcc,
+                                                String mnc) {
+        if (mcc == null || mnc == null || mcc.isEmpty() || mnc.isEmpty()) {
+            return defaults(mcc, mnc);
+        }
+        String cacheKey = mcc + ":" + mnc;
+        JoanCarrierProfile hit = sCached;
+        if (hit != null && cacheKey.equals(sCachedMccMnc)) {
+            return hit;
+        }
+        JoanCarrierProfile p = load(ctx, mcc, mnc);
+        sCached = p;
+        sCachedMccMnc = cacheKey;
+        return p;
+    }
+
+    private static JoanCarrierProfile load(Context ctx, String mcc, String mnc) {
+        String key = carrierKey(mcc, mnc);
+        try {
+            InputStream in = ctx.getAssets().open("carrier-profiles.json");
+            byte[] buf = new byte[in.available()];
+            int n = 0, r;
+            while ((r = in.read(buf, n, buf.length - n)) > 0) {
+                n += r;
+                if (n == buf.length) {
+                    break;
+                }
+            }
+            in.close();
+            JSONObject all = new JSONObject(new String(buf, 0, n, StandardCharsets.UTF_8));
+            if (key != null && all.has(key)) {
+                JSONObject o = all.getJSONObject(key);
+                String conf = o.optString("conf_uri", "");
+                String base = conf.isEmpty()
+                        ? defaults(mcc, mnc).confUri : conf;
+                return new JoanCarrierProfile(
+                        base,
+                        o.optBoolean("refer_sub", true),
+                        o.optBoolean("conf_sub", true),
+                        o.optBoolean("conf_sub_in_dialog", false),
+                        o.optInt("max_sessions", 2),
+                        o.optInt("cw_type", 1),
+                        o.optBoolean("use_180_rpr", true),
+                        o.optInt("offer_res_code", 183),
+                        key);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "carrier profile load failed "
+                    + t.getClass().getSimpleName());
+        }
+        JoanCarrierProfile d = defaults(mcc, mnc);
+        Log.i(TAG, "carrier profile: default for " + mcc + "/" + mnc);
+        return d;
+    }
+
+    /**
+     * MCC/MNC -> profile key, from the distilled stock XML tree.
+     * US carriers keyed by MCC only where stock keys them by brand;
+     * these are the LG profile families, not a PLMN database.
+     */
+    static String carrierKey(String mcc, String mnc) {
+        // T-Mobile family (US): MCC 310-316 across the merged TMUS/Sprint
+        // network; stock keys all of these profiles as TMO.US.NAO.
+        if (mcc.compareTo("310") >= 0 && mcc.compareTo("316") <= 0) {
+            if ("120".equals(mnc)) {
+                return "SPR.US";
+            }
+            if ("030".equals(mnc)) {
+                return "ATT.US.NAO";
+            }
+            if ("004".equals(mnc)) {
+                return "VZW.US.VOWIFI";
+            }
+            return "TMO.US.NAO";
+        }
+        if ("460".equals(mcc)) {
+            return "CMCC.CN";
+        }
+        if ("440".equals(mcc) || "441".equals(mcc)) {
+            return "DCM.JP";
+        }
+        if ("450".equals(mcc)) {
+            return "LGU.KR";
+        }
+        return null;
+    }
+}

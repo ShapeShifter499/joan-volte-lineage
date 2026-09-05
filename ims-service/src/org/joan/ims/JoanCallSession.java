@@ -221,6 +221,16 @@ public class JoanCallSession extends ImsCallSessionImplBase {
         }, "joan-ims-hold").start();
     }
 
+    /**
+     * AOSP conference handshake: the framework holds both calls first,
+     * then calls merge() on the conference session. Route it to the
+     * stock-model conference flow.
+     */
+    @Override
+    public void merge(ImsStreamMediaProfile mediaProfile) {
+        mergeConference();
+    }
+
     @Override
     public void resume(ImsStreamMediaProfile mediaProfile) {
         Log.i(TAG, "call session resume");
@@ -238,6 +248,49 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             }
             notifyResumed();
         }, "joan-ims-resume").start();
+    }
+
+    /**
+     * Conference merge: hold both legs (framework does this), INVITE the
+     * carrier conference focus, REFER each leg in with Replaces,
+     * subscribe conference-info. Stock model, network-hosted bridge.
+     */
+    void mergeConference() {
+        Log.i(TAG, "call session merge");
+        new Thread(() -> {
+            String r = JoanSipUa.merge(app,
+                    JoanRegistration.mcc(), JoanRegistration.mnc());
+            if (r != null && r.startsWith("OK")) {
+                sipCallId = JoanSipUa.conferenceFocusCallId();
+                if (sipCallId != null) {
+                    JoanMmTelFeature.track(sipCallId, this);
+                    JoanMmTelFeature.trackConference(this);
+                }
+                state = STATE_ESTABLISHED;
+                notifyStarted(profile);
+                feature.useAndroidAudioHandler();
+                if (hasNegotiatedMedia()) {
+                    startMedia();
+                }
+                notifyMergeComplete();
+            } else {
+                notifyMergeFailed(r);
+            }
+        }, "joan-ims-merge").start();
+    }
+
+    void onConferenceUsers(java.util.List<String> users) {
+        ImsCallSessionListener l = listener;
+        if (l == null) {
+            return;
+        }
+        try {
+            l.callSessionConferenceStateUpdated(
+                    JoanConfState.fromUsers(users));
+        } catch (Throwable t) {
+            Log.w(TAG, "conf state notify "
+                    + t.getClass().getSimpleName());
+        }
     }
 
     private void hangupAsync() {
@@ -395,6 +448,32 @@ public class JoanCallSession extends ImsCallSessionImplBase {
                     why != null ? why : "resume failed"));
         } catch (Throwable t) {
             Log.w(TAG, "resume fail notify " + t.getClass().getSimpleName());
+        }
+    }
+
+    private void notifyMergeComplete() {
+        ImsCallSessionListener l = listener;
+        if (l == null) {
+            return;
+        }
+        try {
+            l.callSessionMergeComplete(profile, null);
+        } catch (Throwable t) {
+            Log.w(TAG, "merge notify " + t.getClass().getSimpleName());
+        }
+    }
+
+    private void notifyMergeFailed(String why) {
+        ImsCallSessionListener l = listener;
+        if (l == null) {
+            return;
+        }
+        try {
+            l.callSessionMergeFailed(new ImsReasonInfo(
+                    ImsReasonInfo.CODE_UNSPECIFIED, -1,
+                    why != null ? why : "merge failed"));
+        } catch (Throwable t) {
+            Log.w(TAG, "merge fail notify " + t.getClass().getSimpleName());
         }
     }
 

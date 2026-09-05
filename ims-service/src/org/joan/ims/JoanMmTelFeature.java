@@ -58,6 +58,7 @@ public class JoanMmTelFeature extends MmTelFeature {
      * MmTelFeature per subscription and joan is single-SIM. */
     private static volatile JoanMmTelFeature sInstance;
     private static volatile JoanCallSession sIncoming;
+    private static volatile JoanCallSession sConference;
     private static final ConcurrentHashMap<String, JoanCallSession> sBySip =
             new ConcurrentHashMap<>();
 
@@ -90,6 +91,18 @@ public class JoanMmTelFeature extends MmTelFeature {
         if (s != null) {
             s.onHeldByUa();
         }
+    }
+
+    /** conference-info participant list from the focus NOTIFYs. */
+    static void onConferenceUsers(java.util.List<String> users) {
+        JoanCallSession conf = sConference;
+        if (conf != null) {
+            conf.onConferenceUsers(users);
+        }
+    }
+
+    static void trackConference(JoanCallSession s) {
+        sConference = s;
     }
 
     /**
@@ -235,6 +248,15 @@ public class JoanMmTelFeature extends MmTelFeature {
     @Override
     public ImsCallSessionImplBase createCallSession(ImsCallProfile profile) {
         Log.i(TAG, "createCallSession");
+        if (profile != null
+                && profile.getServiceType()
+                        == ImsCallProfile.SERVICE_TYPE_CONFERENCE) {
+            /* Conference host session: merge() drives the stock-model
+             * flow (focus INVITE + REFER legs + conference-info). */
+            JoanCallSession s = new JoanCallSession(app, this, profile);
+            JoanMmTelFeature.trackConference(s);
+            return s;
+        }
         return new JoanCallSession(app, this, profile);
     }
 

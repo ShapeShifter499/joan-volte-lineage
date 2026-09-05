@@ -53,8 +53,9 @@ subprocess.run([os.path.join(bt, 'aapt2'), 'link',
                 '-I', os.path.join(os.path.expanduser('~'),
                                    'Android/Sdk/platforms/android-36',
                                    'android.jar'),
-                '--manifest', manifest], check=True,
-               env={**os.environ})
+                '--manifest', manifest,
+                '-A', os.path.join(root, 'ims-service', 'assets')],
+               check=True, env={**os.environ})
 
 with zipfile.ZipFile(unsigned, 'a', zipfile.ZIP_DEFLATED) as z:
     z.write(os.path.join(base, 'dex', 'classes.dex'), 'classes.dex')

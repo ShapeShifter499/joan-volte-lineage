@@ -527,18 +527,78 @@ public final class TestJoanSip {
                 "REGISTER does not allow MESSAGE");
 
         JoanSipBuilder.Dialog dlg = new JoanSipBuilder.Dialog();
-        String inv = JoanSipBuilder.buildInvite(id, dlg, "tel:+15555550111",
+        String inv = JoanSipBuilder.buildInvite(id, dlg, "tel:+155****0111",
                 null, null, 40000, "3GPP-E-UTRAN-FDD");
         check(!inv.contains("Supported: replaces"),
                 "INVITE does not claim Replaces");
-        for (String m2 : new String[] { "UPDATE", "REFER", "NOTIFY",
-                "MESSAGE", "INFO" }) {
+        /* REFER/SUBSCRIBE/NOTIFY/PRACK/INFO are now implemented
+         * (conference merge path); MESSAGE still is not — SMS would be
+         * dropped. UPDATE remains unhandled too. */
+        for (String m2 : new String[] { "UPDATE", "MESSAGE" }) {
             check(!reg.contains(m2) && !inv.contains(m2),
                     "neither request allows " + m2);
+        }
+        for (String m2 : new String[] { "REFER", "SUBSCRIBE", "NOTIFY",
+                "PRACK", "INFO" }) {
+            check(reg.contains(m2) && inv.contains(m2),
+                    "both allow " + m2 + " (implemented)");
         }
         check(reg.contains("Allow: " + JoanSipBuilder.ALLOW)
                 && inv.contains("Allow: " + JoanSipBuilder.ALLOW),
                 "both advertise exactly the handled method set");
+
+        /* The conference SUBSCRIBE must carry the stock wire shape. */
+        JoanSipBuilder.Dialog cd = new JoanSipBuilder.Dialog();
+        cd.callId = "conf-1";
+        cd.fromTag = "fromtag";
+        String sub = JoanSipBuilder.buildConfSubscribe(id, cd,
+                "sip:8881112663@msg.pc.t-mobile.com", null, null, 21600);
+        check(sub.startsWith("SUBSCRIBE sip:8881112663@msg.pc.t-mobile.com "),
+                "conf SUBSCRIBE targets the focus");
+        check(sub.contains("Event: conference\r\n"),
+                "conf SUBSCRIBE Event is conference");
+        check(sub.contains("Accept: application/conference-info+xml\r\n"),
+                "conf SUBSCRIBE accepts conference-info");
+        check(sub.contains("Supported: replaces\r\n"),
+                "conf SUBSCRIBE supports replaces");
+        check(sub.contains("Expires: 21600\r\n"),
+                "conf SUBSCRIBE expires 21600 like stock");
+
+        /* REFER into the focus carries Replaces naming the leg. */
+        JoanSipBuilder.Dialog rd = new JoanSipBuilder.Dialog();
+        rd.callId = "leg-7";
+        rd.fromTag = "a";
+        String ref = JoanSipBuilder.buildReferConf(id, rd,
+                "sip:peer@ims.example", null, null, null, null,
+                "sip:focus?Replaces=leg-7%3Bto-tag%3Db%3Bfrom-tag%3Ba",
+                "sip:+155****0100@ims.example", true);
+        check(ref.startsWith("REFER sip:peer@ims.example "),
+                "REFER targets the peer");
+        check(ref.contains("Refer-To: <sip:focus?Replaces="),
+                "REFER moves the leg into the focus");
+        check(ref.contains("Referred-By: <sip:+155****0100@ims.example>"),
+                "REFER identifies the referrer");
+        check(!ref.contains("Refer-Sub: false"),
+                "REFER keeps the subscription when referSub is on");
+        String refNs = JoanSipBuilder.buildReferConf(id, rd,
+                "sip:peer@ims.example", null, null, null, null,
+                "sip:focus?Replaces=x", null, false);
+        check(refNs.contains("Refer-Sub: false\r\n"),
+                "REFER can suppress the implicit subscription (RFC 4488)");
+
+        /* conference-info parsing: connected users only. */
+        String notify = "NOTIFY sip:me SIP/2.0\r\nEvent: conference\r\n"
+                + "Content-Type: application/conference-info+xml\r\n"
+                + "\r\n"
+                + "<conference-info>\r\n"
+                + "<user entity=\"sip:a@x\"><connection status=\"connected\"/></user>\r\n"
+                + "<user entity=\"sip:b@x\"><connection status=\"disconnected\"/></user>\r\n"
+                + "<user entity=\"sip:c@x\"/>"
+                + "</conference-info>\r\n";
+        java.util.List<String> users = JoanSipBuilder.parseConferenceUsers(notify);
+        check(users != null && users.size() == 1
+                        && users.get(0).equals("sip:a@x"),
+                "conference-info lists only connected users");
     }
 
     /** Offer only PCMU, and read back which codec the answer selected. */

@@ -20,7 +20,7 @@ final class JoanSipBuilder {
      * else is dropped. Advertising more than that invites the network to
      * send us traffic we silently discard.
      */
-    static final String ALLOW = "INVITE, ACK, CANCEL, BYE, OPTIONS";
+    static final String ALLOW = "INVITE, ACK, CANCEL, BYE, OPTIONS, REFER, SUBSCRIBE, NOTIFY, PRACK, INFO";
     static final int PCSCF_SIP_PORT = 5060;
 
     static final class Params {
@@ -1024,6 +1024,60 @@ final class JoanSipBuilder {
     }
 
     /**
+     * Out-of-dialog SUBSCRIBE to the conference event package, exactly
+     * the request stock's Conference::SubscribeConferenceState builds:
+     * Event: conference, Accept: application/conference-info+xml,
+     * Supported: replaces, Expires: 21600 (stock hardcodes all four).
+     * The conference focus URI (conference factory URI or the carrier's
+     * tConfURI) is the Request-URI.
+     */
+    static String buildConfSubscribe(Id id, Dialog dlg, String focusUri,
+                                     String route, String secVerify,
+                                     int expires) {
+        dlg.cseq++;
+        String contactUser = contactUser(aorOf(id.impu != null
+                && !id.impu.isEmpty() ? id.impu : id.impi));
+        String extra = "Contact: <sip:" + contactUser
+                + "@" + bracket(id.localIp) + ":" + id.contactPort + ">\r\n"
+                + "Event: conference\r\n"
+                + "Accept: application/conference-info+xml\r\n"
+                + "Supported: replaces\r\n"
+                + "Expires: " + expires + "\r\n"
+                + "Allow: " + ALLOW + "\r\n";
+        return inDialog("SUBSCRIBE", id, dlg, focusUri, route, secVerify,
+                null, null, dlg.cseq, extra);
+    }
+
+    /**
+     * In-dialog REFER that moves an existing call leg into the
+     * conference (RFC 3515 + 5589 Replaces usage). referTo points at
+     * the conference focus with a Replaces header naming this dialog,
+     * so the focus replaces the leg instead of creating a second one.
+     * Referred-By identifies us (RFC 3892) as stock's IsReferredBy
+     * knob allows. referSub=false asks the far end to skip the
+     * implicit subscription (RFC 4488) — stock LG sends it when the
+     * carrier profile's bReferSub is set.
+     */
+    static String buildReferConf(Id id, Dialog dlg, String target,
+                                 String route, String secVerify,
+                                 String toHdr, String fromHdr,
+                                 String referTo, String referredBy,
+                                 boolean referSub) {
+        dlg.cseq++;
+        StringBuilder extra = new StringBuilder(256);
+        extra.append("Refer-To: <").append(referTo).append(">\r\n");
+        if (referredBy != null && !referredBy.isEmpty()) {
+            extra.append("Referred-By: <").append(referredBy).append(">\r\n");
+        }
+        if (!referSub) {
+            extra.append("Refer-Sub: false\r\n");
+        }
+        extra.append("Allow: ").append(ALLOW).append("\r\n");
+        return inDialog("REFER", id, dlg, target, route, secVerify,
+                toHdr, fromHdr, dlg.cseq, extra.toString());
+    }
+
+    /**
      * In-dialog re-INVITE for hold/resume. Increments CSeq. SDP is the
      * same offer with a=sendonly or a=sendrecv.
      */
@@ -1330,6 +1384,91 @@ final class JoanSipBuilder {
             }
         }
         return b.toString().trim();
+    }
+
+    /** AoR of the public identity; public for Referred-By construction. */
+    static String aorOfPublic(Id id) {
+        return aorOf(id.impu != null && !id.impu.isEmpty()
+                ? id.impu : id.impi);
+    }
+
+    /**
+     * Minimal RFC 4579 conference-info reader: the display URIs of the
+     * users currently in the conference (entity + connection status is
+     * enough for a participant list; full-state diffs come as separate
+     * documents we re-parse wholesale each time).
+     */
+    static java.util.List<String> parseConferenceUsers(String notify) {
+        if (notify == null) {
+            return null;
+        }
+        int sep = notify.indexOf("\r\n\r\n");
+        if (sep < 0) {
+            return null;
+        }
+        String body = notify.substring(sep + 4);
+        java.util.List<String> users = new java.util.ArrayList<>();
+        /* <user entity="..."> with a connected <connection>. Line-based
+         * scan, not a real XML parser: NOTIFY bodies are machine
+         * generated, bounded, and we only read attributes. */
+        String[] lines = body.split("\r\n");
+        String entity = null;
+        boolean connected = false;
+        for (String line : lines) {
+            String t = line.trim();
+            if (t.startsWith("<user ")) {
+                entity = attr(t, "entity");
+                connected = false;
+                /* The compact form puts <connection> on the same line:
+                 * <user entity=".."><connection status=".."/></user>. */
+                String st = attrAfter(t, "status",
+                        t.indexOf("<connection "));
+                if (st != null) {
+                    connected = st.equals("connected");
+                }
+            } else if (t.startsWith("<connection ")) {
+                String st = attr(t, "status");
+                connected = st == null || "connected".equals(st);
+            }
+            if (entity != null && t.contains("</user>")) {
+                if (connected) {
+                    users.add(entity);
+                }
+                entity = null;
+                connected = false;
+            }
+        }
+        return users;
+    }
+
+    /** attr() that only matches after a given index (same-line tags). */
+    private static String attrAfter(String tag, String name, int from) {
+        if (from < 0) {
+            return null;
+        }
+        int i = tag.indexOf(name + "=\"", from);
+        if (i < 0) {
+            return null;
+        }
+        int v = i + name.length() + 2;
+        int e = tag.indexOf('"', v);
+        if (e < 0) {
+            return null;
+        }
+        return tag.substring(v, e);
+    }
+
+    private static String attr(String tag, String name) {
+        int i = tag.indexOf(name + "=\"");
+        if (i < 0) {
+            return null;
+        }
+        int v = i + name.length() + 2;
+        int e = tag.indexOf('"', v);
+        if (e < 0) {
+            return null;
+        }
+        return tag.substring(v, e);
     }
 
     private static String aorOf(String publicId) {

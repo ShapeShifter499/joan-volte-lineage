@@ -1,6 +1,8 @@
 /* Compile-time stub for framework call-session callbacks. NOT packed. */
 package android.telephony.ims;
 
+import org.joan.ims.JoanConfState;
+
 public class ImsCallSessionListener {
     public void callSessionInitiating(ImsCallProfile profile) {}
     public void callSessionProgressing(ImsStreamMediaProfile profile) {}
@@ -12,4 +14,10 @@ public class ImsCallSessionListener {
     public void callSessionHoldFailed(ImsReasonInfo reason) {}
     public void callSessionResumed(ImsCallProfile profile) {}
     public void callSessionResumeFailed(ImsReasonInfo reason) {}
+    public void callSessionMergeStarted(ImsCallProfile profile,
+            JoanConfState conference) {}
+    public void callSessionMergeComplete(ImsCallProfile profile,
+            JoanConfState conference) {}
+    public void callSessionMergeFailed(ImsReasonInfo reason) {}
+    public void callSessionConferenceStateUpdated(JoanConfState state) {}
 }

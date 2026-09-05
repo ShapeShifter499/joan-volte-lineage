@@ -39,6 +39,8 @@ public class ImsCallSessionImplBase {
 
     public void resume(ImsStreamMediaProfile profile) {}
 
+    public void merge(ImsStreamMediaProfile profile) {}
+
     public void close() {}
 
     public int getState() { return STATE_IDLE; }
