@@ -262,33 +262,82 @@ public class JoanCallSession extends ImsCallSessionImplBase {
     }
 
     /**
-     * Conference merge: hold both legs (framework does this), INVITE the
-     * carrier conference focus, REFER each leg in with Replaces,
-     * subscribe conference-info. Stock model, network-hosted bridge.
-     */
-    void mergeConference() {
-        Log.i(TAG, "call session merge");
-        new Thread(() -> {
-            String r = JoanSipUa.merge(app,
-                    JoanRegistration.mcc(), JoanRegistration.mnc());
-            if (r != null && r.startsWith("OK")) {
-                sipCallId = JoanSipUa.conferenceFocusCallId();
-                if (sipCallId != null) {
-                    JoanMmTelFeature.track(sipCallId, this);
-                    JoanMmTelFeature.trackConference(this);
-                }
-                state = STATE_ESTABLISHED;
-                notifyStarted(profile);
-                feature.useAndroidAudioHandler();
-                if (hasNegotiatedMedia()) {
-                    startMedia();
-                }
-                notifyMergeComplete();
-            } else {
-                notifyMergeFailed(r);
-            }
-        }, "joan-ims-merge").start();
-    }
+     /**
+      * Conference merge (AOSP ImsCall.merge contract): a NEW session
+      * represents the merged conference. The framework keeps the merged
+      * conference session as the live call and expects the two original
+      * sessions to terminate as their legs transfer into the focus.
+      *
+      * Sequence: callSessionMergeStarted(confSession) -> network merge
+      * (focus INVITE + REFERs + subscription) -> on success
+      * callSessionMergeComplete(confSession); on failure
+      * callSessionMergeFailed(reason) and the original sessions stay.
+      * The originals that transferred in are terminated via
+      * onRemoteEnded() below, which is what ImsPhoneCallTracker uses to
+      * recognize the fully merged state (ImsCall.processMergeComplete
+      * cases 1-3).
+      */
+     void mergeConference() {
+         Log.i(TAG, "call session merge");
+         JoanTrace.note("call session merge invoked");
+         JoanCallSession conf = conferenceSession();
+         notifyMergeStarted(conf);
+         new Thread(() -> {
+             String r = JoanSipUa.merge(app,
+                     JoanRegistration.mcc(), JoanRegistration.mnc());
+             JoanTrace.note("call session merge result=" + r);
+             if (r != null && r.startsWith("OK")) {
+                 conf.sipCallId = JoanSipUa.conferenceFocusCallId();
+                 if (conf.sipCallId != null) {
+                     JoanMmTelFeature.track(conf.sipCallId, conf);
+                     JoanMmTelFeature.trackConference(conf);
+                 }
+                 conf.state = STATE_ESTABLISHED;
+                 feature.useAndroidAudioHandler();
+                 /* The transferred original legs are gone: end them the
+                  * way a remote hangup would, so the framework folds the
+                  * dialog into the conference session instead of keeping
+                  * zombie legs. A surviving leg (partial merge) stays. */
+                 for (String transferred :
+                         JoanSipUa.mergedDialogIds()) {
+                     JoanMmTelFeature.onMergedIntoConference(transferred);
+                 }
+                 conf.notifyMergeComplete();
+             } else {
+                 JoanMmTelFeature.trackConference(null);
+                 notifyMergeFailed(r);
+             }
+         }, "joan-ims-merge").start();
+     }
+
+     /** Fresh session object for the merged conference (framework
+      * transient-conference-session pattern). It performs no dialing:
+      * the UA owns the focus dialog. */
+     private JoanCallSession conferenceSession() {
+         JoanCallSession c = new JoanCallSession(app, feature, profile);
+         c.state = STATE_ESTABLISHING;
+         c.conference = true;
+         return c;
+     }
+
+     private volatile boolean conference;
+
+     @Override
+     public boolean isMultiparty() {
+         return conference;
+     }
+
+     private void notifyMergeStarted(JoanCallSession conf) {
+         ImsCallSessionListener l = listener;
+         if (l == null) {
+             return;
+         }
+         try {
+             l.callSessionMergeStarted(conf, profile);
+         } catch (Throwable t) {
+             Log.w(TAG, "merge start notify " + t.getClass().getSimpleName());
+         }
+     }
 
     void onConferenceUsers(java.util.List<String> users) {
         ImsCallSessionListener l = listener;
@@ -472,7 +521,7 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             return;
         }
         try {
-            l.callSessionMergeComplete(profile, null);
+            l.callSessionMergeComplete(this);
         } catch (Throwable t) {
             Log.w(TAG, "merge notify " + t.getClass().getSimpleName());
         }

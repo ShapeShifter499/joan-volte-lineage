@@ -528,6 +528,31 @@ final class JoanSipBuilder {
         return m.find() ? m.group(1) : "";
     }
 
+    /** Top Via branch parameter, or "". */
+    static String branchOf(String msg) {
+        String via = header(msg, "Via");
+        if (via == null) {
+            return "";
+        }
+        int i = via.indexOf("branch=");
+        if (i < 0) {
+            return "";
+        }
+        int v = i + 7;
+        int e = v;
+        while (e < via.length() && via.charAt(e) != ';'
+                && via.charAt(e) != ' ' && via.charAt(e) != '\r') {
+            e++;
+        }
+        return via.substring(v, e);
+    }
+
+    /** Message body after the first CRLFCRLF, or "". */
+    static String bodyOf(String msg) {
+        int i = msg.indexOf("\r\n\r\n");
+        return i < 0 ? "" : msg.substring(i + 4);
+    }
+
     static String tagOf(String value) {
         if (value == null) return "";
         int end = value.lastIndexOf('>');

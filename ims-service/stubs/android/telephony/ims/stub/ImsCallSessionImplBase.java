@@ -41,6 +41,7 @@ public class ImsCallSessionImplBase {
 
     /* LOS 22.2 / AOSP binder surface: merge() takes NO argument. */
     public void merge() {}
+    public boolean isMultiparty() { return false; }
 
     public void close() {}
 

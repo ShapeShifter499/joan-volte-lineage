@@ -105,6 +105,19 @@ public class JoanMmTelFeature extends MmTelFeature {
         sConference = s;
     }
 
+    /** A leg finished transferring into the conference focus: end its
+     * session so Telecom folds the dialog into the conference call
+     * instead of showing a disconnected line. */
+    static void onMergedIntoConference(String sipCallId) {
+        JoanCallSession s = sipCallId != null ? sBySip.remove(sipCallId) : null;
+        if (s != null) {
+            s.onRemoteEnded();
+            if (sIncoming == s) {
+                sIncoming = null;
+            }
+        }
+    }
+
     /**
      * An inbound INVITE is being held at 180 while we ring. Build a session
      * for it and hand it to Telecom.

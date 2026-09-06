@@ -12,10 +12,11 @@ public class ImsCallSessionListener {
     public void callSessionHoldFailed(ImsReasonInfo reason) {}
     public void callSessionResumed(ImsCallProfile profile) {}
     public void callSessionResumeFailed(ImsReasonInfo reason) {}
-    public void callSessionMergeStarted(ImsCallProfile profile,
-            android.util.ArrayMap<String, String> conference) {}
-    public void callSessionMergeComplete(ImsCallProfile profile,
-            android.util.ArrayMap<String, String> conference) {}
+    public void callSessionMergeStarted(
+            android.telephony.ims.stub.ImsCallSessionImplBase newSession,
+            ImsCallProfile profile) {}
+    public void callSessionMergeComplete(
+            android.telephony.ims.stub.ImsCallSessionImplBase newSession) {}
     public void callSessionMergeFailed(ImsReasonInfo reason) {}
     public void callSessionConferenceStateUpdated(
             android.telephony.ims.ImsConferenceState state) {}
