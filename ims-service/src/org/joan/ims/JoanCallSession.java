@@ -238,7 +238,7 @@ public class JoanCallSession extends ImsCallSessionImplBase {
      * stock-model conference flow.
      */
     @Override
-    public void merge(ImsStreamMediaProfile mediaProfile) {
+    public void merge() {
         mergeConference();
     }
 
@@ -296,8 +296,12 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             return;
         }
         try {
-            l.callSessionConferenceStateUpdated(
-                    JoanConfState.fromUsers(users));
+            android.telephony.ims.ImsConferenceState st =
+                    new android.telephony.ims.ImsConferenceState();
+            for (String u : users) {
+                st.mParticipants.put(u, "");
+            }
+            l.callSessionConferenceStateUpdated(st);
         } catch (Throwable t) {
             Log.w(TAG, "conf state notify "
                     + t.getClass().getSimpleName());
@@ -505,7 +509,8 @@ public class JoanCallSession extends ImsCallSessionImplBase {
     private void startMedia() {
         JoanMedia.startRtp(app, JoanSipUa.network(), JoanSipUa.localAddr(),
                 JoanSipUa.mediaIp(), JoanSipUa.mediaPort(),
-                JoanSipUa.mediaRtcpPort(), JoanSipUa.mediaMux());
+                JoanSipUa.mediaRtcpPort(), JoanSipUa.mediaMux(),
+                JoanSipUa.mediaPt(), JoanSipUa.mediaAmrWideband());
     }
 
     private void failStart(String why) {

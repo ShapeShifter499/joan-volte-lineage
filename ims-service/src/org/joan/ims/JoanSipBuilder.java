@@ -500,21 +500,50 @@ final class JoanSipBuilder {
         return raw.isEmpty() ? "AKAv1-MD5" : raw;
     }
 
-    static String header(String msg, String name) {
-        int i = 0;
-        while (i < msg.length()) {
-            int eol = eol(msg, i);
-            String line = msg.substring(i, eol);
-            int colon = line.indexOf(':');
-            if (colon > 0 && line.substring(0, colon).equalsIgnoreCase(name)) {
-                return line.substring(colon + 1).trim();
-            }
-            i = skipEol(msg, eol);
-            if (i == eol) {
-                break;
-            }
+    private static String canonicalHeader(String name) {
+        String n = name.toLowerCase(java.util.Locale.ROOT);
+        switch (n) {
+            case "v": return "via";
+            case "f": return "from";
+            case "t": return "to";
+            case "i": return "call-id";
+            case "m": return "contact";
+            case "l": return "content-length";
+            case "c": return "content-type";
+            case "k": return "supported";
+            default: return n;
         }
-        return null;
+    }
+
+    static String header(String msg, String name) {
+        java.util.List<String> v = headers(msg, name);
+        return v.isEmpty() ? null : v.get(0);
+    }
+
+    static String parameter(String value, String name) {
+        if (value == null) return "";
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                "(?:^|;)\\s*" + java.util.regex.Pattern.quote(name)
+                + "=([^;,\\s]+)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(value);
+        return m.find() ? m.group(1) : "";
+    }
+
+    static String tagOf(String value) {
+        if (value == null) return "";
+        int end = value.lastIndexOf('>');
+        return parameter(end < 0 ? value : value.substring(end + 1), "tag");
+    }
+
+    /** SIP transaction identity plus dialog metadata, not Call-ID alone. */
+    static String transactionKey(String msg, String method) {
+        String cid = header(msg, "Call-ID"), via = header(msg, "Via");
+        String actual = requestMethod(msg);
+        int cseq = cseqForMethod(msg, actual.isEmpty() ? method : actual);
+        String branch = parameter(via, "branch");
+        if (cid == null || via == null || branch.isEmpty() || cseq < 0) return null;
+        String sentBy = via.split("[;,]", 2)[0].trim().toLowerCase(java.util.Locale.ROOT);
+        return cid + "#" + cseq + "#" + method + "#" + sentBy + "#" + branch
+                + "#" + tagOf(header(msg, "From"));
     }
 
     /**
@@ -1063,7 +1092,7 @@ final class JoanSipBuilder {
         }
         StringBuilder a = new StringBuilder(1800);
         a.append("INVITE ").append(dest).append(" SIP/2.0\r\n");
-        a.append("Via: SIP/2.0/UDP ").append(host).append(':')
+        a.append("Via: SIP/2.0/").append(sUseTcp ? "TCP " : "UDP ").append(host).append(':')
                 .append(id.viaPort).append(";branch=").append(dlg.branch)
                 .append(";rport\r\n");
         a.append("Max-Forwards: 70\r\n");
@@ -1148,7 +1177,7 @@ final class JoanSipBuilder {
                 + "Expires: " + expires + "\r\n"
                 + "Allow: " + ALLOW + "\r\n";
         return inDialog("SUBSCRIBE", id, dlg, focusUri, route, secVerify,
-                null, null, dlg.cseq, extra);
+                "<" + focusUri + ">", null, dlg.cseq, extra);
     }
 
     /**
@@ -1199,9 +1228,11 @@ final class JoanSipBuilder {
     static String buildPrack(Id id, Dialog dlg, String target, String route,
                              String secVerify, String toHdr, String fromHdr,
                              int rseq) {
+        int inviteCseq = dlg.cseq;
+        dlg.cseq++;
         return inDialog("PRACK", id, dlg, target, route, secVerify,
-                toHdr, fromHdr, dlg.cseq + 1,
-                "RAck: " + rseq + " " + dlg.cseq + " INVITE\r\n");
+                toHdr, fromHdr, dlg.cseq,
+                "RAck: " + rseq + " " + inviteCseq + " INVITE\r\n");
     }
 
     static String extractToTag(String msg) {

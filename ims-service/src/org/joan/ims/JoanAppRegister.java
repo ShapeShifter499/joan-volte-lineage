@@ -605,15 +605,15 @@ final class JoanAppRegister {
                 continue;
             }
             String got = tryRecv(primary, buf, slice);
-            if (got != null) {
+            if (got == null && alt != null) {
+                got = tryRecv(alt, buf, slice);
+            }
+            if (got != null && !isProvisional(got)) {
                 return got;
             }
-            if (alt != null) {
-                got = tryRecv(alt, buf, slice);
-                if (got != null) {
-                    return got;
-                }
-            }
+            /* 1xx provisionals are not the transaction's answer; a 100
+             * Trying from the core must not end the wait (RFC 3261 8.1.1.1:
+             * the UAC waits for the final). Keep the retransmit schedule. */
         }
         return null;
     }
@@ -628,6 +628,18 @@ final class JoanAppRegister {
      * the caller can fall back to UDP; a completed handshake that never
      * answers is a transaction timeout.
      */
+    private static boolean isProvisional(String msg) {
+        if (msg == null || !msg.startsWith("SIP/2.0 ")) {
+            return false;
+        }
+        try {
+            int code = Integer.parseInt(msg.substring(8, 11).trim());
+            return code >= 100 && code < 200;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
     private static String sendRecvTcp(Network network, InetAddress local,
                                       int localPort, InetAddress dest,
                                       int dport, byte[] pkt, int timeoutMs,
@@ -684,7 +696,7 @@ final class JoanAppRegister {
                 }
                 acc.append(new String(buf, 0, n, StandardCharsets.US_ASCII));
                 String got = JoanSipBuilder.extractOne(acc);
-                if (got != null) {
+                if (got != null && !isProvisional(got)) {
                     /* Keep this client: stock libims reuses SIPoTCP
                      * ("TCP client is re-used") for INVITE after REG2. */
                     sock.setSoTimeout(0);

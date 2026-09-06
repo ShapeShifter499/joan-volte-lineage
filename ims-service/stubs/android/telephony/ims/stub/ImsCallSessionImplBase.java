@@ -39,7 +39,8 @@ public class ImsCallSessionImplBase {
 
     public void resume(ImsStreamMediaProfile profile) {}
 
-    public void merge(ImsStreamMediaProfile profile) {}
+    /* LOS 22.2 / AOSP binder surface: merge() takes NO argument. */
+    public void merge() {}
 
     public void close() {}
 
