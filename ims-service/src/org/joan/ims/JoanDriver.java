@@ -48,17 +48,96 @@ final class JoanDriver {
      * artifact a user can actually produce, so the line that says why
      * registration failed belongs in it. */
     private static volatile String sLastRegister = "";
+    /** Current failed-REGISTER backoff; static so wake-ups can reset it. */
+    private static volatile long sRegisterBackoffMs = REG_RETRY_MIN_MS;
+    /** A PDN loss was observed; the next availability poke must not trust
+     * the current registration state (see JoanRegLifecycle.reacquireAfterLoss). */
+    private static volatile boolean sStaleAfterLoss;
     private static final Object NET_LOCK = new Object();
     private static ConnectivityManager.NetworkCallback sImsCallback;
     private static boolean sImsRequested;
 
+    /**
+     * One entry point for every wake-up: network callbacks (routine) and
+     * boot/receiver pokes (manual). Rules, per {@link JoanRegLifecycle}:
+     * <ul>
+     *   <li>never interrupt an in-flight REGISTER cycle;</li>
+     *   <li>routine "available": a registered driver is left alone (the
+     *       refresh sleep self-corrects); an unregistered one gets its
+     *       backoff reset and wakes for a prompt attempt;</li>
+     *   <li>routine "lost": clear the stale UA registration and supersede
+     *       in-flight work, reset backoff, wake;</li>
+     *   <li>manual pokes (boot, package-replaced, airplane): wake only
+     *       when not registered.</li>
+     * </ul>
+     * A healthy registration is never torn down by a routine poke.
+     */
+    static void poke(String reason) {
+        boolean lost = JoanAppRegister.JoanRegLifecycle
+                .POKE_IMS_LOST.equals(reason);
+        if (lost) {
+            /* A loss invalidates any binding the driver might still
+             * believe in -- including one adopted by an attempt that is
+             * just finishing -- so remember it and supersede in-flight
+             * work; the next availability poke forces a fresh REGISTER. */
+            sStaleAfterLoss = true;
+            JoanAppRegister.stop();
+            sRegisterBackoffMs = REG_RETRY_MIN_MS;
+        }
+        if (JoanAppRegister.inProgress()) {
+            return;
+        }
+        boolean ua = JoanSipUa.isRegistered();
+        if (JoanAppRegister.JoanRegLifecycle.routinePoke(reason)) {
+            if (JoanAppRegister.JoanRegLifecycle
+                    .reacquireAfterLoss(reason, sStaleAfterLoss)) {
+                sStaleAfterLoss = false;
+                /* Wake first so a hiccup in the release/broadcast path
+                 * can never leave the driver sleeping on stale state. */
+                sRegisterBackoffMs = REG_RETRY_MIN_MS;
+                wake();
+                if (ua) {
+                    /* The binding predates the loss: re-register fresh
+                     * instead of sleeping to refresh on stale state. */
+                    JoanSipUa.release();
+                    JoanTrace.note("IMS network back after loss; "
+                            + "re-registering");
+                }
+                return;
+            }
+            if (JoanAppRegister.JoanRegLifecycle.clearOnLost(reason, ua)) {
+                /* Wake first so a hiccup in the release/broadcast path can
+                 * never leave the driver sleeping on stale state. */
+                wake();
+                JoanSipUa.release();
+                JoanTrace.note("IMS network lost; cleared stale registration");
+            } else if (!ua) {
+                sRegisterBackoffMs = REG_RETRY_MIN_MS;
+                wake();
+            }
+            return;
+        }
+        if (!ua) {
+            sRegisterBackoffMs = REG_RETRY_MIN_MS;
+            wake();
+        }
+    }
+
+    private static void wake() {
+        Thread t = sThread;
+        if (t != null) {
+            t.interrupt();
+        }
+    }
+
     static void start(Context ctx) {
         JoanTrace.init(ctx.getApplicationContext());
         if (!STARTED.compareAndSet(false, true)) {
-            Thread old = sThread;
-            if (old != null) {
-                old.interrupt();
-            }
+            /* Boot/replaced/airplane receivers re-call start() on every
+             * lifecycle event. Do not treat that as permission to interrupt
+             * a registered sleep or an in-flight cycle: route through the
+             * wake rules instead of waking unconditionally. */
+            poke("manual poke");
             return;
         }
         JoanTrace.note("starting registration driver");
@@ -88,7 +167,6 @@ final class JoanDriver {
     }
 
     private static void loop(Context app) {
-        long registerBackoff = REG_RETRY_MIN_MS;
         while (true) {
             try {
                 Discovery d = discover(app);
@@ -99,7 +177,7 @@ final class JoanDriver {
                     }
                     logState((d.quietIdle ? "quiet-idle: " : "waiting: ")
                             + d.reason);
-                    registerBackoff = REG_RETRY_MIN_MS;
+                    sRegisterBackoffMs = REG_RETRY_MIN_MS;
                     Thread.sleep(d.sleepMs);
                     continue;
                 }
@@ -124,7 +202,7 @@ final class JoanDriver {
                         + (r == null ? "null" : r));
                 if (ok && JoanSipUa.isRegistered()) {
                     JoanRegistration.setRegistered(true, c.pcscf);
-                    registerBackoff = REG_RETRY_MIN_MS;
+                    sRegisterBackoffMs = REG_RETRY_MIN_MS;
                     /* The next pass reads the granted lifetime and
                      * sleeps until the refresh is due. */
                     continue;
@@ -137,10 +215,10 @@ final class JoanDriver {
                 }
                 JoanRegistration.setRegistered(false, null);
                 logState("app REGISTER failed; backoff "
-                        + (registerBackoff / 1000) + "s");
-                Thread.sleep(registerBackoff);
-                registerBackoff = Math.min(REG_RETRY_MAX_MS,
-                        registerBackoff * 2);
+                        + (sRegisterBackoffMs / 1000) + "s");
+                Thread.sleep(sRegisterBackoffMs);
+                sRegisterBackoffMs = Math.min(REG_RETRY_MAX_MS,
+                        sRegisterBackoffMs * 2);
                 continue;
             } catch (InterruptedException ie) {
                 // A receiver/provider/service poke woke us after a user/radio
@@ -270,6 +348,11 @@ final class JoanDriver {
             if (!isIms) {
                 continue;
             }
+            /* Pin the network to the subscription identity/AKA will run
+             * against: a second SIM's IMS PDN must never win. */
+            if (!JoanAppRegister.networkSubsMatch(cap, sub)) {
+                continue;
+            }
             LinkProperties lp = cm.getLinkProperties(n);
             if (lp == null) {
                 continue;
@@ -289,6 +372,9 @@ final class JoanDriver {
             ensureImsRequest(cm);
             return Discovery.waitFor("LTE on, IMS APN/network requested; waiting");
         }
+        /* Keep the callback even when the PDN is already present: a later
+         * loss must be observed so the stale binding gets cleared. */
+        ensureImsRequest(cm);
 
         InetAddress local = pickLocal(imsLp);
         String pcscf = collectPcscfs(imsLp);
@@ -391,19 +477,13 @@ final class JoanDriver {
                     @Override
                     public void onAvailable(Network network) {
                         JoanTrace.note("IMS network callback available");
-                        Thread t = sThread;
-                        if (t != null) {
-                            t.interrupt();
-                        }
+                        poke(JoanAppRegister.JoanRegLifecycle.POKE_IMS_AVAILABLE);
                     }
 
                     @Override
                     public void onLost(Network network) {
                         JoanTrace.note("IMS network callback lost");
-                        Thread t = sThread;
-                        if (t != null) {
-                            t.interrupt();
-                        }
+                        poke(JoanAppRegister.JoanRegLifecycle.POKE_IMS_LOST);
                     }
                 };
                 cm.requestNetwork(req, sImsCallback);

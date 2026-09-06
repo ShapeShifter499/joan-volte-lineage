@@ -12,15 +12,12 @@ import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 
 import java.lang.reflect.Method;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -48,15 +45,76 @@ import java.util.List;
  * (disabled): its proven REG2 stays UDP at any size. Unknown PLMNs
  * stay UDP; no blanket per-carrier TCP rule survives.
  *
+ * Reply adoption is fail-closed: a REGISTER answer is only accepted when
+ * its Via branch and CSeq match the request (RFC 3261 §17.1.3) and its
+ * Call-ID matches (§8.1.3.4); a protected-TCP attempt only falls back to
+ * UDP on a connect-phase failure, and transform/setup failures abort
+ * instead of downgrading the security of the exchange. An attempt is
+ * superseded (epoch-bumped) by network/state changes so a stale result
+ * is never adopted after the PDN moved on.
+ *
  * Never logs IMPI, nonce, RES, CK, IK, or SIP request lines.
  */
 final class JoanAppRegister {
     private static final int REG1_TIMEOUT_MS = 8000;
     private static final int REG2_TIMEOUT_MS = 8000;
 
+    /* ---------- attempt lifecycle: epoch + single in-flight claim ------ */
+
+    /** Bumped by {@link #stop()} to supersede an in-flight attempt. */
+    private static volatile long sEpoch;
+    private static final Object EPOCH_LOCK = new Object();
+    private static boolean sInProgress;
+
+    /** Supersede any in-flight attempt (network lost / state change). */
+    static void stop() {
+        synchronized (EPOCH_LOCK) {
+            sEpoch++;
+        }
+    }
+
+    /** Whether the attempt that captured {@code epoch} is superseded. */
+    static boolean superseded(long epoch) {
+        return epoch != sEpoch;
+    }
+
+    /** Whether a REGISTER cycle is currently running. */
+    static boolean inProgress() {
+        synchronized (EPOCH_LOCK) {
+            return sInProgress;
+        }
+    }
+
+    private static boolean tryBegin() {
+        synchronized (EPOCH_LOCK) {
+            if (sInProgress) {
+                return false;
+            }
+            sInProgress = true;
+            return true;
+        }
+    }
+
+    private static void end() {
+        synchronized (EPOCH_LOCK) {
+            sInProgress = false;
+        }
+    }
+
     private JoanAppRegister() {}
 
     static String run(Context ctx) {
+        if (!tryBegin()) {
+            return "FAIL: registration already in progress";
+        }
+        try {
+            return runAttempt(ctx, sEpoch);
+        } finally {
+            end();
+        }
+    }
+
+    private static String runAttempt(Context ctx, long epoch) {
         Net n;
         try {
             n = findIms(ctx);
@@ -79,6 +137,9 @@ final class JoanAppRegister {
         if (id == null) {
             return "FAIL: no ISIM IMPI";
         }
+        if (superseded(epoch)) {
+            return "FAIL: superseded by network/state change";
+        }
 
         String pani = paniFor(ctx);
         StringBuilder sb = new StringBuilder();
@@ -96,7 +157,15 @@ final class JoanAppRegister {
         String last = null;
         for (InetAddress cand : n.pcscfs) {
             tried++;
-            String one = tryPcscf(ctx, n, id, pani, cand, perTry);
+            if (superseded(epoch)) {
+                sb.append("pcscf_tried=").append(tried).append(' ');
+                return sb + "FAIL: superseded by network/state change";
+            }
+            String one = tryPcscf(ctx, n, id, pani, cand, perTry, epoch);
+            // Keep each candidate's sanitized result, not only the last one.
+            // No IPs, subscriber identity, raw SIP, or AKA key material.
+            JoanTrace.note("app register pcscf_try=" + tried + " "
+                    + (one == null ? "FAIL: reg1 no usable reply" : one));
             if (one == null) {
                 continue;
             }
@@ -108,7 +177,8 @@ final class JoanAppRegister {
             if (one.indexOf("FAIL: aka") >= 0
                     || one.indexOf("FAIL: no IpSecManager") >= 0
                     || one.indexOf("FAIL: aka parse") >= 0
-                    || one.indexOf("FAIL: aka lengths") >= 0) {
+                    || one.indexOf("FAIL: aka lengths") >= 0
+                    || one.indexOf("FAIL: superseded") >= 0) {
                 sb.append("pcscf_tried=").append(tried).append(' ');
                 return sb.append(one).toString();
             }
@@ -126,7 +196,8 @@ final class JoanAppRegister {
      *         diagnosis string, with {@code OK} on REGISTER 200.
      */
     private static String tryPcscf(Context ctx, Net n, Id id, String pani,
-                                   InetAddress pcscf, int reg1TimeoutMs) {
+                                   InetAddress pcscf, int reg1TimeoutMs,
+                                   long epoch) {
         SecureRandom rng = new SecureRandom();
         JoanSipBuilder.Params mine = JoanSipBuilder.Params.random(rng);
         JoanSipBuilder.Txn txn = new JoanSipBuilder.Txn(mine, rng);
@@ -137,12 +208,15 @@ final class JoanAppRegister {
         byte[] reg1Bytes = JoanSipBuilder
                 .buildRegister(sipId, txn, 1, null, null, null, null, pani)
                 .getBytes(StandardCharsets.US_ASCII);
+        String reg1Str = new String(reg1Bytes, StandardCharsets.US_ASCII);
         String r1 = null;
         DatagramSocket s1 = null;
         try {
             s1 = boundUdp(n.network, n.local, JoanSipBuilder.REG1_PORT);
-            r1 = sendRecv(s1, null, pcscf, JoanSipBuilder.PCSCF_SIP_PORT,
-                    reg1Bytes, reg1TimeoutMs);
+            JoanRegTransport.UdpResult r1r = JoanRegTransport.sendRecvUdp(
+                    s1, null, pcscf, JoanSipBuilder.PCSCF_SIP_PORT,
+                    reg1Bytes, reg1TimeoutMs, reg1Str);
+            r1 = r1r == null ? null : r1r.reply;
         } catch (Exception e) {
             r1 = null;
         } finally {
@@ -151,9 +225,15 @@ final class JoanAppRegister {
         if (r1 == null) {
             return null;
         }
+        if (superseded(epoch)) {
+            return sb + "FAIL: superseded by network/state change";
+        }
         JoanSipBuilder.Reply p1 = JoanSipBuilder.parseReply(r1);
         if (p1 == null) {
             return "FAIL: reg1 parse";
+        }
+        if (!JoanRegTransport.finalMatches(reg1Str, r1)) {
+            return sb + "FAIL: reg1 mismatch";
         }
         sb.append("reg1=").append(p1.status).append(' ');
         if (p1.status != 401) {
@@ -181,6 +261,9 @@ final class JoanAppRegister {
                 .append(" offered=")
                 .append(JoanSecAgree.offerSummary(p1.secServer, pcscfSec))
                 .append(' ');
+        if (superseded(epoch)) {
+            return sb + "FAIL: superseded by network/state change";
+        }
 
         String authHex;
         try {
@@ -208,6 +291,9 @@ final class JoanAppRegister {
         }
         if (ck.length != 16 || ik.length != 16) {
             return sb + "FAIL: aka parse shape (CK/IK must be 16 octets)";
+        }
+        if (superseded(epoch)) {
+            return sb + "FAIL: superseded by network/state change";
         }
 
         JoanSipCrypto.EspKeys keys;
@@ -282,14 +368,17 @@ final class JoanAppRegister {
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
             }
+            if (superseded(epoch)) {
+                return sb + "FAIL: superseded by network/state change";
+            }
 
             JoanSipBuilder.Id sip2 = new JoanSipBuilder.Id(
                     id.impi, id.impu, id.realm, n.localHost,
                     mine.portC, mine.portS, id.imei);
+            String xfrmBefore = JoanXfrmStats.capture();
             String r2 = null;
-            sTcpAttempted = false;
-            sTcpConnected = false;
-            sTcpKeep = null;
+            int reg2Retx = 0;
+            String r2Identity = null;
             boolean tcpReg2;
             {
                 /* Stock GetTCPCriterionLength semantics: transport is
@@ -307,8 +396,14 @@ final class JoanAppRegister {
                 if (!tcpReg2) {
                     sb.append("reg2send=").append(mine.portC).append("->")
                             .append(pcscfSec.portS).append(" tpt=udp ");
-                    r2 = sendRecv(sockC, sockS, pcscf, pcscfSec.portS,
-                            reg2Bytes, REG2_TIMEOUT_MS);
+                    JoanRegTransport.UdpResult ur = JoanRegTransport
+                            .sendRecvUdp(sockC, sockS, pcscf, pcscfSec.portS,
+                                    reg2Bytes, REG2_TIMEOUT_MS, reg2Udp);
+                    if (ur != null) {
+                        r2 = ur.reply;
+                        reg2Retx = ur.retx;
+                    }
+                    r2Identity = reg2Udp;
                 } else {
                     /* Same message, TCP Via. Stock reuses this client
                      * for INVITE after a 200 ("TCP client is
@@ -317,30 +412,55 @@ final class JoanAppRegister {
                             txn, 2, ch, res, ck, ik, pani, true);
                     byte[] tcpBytes =
                             reg2Tcp.getBytes(StandardCharsets.US_ASCII);
+                    r2Identity = reg2Tcp;
                     sb.append("reg2send=").append(mine.portC).append("->")
                             .append(pcscfSec.portS).append(" tpt=tcp ");
-                    r2 = sendRecvTcp(n.network, n.local, mine.portC,
-                            pcscf, pcscfSec.portS, tcpBytes,
-                            REG2_TIMEOUT_MS, ipsec, inC, outC);
-                    if (r2 == null) {
-                        if (sTcpAttempted && !sTcpConnected) {
-                            sb.append("tcp_fail=connect")
-                              .append(sTcpFailWhy == null
-                                      ? " " : "(" + sTcpFailWhy + ") ");
-                        } else if (sTcpConnected) {
-                            sb.append("tcp_fail=timeout ");
-                        } else {
-                            sb.append("tcp_fail=setup ");
+                    try {
+                        JoanRegTransport.TcpResult tr = JoanRegTransport
+                                .sendRecvTcp(n.network, n.local, mine.portC,
+                                        pcscf, pcscfSec.portS, tcpBytes,
+                                        REG2_TIMEOUT_MS, ipsec, inC, outC,
+                                        reg2Tcp);
+                        r2 = tr.reply;
+                        tcpKeep = tr.keep;
+                    } catch (JoanRegTransport.TcpFail tf) {
+                        sb.append("tcp_fail=").append(tf.phase);
+                        Throwable cause = tf.getCause();
+                        if (cause != null) {
+                            sb.append('(')
+                                    .append(cause.getClass().getSimpleName())
+                                    .append(')');
+                        }
+                        sb.append(' ');
+                        if (!JoanRegTransport.TcpFail.CONNECT.equals(
+                                tf.phase)) {
+                            /* Setup/send/read/timeout failures fail
+                             * closed: falling back here would either
+                             * downgrade the security or retry a
+                             * transaction whose TCP path already
+                             * connected. */
+                            return sb + "FAIL: reg2 tcp " + tf.phase
+                                    + " (fail closed)";
                         }
                         /* UDP fallback, matching stock TransmissionProxy
-                         * ("UDP fallback"): same protected REGISTER. */
+                         * ("UDP fallback"): same protected REGISTER,
+                         * only after a refused/dropped connect. */
                         sb.append("tpt=udp ");
-                        r2 = sendRecv(sockC, sockS, pcscf, pcscfSec.portS,
-                                reg2Bytes, REG2_TIMEOUT_MS);
+                        JoanRegTransport.UdpResult ur = JoanRegTransport
+                                .sendRecvUdp(sockC, sockS, pcscf,
+                                        pcscfSec.portS, reg2Bytes,
+                                        REG2_TIMEOUT_MS, reg2Udp);
+                        if (ur != null) {
+                            r2 = ur.reply;
+                            reg2Retx = ur.retx;
+                        }
+                        r2Identity = reg2Udp;
                     }
                 }
             }
-            sb.append("reg2retx=").append(sRetx).append(' ');
+            sb.append("reg2retx=").append(reg2Retx).append(' ');
+            sb.append(JoanXfrmStats.delta(xfrmBefore, JoanXfrmStats.capture()))
+                    .append(' ');
             if (r2 == null) {
                 return sb + "FAIL: reg2 timeout";
             }
@@ -348,11 +468,17 @@ final class JoanAppRegister {
             if (p2 == null) {
                 return sb + "FAIL: reg2 parse";
             }
+            if (!JoanRegTransport.finalMatches(r2Identity, r2)) {
+                /* Fail closed at the adoption boundary: never hand the
+                 * UA a reply that was not this transaction's answer. */
+                return sb + "FAIL: reg2 mismatch (fail closed)";
+            }
+            if (superseded(epoch)) {
+                return sb + "FAIL: superseded by network/state change";
+            }
             sb.append("reg2=").append(p2.status);
             if (p2.status >= 200 && p2.status < 300) {
                 sb.append(" OK");
-                tcpKeep = sTcpKeep;
-                sTcpKeep = null;
                 JoanSipUa.adopt(ctx, n.network, n.local, pcscf, pcscfSec.portS,
                         sip2, pani, p1.secServer, r2,
                         sockC, sockS, tcpKeep, ipsec,
@@ -383,14 +509,6 @@ final class JoanAppRegister {
             closeQuietly(spiUeS);
             closeQuietly(spiPeerC);
             closeQuietly(spiPeerS);
-            if (sTcpKeep != null) {
-                try {
-                    sTcpKeep.close();
-                } catch (Exception ignored) {
-                    // ignore
-                }
-                sTcpKeep = null;
-            }
         }
     }
 
@@ -424,10 +542,19 @@ final class JoanAppRegister {
         if (cm == null) {
             return null;
         }
+        /* Pin the network choice to the subscription the identity will be
+         * read from: a second SIM's IMS PDN must never win. */
+        int sub = SubscriptionManager.getDefaultDataSubscriptionId();
+        if (sub < 0) {
+            sub = SubscriptionManager.getDefaultSubscriptionId();
+        }
         for (Network network : cm.getAllNetworks()) {
             NetworkCapabilities nc = cm.getNetworkCapabilities(network);
             if (nc == null
                     || !nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_IMS)) {
+                continue;
+            }
+            if (!networkSubsMatch(nc, sub)) {
                 continue;
             }
             LinkProperties lp = cm.getLinkProperties(network);
@@ -474,10 +601,51 @@ final class JoanAppRegister {
                 // no P-CSCF API
             }
             if (!n.pcscfs.isEmpty()) {
+                /* Same-family P-CSCFs first: the local address family is
+                 * what the sockets bind to, so a mixed v4/v6 advertisement
+                 * must not send a v6-bound socket at a v4 node. Stable
+                 * sort keeps the PDN's own preference inside each group. */
+                orderPcscfsByFamily(n.pcscfs, local);
                 return n;
             }
         }
         return null;
+    }
+
+    /**
+     * Whether the IMS network's subscription ids include the selected one.
+     * Reflects the SystemApi {@code NetworkCapabilities.getSubscriptionIds}
+     * like the P-CSCF read; an opaque/unavailable API accepts (see
+     * {@link JoanRegLifecycle#matchesSubscription}).
+     */
+    static boolean networkSubsMatch(NetworkCapabilities nc, int sub) {
+        if (sub < 0) {
+            return true;
+        }
+        int[] ids = null;
+        try {
+            Method m = nc.getClass().getMethod("getSubscriptionIds");
+            Object v = m.invoke(nc);
+            if (v instanceof int[]) {
+                ids = (int[]) v;
+            }
+        } catch (Exception e) {
+            return true; // API unavailable: capability check above stands
+        }
+        return JoanRegLifecycle.matchesSubscription(ids, sub);
+    }
+
+    private static void orderPcscfsByFamily(List<InetAddress> pcscfs,
+                                            InetAddress local) {
+        final boolean wantV6 = local instanceof Inet6Address;
+        pcscfs.sort((a, b) -> {
+            boolean a6 = a instanceof Inet6Address;
+            boolean b6 = b instanceof Inet6Address;
+            if (a6 == b6) {
+                return 0;
+            }
+            return a6 == wantV6 ? -1 : 1;
+        });
     }
 
     private static Id readIdentity(Context ctx) {
@@ -553,191 +721,22 @@ final class JoanAppRegister {
         return s;
     }
 
-    /** Retransmissions used by the last sendRecv, for the summary line. */
-    private static int sRetx;
-    /** Last protected-TCP attempt: attempted connect, and whether it completed. */
-    private static boolean sTcpAttempted;
-    private static boolean sTcpConnected;
-    /** Exception class from the last TCP attempt: ConnectException
-     * (RST/refused) vs SocketTimeoutException (dropped) vs other. */
-    private static String sTcpFailWhy;
-    /** Successful REG2 TCP client, handed to the UA. Closed on failure. */
-    private static Socket sTcpKeep;
-
     /**
-     * Send and wait, retransmitting on RFC 3261 timers.
-     *
-     * SIP over UDP is not reliable and the transaction layer is supposed to
-     * retransmit: T1 = 500 ms, doubling, capped at T2 = 4 s. This sent once
-     * and waited, so a single lost datagram was indistinguishable from a
-     * core that never answers -- and the protected REGISTER goes out
-     * immediately after the security associations are installed, which is
-     * exactly when a packet is most likely to be dropped while the peer
-     * finishes plumbing its inbound SA.
+     * Legacy send-and-wait kept for the offline UA audit probe and older
+     * callers: delegates to {@link JoanRegTransport#sendRecvUdp} with no
+     * transaction identity (any final accepted, as before).
      */
-    private static String sendRecv(DatagramSocket primary, DatagramSocket alt,
-                                   InetAddress dest, int dport, byte[] pkt,
-                                   int timeoutMs) throws Exception {
-        DatagramPacket out = new DatagramPacket(pkt, pkt.length, dest, dport);
-        primary.send(out);
-        sRetx = 0;
-        long start = System.currentTimeMillis();
-        long deadline = start + timeoutMs;
-        long interval = 500;
-        long nextTx = start + interval;
-        byte[] buf = new byte[4096];
-        while (System.currentTimeMillis() < deadline) {
-            long now = System.currentTimeMillis();
-            if (now >= nextTx) {
-                try {
-                    primary.send(out);
-                    sRetx++;
-                } catch (Exception e) {
-                    /* Keep listening: the first send may still be in
-                     * flight and the answer can still arrive. */
-                }
-                interval = Math.min(interval * 2, 4000);
-                nextTx = now + interval;
-            }
-            int slice = (int) Math.min(200,
-                    Math.min(deadline, nextTx) - System.currentTimeMillis());
-            if (slice <= 0) {
-                continue;
-            }
-            String got = tryRecv(primary, buf, slice);
-            if (got == null && alt != null) {
-                got = tryRecv(alt, buf, slice);
-            }
-            if (got != null && !isProvisional(got)) {
-                return got;
-            }
-            /* 1xx provisionals are not the transaction's answer; a 100
-             * Trying from the core must not end the wait (RFC 3261 8.1.1.1:
-             * the UAC waits for the final). Keep the retransmit schedule. */
-        }
-        return null;
+    static String sendRecv(DatagramSocket primary, DatagramSocket alt,
+                           InetAddress dest, int dport, byte[] pkt,
+                           int timeoutMs) throws Exception {
+        JoanRegTransport.UdpResult r = JoanRegTransport.sendRecvUdp(
+                primary, alt, dest, dport, pkt, timeoutMs, null);
+        return r == null ? null : r.reply;
     }
 
-    /**
-     * Protected REGISTER over TCP: bind UE port-c, apply the same
-     * client-port transforms as the UDP socket, connect to P-CSCF
-     * port-s, write once, read until a complete SIP message or timeout.
-     *
-     * TCP has no SIP retransmission (RFC 3261 §18.2.2 / Timer E is UDP
-     * only). A failed connect is reported via {@link #sTcpConnected} so
-     * the caller can fall back to UDP; a completed handshake that never
-     * answers is a transaction timeout.
-     */
-    private static boolean isProvisional(String msg) {
-        if (msg == null || !msg.startsWith("SIP/2.0 ")) {
-            return false;
-        }
-        try {
-            int code = Integer.parseInt(msg.substring(8, 11).trim());
-            return code >= 100 && code < 200;
-        } catch (NumberFormatException e) {
-            return false;
-        }
-    }
-
-    private static String sendRecvTcp(Network network, InetAddress local,
-                                      int localPort, InetAddress dest,
-                                      int dport, byte[] pkt, int timeoutMs,
-                                      IpSecManager ipsec,
-                                      IpSecTransform inXf,
-                                      IpSecTransform outXf) {
-        sTcpAttempted = true;
-        sTcpConnected = false;
-        sTcpFailWhy = null;
-        sRetx = 0;
-        Socket sock = new Socket();
-        try {
-            sock.setReuseAddress(true);
-            sock.setSoTimeout(Math.max(1, timeoutMs));
-            if (network != null) {
-                network.bindSocket(sock);
-            }
-            sock.bind(new InetSocketAddress(local, localPort));
-            if (ipsec != null) {
-                if (outXf != null) {
-                    ipsec.applyTransportModeTransform(sock,
-                            IpSecManager.DIRECTION_OUT, outXf);
-                }
-                if (inXf != null) {
-                    try {
-                        ipsec.applyTransportModeTransform(sock,
-                                IpSecManager.DIRECTION_IN, inXf);
-                    } catch (Exception e) {
-                        /* Same as the UDP path: inbound transform may
-                         * fail on this kernel; keep the outbound SA. */
-                    }
-                }
-            }
-            sock.connect(new InetSocketAddress(dest, dport),
-                    Math.min(4000, Math.max(1, timeoutMs)));
-            sTcpConnected = true;
-            sTcpFailWhy = null;
-            OutputStream os = sock.getOutputStream();
-            os.write(pkt);
-            os.flush();
-            InputStream is = sock.getInputStream();
-            StringBuilder acc = new StringBuilder();
-            byte[] buf = new byte[4096];
-            long deadline = System.currentTimeMillis() + timeoutMs;
-            while (System.currentTimeMillis() < deadline) {
-                int n;
-                try {
-                    n = is.read(buf);
-                } catch (SocketTimeoutException e) {
-                    break;
-                }
-                if (n <= 0) {
-                    break;
-                }
-                acc.append(new String(buf, 0, n, StandardCharsets.US_ASCII));
-                String got = JoanSipBuilder.extractOne(acc);
-                if (got != null && !isProvisional(got)) {
-                    /* Keep this client: stock libims reuses SIPoTCP
-                     * ("TCP client is re-used") for INVITE after REG2. */
-                    sock.setSoTimeout(0);
-                    sTcpKeep = sock;
-                    sock = null;
-                    return got;
-                }
-            }
-            return null;
-        } catch (Exception e) {
-            sTcpFailWhy = e.getClass().getSimpleName();
-            return null;
-        } finally {
-            if (sock != null) {
-                if (ipsec != null) {
-                    try {
-                        ipsec.removeTransportModeTransforms(sock);
-                    } catch (Exception ignored) {
-                        // ignore
-                    }
-                }
-                try {
-                    sock.close();
-                } catch (Exception ignored) {
-                    // ignore
-                }
-            }
-        }
-    }
-
+    /** One receive slice; kept here because JoanSipUa calls it. */
     static String tryRecv(DatagramSocket s, byte[] buf, int timeoutMs) {
-        try {
-            s.setSoTimeout(Math.max(1, timeoutMs));
-            DatagramPacket in = new DatagramPacket(buf, buf.length);
-            s.receive(in);
-            return new String(buf, 0, in.getLength(), StandardCharsets.US_ASCII);
-        } catch (SocketTimeoutException e) {
-            return null;
-        } catch (Exception e) {
-            return null;
-        }
+        return JoanRegTransport.tryRecv(s, buf, timeoutMs);
     }
 
     private static String hidden(TelephonyManager tm, String name) {
@@ -802,5 +801,455 @@ final class JoanAppRegister {
             m = m.substring(0, 60);
         }
         return n + ":" + m;
+    }
+
+    /* ------------------------------------------------------------------
+     * Registration transport. Nested here deliberately: the shared UA
+     * audit harness (tests/run-ua-tests.sh) compiles JoanAppRegister
+     * with a fixed source list, so the transport must travel inside it.
+     * ------------------------------------------------------------------ */
+
+    /**
+     * Registration transport: UDP send/retransmit and the protected-TCP
+     * path, plus the RFC 3261 transaction-identity matching both must
+     * apply before any reply is adopted as this REGISTER's answer.
+     *
+     * <p>Reply matching (RFC 3261 §17.1.3): a response belongs to the
+     * client transaction when its top Via branch and CSeq method match
+     * the request. Call-ID equality is additionally required here
+     * (§8.1.3.4: a UAC MUST check the Call-ID of any received response)
+     * because this stack sends REGISTER straight from the registration
+     * flow rather than through a transaction table. A reply that fails
+     * any check is dropped and the wait continues; one missing the
+     * headers entirely is never accepted.
+     *
+     * <p>Fail-closed rules: the first UDP send must succeed (an
+     * unprotected REGISTER that never left the host must not fall
+     * through to IPsec/UA setup); both IPsec directions must apply on
+     * the TCP socket; only a connect-phase failure may trigger the
+     * caller's UDP fallback (a connected-and-timed-out transaction is a
+     * timeout, not a connect problem, and stock's TransmissionProxy
+     * fallback exists for the connect failure case).
+     */
+    static final class JoanRegTransport {
+        private JoanRegTransport() {}
+
+        /** True when {@code reply} is a final response for {@code request}. */
+        static boolean finalMatches(String request, String reply) {
+            if (request == null || reply == null) {
+                return false;
+            }
+            int code = statusOf(reply);
+            if (code < 200 || code > 699) {
+                return false;
+            }
+            String reqBranch = viaBranch(JoanSipBuilder.header(request, "Via"));
+            String repBranch = viaBranch(JoanSipBuilder.header(reply, "Via"));
+            if (reqBranch == null || reqBranch.isEmpty()
+                    || !reqBranch.equals(repBranch)) {
+                return false;
+            }
+            String reqCallId = JoanSipBuilder.header(request, "Call-ID");
+            String repCallId = JoanSipBuilder.header(reply, "Call-ID");
+            if (reqCallId == null || repCallId == null
+                    || !reqCallId.trim().equals(repCallId.trim())) {
+                return false;
+            }
+            String reqCSeq = JoanSipBuilder.header(request, "CSeq");
+            String repCSeq = JoanSipBuilder.header(reply, "CSeq");
+            return cseqNumber(reqCSeq) != null
+                    && cseqNumber(reqCSeq).equals(cseqNumber(repCSeq))
+                    && cseqMethod(reqCSeq) != null
+                    && cseqMethod(reqCSeq).equals(cseqMethod(repCSeq));
+        }
+
+        /** Status code of a SIP message, 0 when malformed. */
+        static int statusOf(String msg) {
+            if (msg == null || !msg.startsWith("SIP/2.0 ")) {
+                return 0;
+            }
+            try {
+                return Integer.parseInt(msg.substring(8, 11).trim());
+            } catch (RuntimeException e) {
+                return 0;
+            }
+        }
+
+        /** The branch parameter value of a top Via header, or null. */
+        static String viaBranch(String via) {
+            if (via == null) {
+                return null;
+            }
+            int i = via.indexOf("branch=");
+            if (i < 0) {
+                return null;
+            }
+            int s = i + "branch=".length();
+            int e = via.indexOf(';', s);
+            return (e < 0 ? via.substring(s) : via.substring(s, e)).trim();
+        }
+
+        /** The CSeq sequence number as written (exact string compare). */
+        static String cseqNumber(String cseq) {
+            if (cseq == null) {
+                return null;
+            }
+            String t = cseq.trim();
+            int sp = t.indexOf(' ');
+            return sp < 0 ? (t.isEmpty() ? null : t) : t.substring(0, sp);
+        }
+
+        /** The CSeq method token, or null when absent. */
+        static String cseqMethod(String cseq) {
+            if (cseq == null) {
+                return null;
+            }
+            String t = cseq.trim();
+            int sp = t.indexOf(' ');
+            if (sp < 0) {
+                return null;
+            }
+            String m = t.substring(sp + 1).trim();
+            return m.isEmpty() ? null : m;
+        }
+
+        static final class UdpResult {
+            final String reply;
+            final int retx;
+
+            UdpResult(String reply, int retx) {
+                this.reply = reply;
+                this.retx = retx;
+            }
+        }
+
+        /**
+         * Send and wait over UDP, retransmitting on the RFC 3261
+         * §17.1.2.2 schedule (Timer E: T1 = 500 ms, doubling, capped at
+         * T2 = 4 s). The first send failure propagates: the caller must
+         * fail closed instead of proceeding to IPsec/AKA steps for a
+         * message that never left.
+         *
+         * <p>Provisionals are not the transaction's answer (a 100 Trying
+         * must not end the wait), and finals that do not match
+         * {@code identity} are dropped as stray datagrams rather than
+         * adopted. Pass {@code identity == null} to accept any final
+         * (legacy callers).
+         *
+         * @return the matching final, or null on deadline.
+         */
+        static UdpResult sendRecvUdp(DatagramSocket primary,
+                                     DatagramSocket alt, InetAddress dest,
+                                     int dport, byte[] pkt, int timeoutMs,
+                                     String identity) throws Exception {
+            DatagramPacket out = new DatagramPacket(pkt, pkt.length, dest,
+                    dport);
+            primary.send(out);
+            int retx = 0;
+            long start = System.currentTimeMillis();
+            long deadline = start + timeoutMs;
+            long interval = 500;
+            long nextTx = start + interval;
+            byte[] buf = new byte[4096];
+            while (System.currentTimeMillis() < deadline) {
+                long now = System.currentTimeMillis();
+                if (now >= nextTx) {
+                    try {
+                        primary.send(out);
+                        retx++;
+                    } catch (Exception e) {
+                        /* The first send already left; keep listening for
+                         * the answer instead of abandoning the
+                         * transaction. */
+                    }
+                    interval = Math.min(interval * 2, 4000);
+                    nextTx = now + interval;
+                }
+                int slice = (int) Math.min(200,
+                        Math.min(deadline, nextTx)
+                                - System.currentTimeMillis());
+                if (slice <= 0) {
+                    continue;
+                }
+                String got = tryRecv(primary, buf, slice);
+                if (got == null && alt != null) {
+                    got = tryRecv(alt, buf, slice);
+                }
+                if (got == null) {
+                    continue;
+                }
+                int code = statusOf(got);
+                if (code >= 100 && code < 200) {
+                    continue;
+                }
+                if (identity == null || finalMatches(identity, got)) {
+                    return new UdpResult(got, retx);
+                }
+            }
+            return null;
+        }
+
+        /** One receive slice; null on timeout or error. */
+        static String tryRecv(DatagramSocket s, byte[] buf, int timeoutMs) {
+            try {
+                s.setSoTimeout(Math.max(1, timeoutMs));
+                DatagramPacket in = new DatagramPacket(buf, buf.length);
+                s.receive(in);
+                return new String(buf, 0, in.getLength(),
+                        StandardCharsets.US_ASCII);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        static final class TcpResult {
+            final String reply;
+            final Socket keep;
+
+            TcpResult(String reply, Socket keep) {
+                this.reply = reply;
+                this.keep = keep;
+            }
+        }
+
+        /**
+         * Failure of the protected-TCP attempt, carrying the phase where
+         * it died. The trace maps phases to the stock-vs-dropped
+         * discrimination: SETUP (bind/transform), CONNECT (refused or
+         * dropped handshake; the only phase eligible for the caller's
+         * UDP fallback), SEND, READ, TIMEOUT (connected but no matching
+         * final arrived).
+         */
+        static final class TcpFail extends Exception {
+            static final String SETUP = "setup";
+            static final String CONNECT = "connect";
+            static final String SEND = "send";
+            static final String READ = "read";
+            static final String TIMEOUT = "timeout";
+
+            final String phase;
+
+            TcpFail(String phase, Exception cause) {
+                super(phase);
+                this.phase = phase;
+                if (cause != null) {
+                    initCause(cause);
+                }
+            }
+        }
+
+        /**
+         * Protected REGISTER over TCP: bind UE port-c, apply BOTH IPsec
+         * directions (fail closed if either fails), connect to the
+         * P-CSCF's protected server port, write once, then read complete
+         * frames until a final matching {@code identity} arrives.
+         *
+         * <p>TCP has no SIP retransmission (RFC 3261 §18.2.2; Timer E is
+         * UDP only). The successful socket is returned in
+         * {@link TcpResult#keep} with an infinite read timeout so the UA
+         * can reuse it for INVITE, matching stock libims' "TCP client is
+         * re-used".
+         */
+        static TcpResult sendRecvTcp(Network network, InetAddress local,
+                                     int localPort, InetAddress dest,
+                                     int dport, byte[] pkt, int timeoutMs,
+                                     IpSecManager ipsec,
+                                     IpSecTransform inXf,
+                                     IpSecTransform outXf, String identity)
+                throws TcpFail {
+            Socket sock = new Socket();
+            try {
+                sock.setReuseAddress(true);
+                /* Bounded per-read slices so the deadline holds to ~2 s. */
+                sock.setSoTimeout(Math.max(1, Math.min(2000, timeoutMs)));
+                try {
+                    if (network != null) {
+                        network.bindSocket(sock);
+                    }
+                    sock.bind(new InetSocketAddress(local, localPort));
+                } catch (Exception e) {
+                    throw new TcpFail(TcpFail.SETUP, e);
+                }
+                try {
+                    if (ipsec != null) {
+                        if (outXf != null) {
+                            ipsec.applyTransportModeTransform(sock,
+                                    IpSecManager.DIRECTION_OUT, outXf);
+                        }
+                        if (inXf != null) {
+                            /* Fail closed: a socket that cannot receive
+                             * protected responses must not talk to the
+                             * protected port at all. */
+                            ipsec.applyTransportModeTransform(sock,
+                                    IpSecManager.DIRECTION_IN, inXf);
+                        }
+                    }
+                } catch (Exception e) {
+                    throw new TcpFail(TcpFail.SETUP, e);
+                }
+                try {
+                    sock.connect(new InetSocketAddress(dest, dport),
+                            Math.min(4000, Math.max(1, timeoutMs)));
+                } catch (Exception e) {
+                    throw new TcpFail(TcpFail.CONNECT, e);
+                }
+                try {
+                    java.io.OutputStream os = sock.getOutputStream();
+                    os.write(pkt);
+                    os.flush();
+                } catch (Exception e) {
+                    throw new TcpFail(TcpFail.SEND, e);
+                }
+                String got = readFinal(sock.getInputStream(), identity,
+                        new StringBuilder(),
+                        System.currentTimeMillis() + timeoutMs,
+                        new byte[4096]);
+                if (got == null) {
+                    throw new TcpFail(TcpFail.TIMEOUT, null);
+                }
+                sock.setSoTimeout(0);
+                return new TcpResult(got, sock);
+            } catch (TcpFail f) {
+                releaseTcp(ipsec, sock);
+                throw f;
+            } catch (Exception e) {
+                releaseTcp(ipsec, sock);
+                throw new TcpFail(TcpFail.READ, e);
+            }
+        }
+
+        /**
+         * Read complete SIP frames until a matching final arrives or the
+         * deadline passes. Drains every frame already buffered in
+         * {@code acc} BEFORE another blocking read, so a coalesced
+         * 100 Trying + final in one segment is fully consumed; 1xx is
+         * skipped and mismatched finals (wrong Call-ID/branch/CSeq) are
+         * dropped, never returned.
+         *
+         * @return the matching final, or null on deadline/EOF.
+         */
+        static String readFinal(java.io.InputStream is, String identity,
+                                StringBuilder acc, long deadlineMs,
+                                byte[] buf) throws Exception {
+            while (true) {
+                String got = JoanSipBuilder.extractOne(acc);
+                while (got != null) {
+                    int code = statusOf(got);
+                    if (code >= 200 && code <= 699
+                            && (identity == null
+                            || finalMatches(identity, got))) {
+                        return got;
+                    }
+                    got = JoanSipBuilder.extractOne(acc);
+                }
+                if (System.currentTimeMillis() >= deadlineMs) {
+                    return null;
+                }
+                int n;
+                try {
+                    n = is.read(buf, 0, buf.length);
+                } catch (java.net.SocketTimeoutException e) {
+                    continue; // deadline governs
+                }
+                if (n <= 0) {
+                    return null; // EOF
+                }
+                acc.append(new String(buf, 0, n, StandardCharsets.US_ASCII));
+            }
+        }
+
+        private static void releaseTcp(IpSecManager ipsec, Socket sock) {
+            if (sock == null) {
+                return;
+            }
+            if (ipsec != null) {
+                try {
+                    ipsec.removeTransportModeTransforms(sock);
+                } catch (Exception ignored) {
+                    // socket is going away either way
+                }
+            }
+            try {
+                sock.close();
+            } catch (Exception ignored) {
+                // already closed
+            }
+        }
+    }
+
+    /* ------------------------------------------------------------------
+     * Network-lifecycle decisions, shared by the registration driver and
+     * this registration flow. Pure logic (no android types) so the whole
+     * table is provable offline with fixtures.
+     * ------------------------------------------------------------------ */
+
+    static final class JoanRegLifecycle {
+        private JoanRegLifecycle() {}
+
+        /** Poke reasons produced by the IMS network callback. */
+        static final String POKE_IMS_AVAILABLE = "ims available";
+        static final String POKE_IMS_LOST = "ims lost";
+
+        /**
+         * Routine network-presence chatter (the connectivity callback) vs
+         * a genuine user/radio state poke (boot, package-replaced,
+         * airplane). Routine pokes must never tear a healthy
+         * registration; a lost PDN is the only routine event allowed to
+         * clear one.
+         */
+        static boolean routinePoke(String reason) {
+            return POKE_IMS_AVAILABLE.equals(reason)
+                    || POKE_IMS_LOST.equals(reason);
+        }
+
+        /**
+         * Whether this poke must clear the UA's registration. PDN loss
+         * leaves {@code sReg} stale: the binding is gone on the network
+         * while the UA still believes it is registered, so only an
+         * explicit release lets the driver re-register instead of
+         * sleeping until refresh.
+         */
+        static boolean clearOnLost(String reason, boolean uaRegistered) {
+            return POKE_IMS_LOST.equals(reason) && uaRegistered;
+        }
+
+        /**
+         * Whether an availability poke must re-acquire a binding that a
+         * preceding loss may have invalidated. A loss observed while a
+         * REGISTER attempt was in flight could not be acted on at the
+         * time (the attempt owns the UA), so the flag is remembered and
+         * the next availability poke forces a fresh REGISTER even when
+         * the UA still believes it is registered.
+         */
+        static boolean reacquireAfterLoss(String reason,
+                                          boolean staleAfterLoss) {
+            return POKE_IMS_AVAILABLE.equals(reason) && staleAfterLoss;
+        }
+
+        /**
+         * Whether an IMS network carrying {@code networkSubs} belongs to
+         * the subscription the driver resolved ({@code selectedSub}). A
+         * network whose subscription ids are readable and exclude the
+         * selected one is another SIM's IMS PDN and must not be
+         * registered against. When the ids are unavailable the network
+         * is accepted: the capability and transport checks still stand,
+         * and refusing on an opaque API would break single-SIM devices
+         * whose NetworkCapabilities don't publish subscription ids.
+         */
+        static boolean matchesSubscription(int[] networkSubs,
+                                           int selectedSub) {
+            if (selectedSub < 0) {
+                return true; // nothing resolved to pin against
+            }
+            if (networkSubs == null || networkSubs.length == 0) {
+                return true; // API opaque: capability/transport stand
+            }
+            for (int s : networkSubs) {
+                if (s == selectedSub) {
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 }
