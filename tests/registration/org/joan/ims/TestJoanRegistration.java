@@ -257,6 +257,27 @@ public class TestJoanRegistration {
                                     .contains("private-address-and-subscriber"),
                     "udp-retransmit-error-type-without-sensitive-message");
         }
+        check(JoanAppRegister.JoanRegTransport.fallbackUnprotectedTcp(
+                        JoanAppRegister.JoanRegTransport.TcpFail.CONNECT)
+                        && JoanAppRegister.JoanRegTransport.fallbackUnprotectedTcp(
+                        JoanAppRegister.JoanRegTransport.TcpFail.SETUP),
+                "unprotected-tcp-connect-or-setup-may-retry-udp");
+        check(!JoanAppRegister.JoanRegTransport.fallbackUnprotectedTcp(
+                        JoanAppRegister.JoanRegTransport.TcpFail.TIMEOUT)
+                        && !JoanAppRegister.JoanRegTransport.fallbackUnprotectedTcp(
+                        JoanAppRegister.JoanRegTransport.TcpFail.SEND)
+                        && !JoanAppRegister.JoanRegTransport.fallbackUnprotectedTcp(
+                        JoanAppRegister.JoanRegTransport.TcpFail.READ)
+                        && !JoanAppRegister.JoanRegTransport.fallbackUnprotectedTcp(null),
+                "connected-tcp-timeout-does-not-open-a-second-udp-transaction");
+        JoanAppRegister.JoanRegTransport.UdpStats silent =
+                new JoanAppRegister.JoanRegTransport.UdpStats();
+        silent.sent = 4;
+        check(silent.summary("reg2").contains("reg2_send_ok=4")
+                        && silent.summary("reg2").contains("reg2_rx=0")
+                        && silent.summary("reg2").contains("reg2_rejected=0")
+                        && silent.summary("reg2").contains("reg2_rx_err=0"),
+                "reg2-timeout-can-emit-receive-counters-not-only-retx");
     }
 
     static JoanAppRegister.Reg1Result reg1(JoanAppRegister.UdpSocketSource source)

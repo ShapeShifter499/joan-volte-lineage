@@ -2,6 +2,10 @@ package org.joan.ims;
 
 // Offline-only seams: no Android services, no audio, no carrier network.
 class JoanTrace { static void note(String s) {} }
+class JoanImsDiagnostics {
+    static void noteAttemptContext() {}
+    static String attemptContextLine() { return "IMS attempt listener=not_started network={unobserved} data={unobserved}"; }
+}
 class JoanMedia { static int stops; static void stop() { stops++; } }
 class JoanRegistration { static void setRegistered(boolean b, String s) {} }
 class JoanMmTelFeature {

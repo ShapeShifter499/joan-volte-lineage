@@ -247,6 +247,7 @@ final class JoanAppRegister {
                 ? host.substring(0, host.indexOf('%')) : host;
         n.pcscfs.clear();
         n.pcscfs.addAll(plan.peers);
+        JoanImsDiagnostics.noteAttemptContext();
 
         Id id;
         try {
@@ -326,17 +327,39 @@ final class JoanAppRegister {
                 id.impi, id.impu, id.realm, n.localHost,
                 JoanSipBuilder.REG1_PORT, JoanSipBuilder.REG1_PORT, id.imei);
         StringBuilder sb = new StringBuilder();
-        byte[] reg1Bytes = JoanSipBuilder
-                .buildRegister(sipId, txn, 1, null, null, null, null, pani)
-                .getBytes(StandardCharsets.US_ASCII);
-        String reg1Str = new String(reg1Bytes, StandardCharsets.US_ASCII);
+        String reg1Udp = JoanSipBuilder
+                .buildRegister(sipId, txn, 1, null, null, null, null, pani,
+                        false);
+        byte[] reg1Bytes = reg1Udp.getBytes(StandardCharsets.US_ASCII);
+        String reg1Str = reg1Udp;
+        boolean ipv6 = n.local instanceof Inet6Address;
         sb.append("reg1_local=")
-                .append(n.local instanceof Inet6Address ? "v6" : "v4")
+                .append(ipv6 ? "v6" : "v4")
                 .append(" reg1_peer=")
-                .append(pcscf instanceof Inet6Address ? "v6" : "v4").append(' ');
-        Reg1Result first = exchangeReg1(
-                () -> boundUdp(n.network, n.local, JoanSipBuilder.REG1_PORT),
-                pcscf, reg1Bytes, reg1TimeoutMs, reg1Str);
+                .append(pcscf instanceof Inet6Address ? "v6" : "v4")
+                .append(" reg1_mtu=").append(n.mtu)
+                .append(" reg1_oh=")
+                .append(JoanSipBuilder.udpOverhead(ipv6)).append(' ');
+        boolean tcpReg1 = JoanSipBuilder.preferTcp(id.realm, reg1Udp.length(),
+                n.mtu, ipv6);
+        Reg1Result first;
+        if (tcpReg1) {
+            String reg1Tcp = JoanSipBuilder.buildRegister(sipId, txn, 1, null,
+                    null, null, null, pani, true);
+            first = exchangeReg1Tcp(n, pcscf, reg1Tcp, reg1TimeoutMs);
+            if (first.reply == null
+                    && JoanRegTransport.fallbackUnprotectedTcp(first.phase)) {
+                sb.append(first.diagnostic);
+                first = exchangeReg1(
+                        () -> boundUdp(n.network, n.local,
+                                JoanSipBuilder.REG1_PORT),
+                        pcscf, reg1Bytes, reg1TimeoutMs, reg1Str);
+            }
+        } else {
+            first = exchangeReg1(
+                    () -> boundUdp(n.network, n.local, JoanSipBuilder.REG1_PORT),
+                    pcscf, reg1Bytes, reg1TimeoutMs, reg1Str);
+        }
         sb.append(first.diagnostic);
         String r1 = first.reply;
         if (superseded(epoch)) {
@@ -498,18 +521,20 @@ final class JoanAppRegister {
             String r2Identity = null;
             boolean tcpReg2;
             {
-                /* Stock GetTCPCriterionLength semantics: transport is
-                 * chosen per message by size. REG2 is built first as
-                 * the UDP variant (also the fallback bytes); its
-                 * length drives the criterion. */
+                /* Stock GetTCPCriterionLength plus RFC 3261 §18.1.1.
+                 * REG2 is built first as the UDP variant (also the
+                 * fallback bytes); its length plus path MTU drive
+                 * the criterion. TMUS still never leaves UDP. */
                 String reg2Udp = JoanSipBuilder.buildRegister(sip2, txn, 2,
                         ch, res, ck, ik, pani, false);
                 byte[] reg2Bytes = reg2Udp.getBytes(StandardCharsets.US_ASCII);
-                tcpReg2 = JoanSipBuilder.preferProtectedTcp(
-                        id.realm, reg2Udp.length())
-                        || JoanSipBuilder.preferProtectedTcp(
-                        realm, reg2Udp.length());
-                sb.append("reg2len=").append(reg2Udp.length()).append(' ');
+                boolean ipv6Reg2 = n.local instanceof Inet6Address;
+                tcpReg2 = JoanSipBuilder.preferTcp(id.realm, reg2Udp.length(),
+                        n.mtu, ipv6Reg2)
+                        || JoanSipBuilder.preferTcp(realm, reg2Udp.length(),
+                        n.mtu, ipv6Reg2);
+                sb.append("reg2len=").append(reg2Udp.length())
+                        .append(" reg2_mtu=").append(n.mtu).append(' ');
                 if (!tcpReg2) {
                     sb.append("reg2send=").append(mine.portC).append("->")
                             .append(pcscfSec.portS).append(" tpt=udp ");
@@ -519,6 +544,9 @@ final class JoanAppRegister {
                     if (ur != null) {
                         r2 = ur.reply;
                         reg2Retx = ur.retx;
+                        if (ur.stats != null) {
+                            sb.append(ur.stats.summary("reg2"));
+                        }
                     }
                     r2Identity = reg2Udp;
                 } else {
@@ -570,6 +598,9 @@ final class JoanAppRegister {
                         if (ur != null) {
                             r2 = ur.reply;
                             reg2Retx = ur.retx;
+                            if (ur.stats != null) {
+                                sb.append(ur.stats.summary("reg2"));
+                            }
                         }
                         r2Identity = reg2Udp;
                     }
@@ -634,12 +665,14 @@ final class JoanAppRegister {
         final List<InetAddress> locals = new ArrayList<>();
         final List<InetAddress> pcscfs = new ArrayList<>();
         final String pcscfDiag;
+        final int mtu;
         InetAddress local;
         String localHost;
 
-        Net(Network network, String pcscfDiag) {
+        Net(Network network, String pcscfDiag, int mtu) {
             this.network = network;
             this.pcscfDiag = pcscfDiag;
+            this.mtu = mtu;
         }
     }
 
@@ -684,7 +717,13 @@ final class JoanAppRegister {
             if (pcscfInfo.addresses.isEmpty()) {
                 continue;
             }
-            Net n = new Net(network, pcscfInfo.summary());
+            int mtu;
+            try {
+                mtu = lp.getMtu();
+            } catch (Exception e) {
+                mtu = 0;
+            }
+            Net n = new Net(network, pcscfInfo.summary(), mtu);
             n.locals.addAll(JoanImsDiscovery.locals(lp));
             n.pcscfs.addAll(pcscfInfo.addresses);
             return n;
@@ -782,11 +821,16 @@ final class JoanAppRegister {
     }
 
     static final class Reg1Result {
-        final String reply, diagnostic;
+        final String reply, diagnostic, phase;
 
         Reg1Result(String reply, String diagnostic) {
+            this(reply, diagnostic, null);
+        }
+
+        Reg1Result(String reply, String diagnostic, String phase) {
             this.reply = reply;
             this.diagnostic = diagnostic;
+            this.phase = phase;
         }
     }
 
@@ -822,6 +866,38 @@ final class JoanAppRegister {
                     + " error=" + e.getClass().getSimpleName());
         } finally {
             closeQuietly(socket);
+        }
+    }
+
+    /**
+     * Unprotected REG1 over TCP (no IPsec). RFC 3261 §18.1.1: if the
+     * connection is refused or not supported, the caller may retry UDP.
+     * CONNECT and SETUP are the only fallback phases; a connected
+     * timeout stays fail-closed so we do not open a second transaction.
+     */
+    static Reg1Result exchangeReg1Tcp(Net n, InetAddress pcscf, String identity,
+                                      int timeoutMs) {
+        byte[] packet = identity.getBytes(StandardCharsets.US_ASCII);
+        String base = "reg1len=" + packet.length + " reg1_tpt=tcp ";
+        try {
+            JoanRegTransport.TcpResult tr = JoanRegTransport.sendRecvTcp(
+                    n.network, n.local, JoanSipBuilder.REG1_PORT, pcscf,
+                    JoanSipBuilder.PCSCF_SIP_PORT, packet, timeoutMs,
+                    null, null, null, identity);
+            closeQuietly(tr.keep);
+            return new Reg1Result(tr.reply,
+                    base + "reg1_result=final ", null);
+        } catch (JoanRegTransport.TcpFail tf) {
+            String err = tf.phase;
+            Throwable cause = tf.getCause();
+            if (cause != null) {
+                err += " error=" + cause.getClass().getSimpleName();
+            }
+            return new Reg1Result(null, base + "reg1_result=" + tf.phase
+                    + " FAIL: reg1 tcp " + err, tf.phase);
+        } catch (Exception e) {
+            return new Reg1Result(null, base + "reg1_result=setup"
+                    + " FAIL: reg1 setup error=" + e.getClass().getSimpleName());
         }
     }
 
@@ -1215,6 +1291,16 @@ final class JoanAppRegister {
                     initCause(cause);
                 }
             }
+        }
+
+        /**
+         * RFC 3261 §18.1.1 UDP retry after a size-driven TCP attempt.
+         * Only a failed connection establishment (or a bind that never
+         * reached the peer) is eligible. A connected timeout/send/read
+         * already opened a SIP transaction and must not be retried on UDP.
+         */
+        static boolean fallbackUnprotectedTcp(String phase) {
+            return TcpFail.CONNECT.equals(phase) || TcpFail.SETUP.equals(phase);
         }
 
         /**

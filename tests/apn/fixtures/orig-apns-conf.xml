@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<apns version="8">
+    <apn carrier="T-Mobile US" mcc="310" mnc="260" apn="fast.t-mobile.com" type="default,supl" />
+    <apn
+        mcc="452"
+        mnc="04"
+        carrier="Viettel 3G"
+        apn="v-internet"
+        type="default,supl"
+    />
+    <apn
+        mcc="452"
+        mnc="04"
+        carrier="Viettel MMS"
+        apn="v-mms"
+        mmsc="http://mms.viettelmobile.com.vn/mms"
+        mmsport="9201"
+        mmsproxy="192.168.233.10"
+        type="mms"
+    />
+    <apn mcc="452" mnc="01" carrier="Mobifone 3G" apn="m-wap" type="default,supl" />
+</apns>

@@ -117,6 +117,9 @@ files = {
     'etc/permissions/android.hardware.telephony.ims.xml': os.path.join(root,
         'permissions/android.hardware.telephony.ims.xml') if os.path.exists(
             os.path.join(root, 'permissions/android.hardware.telephony.ims.xml')) else None,
+    'apn/viettel-45204.xml': os.path.join(root, 'apn/viettel-45204.xml'),
+    'scripts/merge-viettel-apns.sh': os.path.join(root,
+        'scripts/merge-viettel-apns.sh'),
 }
 os.makedirs(os.path.dirname(out), exist_ok=True)
 with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:

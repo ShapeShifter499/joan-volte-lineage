@@ -19,6 +19,10 @@ final class JoanTrace {
     private static final long MAX_BYTES = 256 * 1024;
     private static volatile String sLastAkaStage = "";
     private static volatile String sLastDial = "";
+    private static volatile String sLastBuild = "unknown";
+    private static volatile String sLastNetwork = "";
+    private static volatile String sLastData = "";
+    private static volatile String sLastAttempt = "";
 
     private JoanTrace() {}
 
@@ -30,7 +34,8 @@ final class JoanTrace {
             try {
                 Context de = ctx.createDeviceProtectedStorageContext();
                 sFile = new File(de.getFilesDir(), "joan-trace.log");
-                note("trace init");
+                sLastBuild = readBuild(ctx);
+                note("trace init build=" + sLastBuild);
             } catch (Throwable t) {
                 Log.w(TAG, "trace init failed: " + t.getClass().getSimpleName());
             }
@@ -49,6 +54,7 @@ final class JoanTrace {
                 /* Unbounded growth was a real finding: 393 KB and climbing
                  * on the test handset, in device-protected storage, with
                  * no rotation. Check occasionally rather than every line. */
+                remember(msg);
                 boolean fresh = false;
                 if (++sWrites % 64 == 0 && sFile.length() > MAX_BYTES) {
                     fresh = true;
@@ -56,7 +62,8 @@ final class JoanTrace {
                 FileWriter fw = new FileWriter(sFile, !fresh);
                 if (fresh) {
                     fw.write(ts + " trace truncated at " + MAX_BYTES
-                            + " bytes\n");
+                            + " bytes build=" + sLastBuild + "\n");
+                    writeRemembered(fw, ts);
                 }
                 fw.write(ts + " " + msg + "\n");
                 fw.close();
@@ -87,5 +94,56 @@ final class JoanTrace {
     static void lastDial(String stage) {
         sLastDial = stage == null ? "" : stage;
         note("dial: " + sLastDial);
+    }
+
+    private static void remember(String msg) {
+        if (msg == null) {
+            return;
+        }
+        if (msg.startsWith("IMS network ")) {
+            sLastNetwork = msg;
+        } else if (msg.startsWith("IMS data_call ")) {
+            sLastData = msg;
+        } else if (msg.startsWith("IMS attempt ")
+                || msg.startsWith("IMS diagnostics ")) {
+            sLastAttempt = msg;
+        }
+    }
+
+    private static void writeRemembered(FileWriter fw, String ts)
+            throws java.io.IOException {
+        if (sLastNetwork != null && !sLastNetwork.isEmpty()) {
+            fw.write(ts + " " + sLastNetwork + "\n");
+        }
+        if (sLastData != null && !sLastData.isEmpty()) {
+            fw.write(ts + " " + sLastData + "\n");
+        }
+        if (sLastAttempt != null && !sLastAttempt.isEmpty()) {
+            fw.write(ts + " " + sLastAttempt + "\n");
+        }
+    }
+
+    /** Version actually installed; never a stale string constant. */
+    static String readBuild(Context ctx) {
+        if (ctx == null) {
+            return "unknown";
+        }
+        try {
+            String path = ctx.getApplicationInfo().sourceDir;
+            android.content.pm.PackageInfo apk = ctx.getPackageManager()
+                    .getPackageArchiveInfo(path, 0);
+            if (apk != null && apk.versionName != null) {
+                return apk.versionName + " (" + apk.versionCode + ")";
+            }
+        } catch (Throwable ignored) {
+            // fall through to PackageManager
+        }
+        try {
+            android.content.pm.PackageInfo pi = ctx.getPackageManager()
+                    .getPackageInfo(ctx.getPackageName(), 0);
+            return pi.versionName + " (" + pi.versionCode + ") [pm]";
+        } catch (Throwable ignored) {
+            return "unknown";
+        }
     }
 }

@@ -151,6 +151,39 @@ if [ -f "$TMP/app/joan-ims-rro.apk" ]; then
     "$PRODMNT/overlay/JoanImsPhoneDefault.apk" 644 u:object_r:system_file:s0
 fi
 
+# --- Viettel 45204 APN overlay (merge, never replace) -------------------
+# TelephonyProvider loads ONE conf file; product wins over system/oem.
+# Copying the 4-row overlay over product/etc/apns-conf.xml would wipe
+# every other carrier. Merge 45204 into the existing world list.
+if [ -f "$TMP/apn/viettel-45204.xml" ] && [ -f "$TMP/scripts/merge-viettel-apns.sh" ]; then
+  ui_print "Merging Viettel 45204 IMS/XCAP APNs into product apns-conf"
+  ORIG="$PRODMNT/etc/apns-conf.xml"
+  SYSORIG="$SYS/etc/apns-conf.xml"
+  BACKUP="$PRODMNT/etc/apns-conf.xml.joan-orig"
+  mkdir -p "$PRODMNT/etc"
+  if [ ! -f "$ORIG" ]; then
+    [ -f "$SYSORIG" ] || error "no apns-conf.xml on product or system; refusing overlay-only install"
+    copy_file "$SYSORIG" "$ORIG" 644 u:object_r:system_file:s0
+  fi
+  if [ ! -f "$BACKUP" ]; then
+    copy_file "$ORIG" "$BACKUP" 644 u:object_r:system_file:s0
+  fi
+  need_file "$BACKUP" 200
+  MERGE_TMP="$TMP/viettel-apn-blocks"
+  export MERGE_TMP
+  sh "$TMP/scripts/merge-viettel-apns.sh" "$BACKUP" \
+    "$TMP/apn/viettel-45204.xml" > "$TMP/apns-merged.xml" \
+    || error "viettel APN merge failed"
+  need_file "$TMP/apns-merged.xml" 200
+  # Merged world list must be larger than the 4-row overlay.
+  osz=$(wc -c < "$TMP/apn/viettel-45204.xml" | tr -d ' ')
+  msz=$(wc -c < "$TMP/apns-merged.xml" | tr -d ' ')
+  [ "$msz" -gt "$osz" ] || error "merged apns-conf.xml not larger than overlay ($msz <= $osz)"
+  grep -q 'apn="ims"' "$TMP/apns-merged.xml" || error "merged APN list missing ims"
+  grep -q 'apn="xcap"' "$TMP/apns-merged.xml" || error "merged APN list missing xcap"
+  copy_file "$TMP/apns-merged.xml" "$ORIG" 644 u:object_r:system_file:s0
+fi
+
 sync
 umount "$PRODMNT" 2>/dev/null || true
 umount "$SYSMNT" 2>/dev/null || true

@@ -32,6 +32,14 @@ mount | grep -q " $PRODMNT " || \
   mount -o rw /dev/block/mapper/product "$PRODMNT" 2>/dev/null || \
   mount -o rw /dev/block/by-name/product "$PRODMNT" 2>/dev/null || true
 rm -f "$PRODMNT/overlay/JoanImsPhoneDefault.apk"
+if [ -f "$PRODMNT/etc/apns-conf.xml.joan-orig" ]; then
+  cat "$PRODMNT/etc/apns-conf.xml.joan-orig" > "$PRODMNT/etc/apns-conf.xml" \
+    || ui_print "  /product: APN backup restore failed"
+  rm -f "$PRODMNT/etc/apns-conf.xml.joan-orig"
+  ui_print "  /product: restored apns-conf.xml from joan-orig backup"
+else
+  ui_print "  /product: no joan-orig APN backup (left apns-conf.xml)"
+fi
 ui_print "  /product: overlay removed (or absent)"
 
 sync

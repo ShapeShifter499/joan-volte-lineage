@@ -208,9 +208,9 @@ final class JoanSipBuilder {
      * Stock selects transport per message by SIZE, not per carrier:
      * TCP only when the message exceeds the carrier's criterion
      * (CMCC XML {@code common_tcp_criterion_len=1300}, per-reg 0 =
-     * fall back to common; T-Mobile 1200; Korea 4096 ≈ always UDP).
-     * A REGISTER is ~1 kB, under every shipped criterion, so REG2
-     * goes out UDP-first on every known core. Alpha7's blanket
+     * fall back to common; T-Mobile 1200; Korea/GLOBAL 4096).
+     * Measured REG1 is ~1.6 kB and protected REG2 ~1.8 kB, so the
+     * GLOBAL 4096 threshold still keeps both on UDP. Alpha7's blanket
      * MCC-460 forced-TCP misread this (field result: TCP connect to
      * port-s refused, silent UDP fallback after ESP SYNs had already
      * hit port-s) -- see
@@ -219,11 +219,55 @@ final class JoanSipBuilder {
      *
      * Returns true only when the message exceeds the carrier's
      * criterion, mirroring GetTCPCriterionLength. Policy is full
-     * PLMN (MCC+MNC), never MCC alone.
+     * PLMN (MCC+MNC), never MCC alone. Callers that also have a path
+     * MTU must use {@link #preferTcp} so RFC 3261 §18.1.1 can still
+     * select TCP under GLOBAL 4096.
      */
     static boolean preferProtectedTcp(String realm, int messageLen) {
         int criterion = tcpCriterionFor(realm);
         return criterion > 0 && messageLen > criterion;
+    }
+
+    /**
+     * UDP/IP header bytes used by RFC 3261 §18.1.1's path-MTU check.
+     * IPv4+UDP is 28; IPv6+UDP is 48. No IPsec ESP overhead here:
+     * unprotected REG1 is the NOS failure, and TMUS stays UDP.
+     */
+    static int udpOverhead(boolean ipv6) {
+        return ipv6 ? 48 : 28;
+    }
+
+    /**
+     * Per-message TCP selection for REG1 and REG2.
+     *
+     * <p>Order, all fail-closed on TMUS/non-3GPP ({@code criterion <= 0}):
+     * stock {@code GetTCPCriterionLength}; then, for IPv6 only, RFC 3261
+     * §18.1.1 when {@code mtu > 0} ({@code sipLen + 48 + 200 > mtu});
+     * then, for IPv6 with unknown MTU, RFC's 1300-byte unknown-path-MTU
+     * rule. IPv4 stays on the stock criterion: Viettel REG1 already
+     * answers 401 over ~1568-byte IPv4 UDP.
+     *
+     * <p>pjsip {@code sip_util.c} uses the same 1300-byte UDP threshold
+     * ({@code PJSIP_UDP_SIZE_THRESHOLD}) when TCP switch is enabled.
+     * Joan's 310-260 UDP exception remains explicit Joan policy, not
+     * stock {@code AdjustTcpCriterionPerMtu}.
+     */
+    static boolean preferTcp(String realm, int messageLen, int mtu,
+                             boolean ipv6) {
+        int criterion = tcpCriterionFor(realm);
+        if (criterion <= 0) {
+            return false;
+        }
+        if (messageLen > criterion) {
+            return true;
+        }
+        if (!ipv6) {
+            return false;
+        }
+        if (mtu > 0) {
+            return messageLen + udpOverhead(true) + 200 > mtu;
+        }
+        return messageLen > 1300;
     }
 
     /**

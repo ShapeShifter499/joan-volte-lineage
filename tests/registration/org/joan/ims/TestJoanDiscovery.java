@@ -43,6 +43,13 @@ public class TestJoanDiscovery {
         check(JoanImsDiagnostics.protocol(0).equals("IP") && JoanImsDiagnostics.protocol(2).equals("IPV4V6"), "protocol labels match Android constants");
         check(JoanImsDiagnostics.protocol(-999).equals("UNKNOWN"), "invalid protocol is explicit");
         check(JoanImsDiagnostics.apnClass("3gnet").equals("other") && JoanImsDiagnostics.apnClass("ims").equals("ims"), "APN classification not subscriber text");
+        check(JoanImsDiagnostics.attemptContextLine().contains("listener=not_started")
+                        && JoanImsDiagnostics.attemptContextLine().contains("network={unobserved}")
+                        && JoanImsDiagnostics.attemptContextLine().contains("data={unobserved}"),
+                "attempt context reprints cached diagnostics even when unobserved");
+        check(!JoanImsDiagnostics.attemptContextLine().contains("192.")
+                        && !JoanImsDiagnostics.attemptContextLine().contains("pcscf.ims"),
+                "attempt context never invents addresses");
         JoanAppRegister.stop();
         JoanImsDiscovery.Plan chosen = JoanAppRegister.selectAttemptPlan(Arrays.asList(v6,v4),Arrays.asList(p6,p4));
         check(chosen.local.equals(v6), "real register planner starts v6");

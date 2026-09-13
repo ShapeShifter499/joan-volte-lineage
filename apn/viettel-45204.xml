@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    SPDX-FileCopyrightText: The LineageOS Project
+    SPDX-License-Identifier: Apache-2.0
+
+    Joan overlay for Viettel (MCC 452 / MNC 04). Replaces the 45204
+    rows in product apns-conf.xml; other PLMNs are left untouched.
+
+    Internet + MMS names follow LineageOS vendor_apn VN.xml.
+    IMS + XCAP/UT rows and IPV4V6 follow AOSP device/sample
+    android15-qpr2 apns-full-conf.xml (carrier_id 1899).
+
+    This is a catalog patch. It does not claim to fix protected REG2
+    or IPsec. A tester who already has an IMS PDN and 401 is past
+    this layer.
+-->
+<apns version="8">
+    <apn
+        mcc="452"
+        mnc="04"
+        carrier="Viettel 3G"
+        apn="v-internet"
+        type="default,ia,supl"
+        protocol="IPV4V6"
+        roaming_protocol="IPV4V6"
+        carrier_id="1899"
+    />
+    <apn
+        mcc="452"
+        mnc="04"
+        carrier="Viettel MMS"
+        apn="v-mms"
+        mmsc="http://mms.viettelmobile.com.vn/mms"
+        mmsport="9201"
+        mmsproxy="192.168.233.10"
+        type="mms"
+        carrier_id="1899"
+    />
+    <apn
+        mcc="452"
+        mnc="04"
+        carrier="Viettel IMS"
+        apn="ims"
+        type="ims"
+        protocol="IPV4V6"
+        roaming_protocol="IPV4V6"
+        carrier_id="1899"
+    />
+    <apn
+        mcc="452"
+        mnc="04"
+        carrier="Viettel Ut"
+        apn="xcap"
+        type="xcap"
+        protocol="IPV4V6"
+        roaming_protocol="IPV4V6"
+        carrier_id="1899"
+    />
+</apns>

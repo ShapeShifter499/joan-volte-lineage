@@ -13,14 +13,36 @@ loopback control socket.
 > and earpiece follow Dialer. Caller ID is the asserted number; Dialer
 > can still overlay a matching contact.
 
-## Current tester build: v0.4.0-alpha16
+## Current tester build: v0.4.0-alpha18
 
-`v0.4.0-alpha16` (versionCode 24) is the current tester zip. It is a
+`v0.4.0-alpha18` (versionCode 26) is the current tester zip. It is a
 prerelease: offline suites passed; it is **not** a live-carrier qualifier
 and has not replaced the last T-Mobile bench-validated build
 (`v0.4.0-alpha12` on the development US998). Sideload
 `joan-volte-recovery.zip` from the GitHub release, reboot, then confirm
-the `build` row below reads `0.4.0-alpha16 (24)`.
+the `build` row below reads `0.4.0-alpha18 (26)`.
+
+What landed after the last public GitHub alpha (`v0.4.0-alpha16`), plus
+the 2026-09-13 NOS/Viettel pass:
+
+- **Self-contained traces.** Startup writes `trace init build=…`. Truncation
+  reprints the last IMS network/data/attempt snapshot so a later excerpt
+  still has MTU and family counts. Each REGISTER cycle also writes an
+  `IMS attempt` line even when those summaries have not changed.
+- **REG1 IPv6 TCP switch (RFC 3261 §18.1.1).** NOS's ~1630-byte IPv6
+  REG1 now prefers TCP when the path MTU is unknown or the request is
+  within 200 bytes of it. IPv4 (Viettel 401 over UDP) stays on the stock
+  size criterion. T-Mobile 310-260 still never leaves UDP. A refused TCP
+  connect may retry UDP; a connected TCP timeout does not.
+- **REG2 receive counters.** A protected UDP timeout now prints
+  `reg2_send_ok` / `reg2_rx` / `reg2_rejected` / `reg2_rx_err`, not only
+  `reg2retx`.
+- **Viettel 45204 APN overlay (alpha18).** Recovery **merges** AOSP-shaped
+  IMS (`apn=ims`) and XCAP/UT (`apn=xcap`) rows, plus IPV4V6 on internet,
+  into the existing product `apns-conf.xml`. It does **not** replace the
+  world list. Uninstall restores `apns-conf.xml.joan-orig`. This is a
+  catalog patch, not a proven REG2/IPsec fix. AOSP has no Viettel
+  CarrierConfig asset (carrier_id 1899); Joan does not invent one.
 
 What landed after the last public GitHub alpha (`v0.4.0-alpha10`), plus
 the 2026-09-13 fresh pass:
@@ -84,16 +106,15 @@ IK, nonce, or P-CSCF addresses. If a dump does, redact those before
 opening an issue.
 
 **1. Confirm the build, then paste the state rows** (safe for a public
-issue):
+issue; ordinary ADB shell is enough — no root):
 
 ```
-adb root
 adb shell content query --uri content://org.joan.ims.state
 ```
 
 Useful rows:
 
-- `build` — must be `0.4.0-alpha16 (24)` for this zip
+- `build` — must be `0.4.0-alpha18 (26)` for this zip
 - `registered`, `last_state`, `aka_stage`, `last_register`, `last_dial`
 - `ims_diag_listener`, `ims_diag_data`, `ims_diag_network`, `ims_diag_ages`
 
@@ -104,6 +125,16 @@ retransmit counts, reg2 status. `ims_diag_data` is telephony’s view of
 the IMS data call (configured vs negotiated protocol, cause, address
 families). Empty P-CSCF / `PDN advertised none` is a discovery clue, **not**
 proof the SIM lacks VoLTE provisioning.
+
+After this zip, a Viettel tester can also paste (safe; no subscriber
+identity):
+
+```
+adb shell content query --uri content://telephony/carriers --where "numeric='45204'"
+```
+
+Look for `type` containing `ims` and `xcap`. File coverage is not proof
+the selected runtime APN is IMS.
 
 **2. Pull the rotating trace** (survives logcat rotation; needs root
 because `adbd` drops root across reboot):

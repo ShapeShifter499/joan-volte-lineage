@@ -140,6 +140,21 @@ final class JoanImsDiagnostics {
         if (!value.equals(sNetwork)) { sNetwork = value; JoanTrace.note("IMS network " + value); }
     }
     static void networkGone() { sNetwork = "unavailable"; sNetworkAt = 0; }
+
+    /**
+     * Compact, identity-free snapshot for a REGISTER cycle. Change-only
+     * {@link #network} lines can be rotated out of joan-trace.log; this
+     * always reprints the cached values so a later excerpt still has MTU
+     * and family counts.
+     */
+    static String attemptContextLine() {
+        return "IMS attempt listener=" + sListenerState
+                + " network={" + sNetwork + "} data={" + sData + "}";
+    }
+
+    static void noteAttemptContext() {
+        JoanTrace.note(attemptContextLine());
+    }
     static String listener() { return sListenerState; }
     static String data() { return sData; }
     static String network() { return sNetwork; }

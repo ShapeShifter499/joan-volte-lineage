@@ -186,11 +186,10 @@ public final class TestJoanSip {
     }
 
     /**
-     * Transport follows stock GetTCPCriterionLength: TCP only when the
-     * message exceeds the carrier's size criterion. A ~1 kB REGISTER
-     * stays UDP on every known core (CMCC 1300, TMUS 1200, Korea
-     * 4096). Alpha7's blanket MCC-460 forced-TCP produced
-     * tcp_fail=connect + silent UDP fallback in the field.
+     * Transport follows stock GetTCPCriterionLength, then RFC 3261
+     * §18.1.1 on IPv6. A measured ~1.6 kB REG1 stays UDP on IPv4
+     * GLOBAL (Viettel 401 over UDP). The same size on IPv6 with
+     * unknown MTU takes TCP (NOS REG1 silence). TMUS never leaves UDP.
      */
     private static void testProtectedTcpChoice() {
         check(!JoanSipBuilder.preferProtectedTcp(
@@ -271,6 +270,29 @@ public final class TestJoanSip {
         check(JoanSipBuilder.preferProtectedTcp(
                         "ims.mnc04.mcc452.3gppnetwork.org", 5000),
                 "unknown-PLMN message over 4096 goes TCP (stock 4096 live)");
+        String nos = "ims.mnc003.mcc268.3gppnetwork.org";
+        String viettel = "ims.mnc004.mcc452.3gppnetwork.org";
+        String tmus = "ims.mnc260.mcc310.3gppnetwork.org";
+        check(JoanSipBuilder.udpOverhead(true) == 48
+                        && JoanSipBuilder.udpOverhead(false) == 28,
+                "UDP/IP overhead is 48 for IPv6 and 28 for IPv4");
+        check(JoanSipBuilder.preferTcp(nos, 1630, 0, true),
+                "NOS IPv6 REG1 over 1300 with unknown MTU uses TCP");
+        check(!JoanSipBuilder.preferTcp(nos, 1000, 0, true),
+                "small IPv6 REGISTER with unknown MTU stays UDP");
+        check(JoanSipBuilder.preferTcp(nos, 1630, 1500, true),
+                "NOS IPv6 REG1 within 200 bytes of 1500 MTU uses TCP");
+        check(!JoanSipBuilder.preferTcp(nos, 1630, 2500, true),
+                "IPv6 REGISTER under a large path MTU stays UDP");
+        check(!JoanSipBuilder.preferTcp(viettel, 1568, 0, false),
+                "Viettel IPv4 REG1 stays UDP when MTU is unknown");
+        check(!JoanSipBuilder.preferTcp(viettel, 1830, 1500, false),
+                "Viettel IPv4 REG2 does not inherit the IPv6 RFC switch");
+        check(!JoanSipBuilder.preferTcp(tmus, 1830, 0, true)
+                        && !JoanSipBuilder.preferTcp(tmus, 9216, 1280, true),
+                "TMUS never leaves UDP even on IPv6/small MTU");
+        check(!JoanSipBuilder.preferTcp(null, 1630, 0, true),
+                "non-3GPP realm never flips REG1 to TCP");
     }
 
     private static void testInvite() {
