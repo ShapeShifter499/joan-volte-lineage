@@ -243,6 +243,17 @@ final class JoanAka {
         } catch (Exception e) {
             return null;
         }
+        if (d.length >= 2) {
+            int sw = ((d[d.length - 2] & 0xff) << 8) | (d[d.length - 1] & 0xff);
+            if (sw == 0x9000) {
+                d = java.util.Arrays.copyOf(d, d.length - 2);
+            } else if ((sw & 0xFF00) == 0x6100
+                    || (sw & 0xF000) == 0x6000
+                    || (sw & 0xF000) == 0x9000) {
+                JoanTrace.note("apdu: sw=" + String.format(Locale.ROOT, "%04x", sw));
+                return null;
+            }
+        }
         if (d.length < 2 || (d[0] & 0xff) != 0xDB) {
             JoanTrace.note("apdu: not DB tag len=" + d.length
                     + " b0=" + (d.length > 0
@@ -354,12 +365,13 @@ final class JoanAka {
                     else if (k.startsWith("IK=")) ik = k.substring(3);
                 }
                 if (res != null && ck != null && ik != null
-                        && res.length() >= 16
-                        && ck.length() >= 32 && ik.length() >= 32) {
+                        && res.length() >= 8 && (res.length() % 2) == 0
+                        && res.length() / 2 >= 4 && res.length() / 2 <= 16
+                        && ck.length() == 32 && ik.length() == 32) {
                     return new String[]{
                             lower(res),
-                            lower(ck.substring(0, 32)),
-                            lower(ik.substring(0, 32))
+                            lower(ck),
+                            lower(ik)
                     };
                 } else {
                     JoanTrace.note("aka resp lens res="
@@ -376,56 +388,45 @@ final class JoanAka {
         // UICC return:  DB
         //   tag=success(0xDB)| len | tag=E1(res) ... | tag=CK ... | tag=IK ...
         byte[] raw = b64(resp);
-        if (raw == null || raw.length < 40) {
+        if (raw == null || raw.length < 8) {
             return null;
         }
         return parseUiccTlv(raw);
     }
 
+    /**
+     * TS 31.102 / AOSP EAP-AKA success:
+     *   DB | resLen | RES | ckLen | CK | ikLen | IK
+     * Prefer that length-delimited form. The older "DB | total | RES|CK|IK"
+     * layout is only used when the length-delimited fields are absent.
+     */
     private static String[] parseUiccTlv(byte[] d) {
-        // Walk top-level: expect 0xDC (status words + data) or direct
-        // sequence starting at a data object.
-        int i = 0;
-        while (i + 2 <= d.length) {
-            int tag = d[i] & 0xff;
-            int len = d[i + 1] & 0xff;
-            if (i + 2 + len > d.length) {
-                break;
+        if (d.length < 2 || (d[0] & 0xff) != 0xDB) {
+            return null;
+        }
+        int declared = d[1] & 0xff;
+        int p = 2 + declared;
+        if (declared >= 4 && declared <= 16
+                && p + 1 + 16 + 1 + 16 <= d.length) {
+            int ckLen = d[p] & 0xff;
+            int ikLen = d[p + 1 + 16] & 0xff;
+            if (ckLen == 16 && ikLen == 16) {
+                return new String[]{
+                        hex(d, 2, declared),
+                        hex(d, p + 1, 16),
+                        hex(d, p + 1 + 16 + 1, 16)
+                };
             }
-            if (tag == 0xDB && len >= 38) {
-                // success TLV containing RES(16) CKKEY(16) IKKEY(16) + tags
-                byte[] inner = new byte[len];
-                System.arraycopy(d, i + 2, inner, 0, len);
-                return splitResCkIk(inner);
+        }
+        if (declared >= 36 && 2 + declared <= d.length) {
+            int resLen = declared - 32;
+            if (resLen >= 4 && resLen <= 16) {
+                return new String[]{
+                        hex(d, 2, resLen),
+                        hex(d, 2 + resLen, 16),
+                        hex(d, 2 + resLen + 16, 16)
+                };
             }
-            i += 2 + len;
-        }
-        // Raw fallback: some modems return bare RES|CK|IK (48 bytes).
-        if (d.length >= 48) {
-            return new String[]{
-                    hex(d, 0, 16), hex(d, 16, 16), hex(d, 32, 16)};
-        }
-        return null;
-    }
-
-    private static String[] splitResCkIk(byte[] inner) {
-        // Inner: tag 0x81 res (often prefixed by length), CK, IK same.
-        // Be tolerant: find three consecutive 16-byte values after tag 0x81.
-        int p = 0;
-        short t1 = inner.length > 0 ? (short) (inner[0] & 0xff) : -1;
-        if (t1 == 0x81 && inner.length >= 49) {
-            // 81 <len> res(16) ck(16) ik(16)
-            return new String[]{
-                    hex(inner, 2, 16), hex(inner, 18, 16),
-                    hex(inner, 34, 16)
-            };
-        }
-        // Unqualified layout: res@0, ck@16, ik@32
-        if (inner.length >= 48) {
-            return new String[]{
-                    hex(inner, 0, 16), hex(inner, 16, 16),
-                    hex(inner, 32, 16)
-            };
         }
         return null;
     }

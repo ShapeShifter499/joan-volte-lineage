@@ -18,6 +18,7 @@ final class JoanTrace {
     /** Truncate past this; the log is a bring-up aid, not an archive. */
     private static final long MAX_BYTES = 256 * 1024;
     private static volatile String sLastAkaStage = "";
+    private static volatile String sLastDial = "";
 
     private JoanTrace() {}
 
@@ -72,5 +73,19 @@ final class JoanTrace {
     static void akaStage(String stage) {
         sLastAkaStage = stage == null ? "" : stage;
         note("AKA/REG stage: " + sLastAkaStage);
+    }
+
+    /**
+     * Coarse Dialer/Telecom routing. Counts and flags only: never the
+     * callee, Call-ID, or SIP URI. Distinguishes "IMS never asked" from
+     * "session started then failed".
+     */
+    static String lastDial() {
+        return sLastDial;
+    }
+
+    static void lastDial(String stage) {
+        sLastDial = stage == null ? "" : stage;
+        note("dial: " + sLastDial);
     }
 }

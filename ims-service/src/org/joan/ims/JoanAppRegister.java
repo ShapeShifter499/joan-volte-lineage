@@ -18,6 +18,7 @@ import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -66,10 +67,25 @@ final class JoanAppRegister {
     private static final Object EPOCH_LOCK = new Object();
     private static boolean sInProgress;
 
+    /**
+     * Stock parity (alpha12): after a failed registration on one address
+     * family, GlobalAoSRegistration::RegistraionOnDifferentIPVersion flips
+     * the local IP version (v6&harr;v4) and retries once before falling
+     * back to normal backoff. This flag carries that "one flip retry is
+     * due" decision from the failure point to the next discovery pass;
+     * it never applies to a healthy or single-family path.
+     */
+    private static volatile boolean sFlipPending;
+
+    /** Whether the last discovery pass saw both address families. */
+    private static volatile boolean sLastDualFamily;
+
     /** Supersede any in-flight attempt (network lost / state change). */
     static void stop() {
         synchronized (EPOCH_LOCK) {
             sEpoch++;
+            sFlipPending = false;
+            sAttemptWasAlternate = false;
         }
     }
 
@@ -101,6 +117,101 @@ final class JoanAppRegister {
         }
     }
 
+    /** Whether a flip retry is due; consumed at REGISTER planning. */
+    static boolean flipPending() {
+        return sFlipPending;
+    }
+
+    /** Discovery notes whether the last PDN was dual-family (test hook). */
+    static void noteLastAttemptDualFamily(boolean dual) {
+        sLastDualFamily = dual;
+    }
+
+    /** Whether the last discovery saw both families (test hook). */
+    static boolean lastAttemptDualFamily() {
+        return sLastDualFamily;
+    }
+
+    /** Request the one flip retry (driver failure path). */
+    static void requestFlipRetry() {
+        sFlipPending = true;
+    }
+
+    /** Consume the flip preference; true at most once per failure. */
+    static boolean consumeFlipRetry() {
+        if (sFlipPending) {
+            sFlipPending = false;
+            return true;
+        }
+        return false;
+    }
+
+    /** Whether the last REGISTER attempt ran on the alternate family. */
+    private static volatile boolean sAttemptWasAlternate;
+
+    /**
+     * Stock-parity decision helper (pure, testable): a whole-cycle failure
+     * that waited out its candidates earns one address-family flip retry
+     * only when the PDN actually has a usable pair of the other family
+     * (dualFamily is computed from locals+peers, so a v4-only PDN or a
+     * P-CSCF-less PDN can never earn an impossible flip). Mid-flight
+     * supersession and explicit rejections never flip.
+     */
+    static boolean shouldFlipIpVersion(String lastRegister,
+                                       boolean dualFamily) {
+        if (lastRegister == null) {
+            return false;
+        }
+        if (!lastRegister.contains("FAIL: reg1 no answer from any of")
+                && !lastRegister.contains("FAIL: reg1 no matching final")
+                && !lastRegister.contains("reg1_result=timeout")
+                && !lastRegister.contains("FAIL: reg2 timeout")) {
+            return false;
+        }
+        return dualFamily;
+    }
+
+    /**
+     * Consume the flip decision and choose this attempt's family plan.
+     * Called at REGISTER time (not discovery) so the plan matches the
+     * sockets that will actually carry REG1/REG2.
+     */
+    static JoanImsDiscovery.Plan selectAttemptPlan(
+            List<InetAddress> locals, List<InetAddress> peers) {
+        synchronized (EPOCH_LOCK) {
+            JoanImsDiscovery.Plan primary =
+                    JoanImsDiscovery.plan(locals, peers, false);
+            boolean wantAlternate = sFlipPending;
+            sFlipPending = false;
+            sAttemptWasAlternate = false;
+            if (!wantAlternate) {
+                return primary;
+            }
+            JoanImsDiscovery.Plan alternate =
+                    JoanImsDiscovery.plan(locals, peers, true);
+            if (alternate.local == null) {
+                return primary; // single-family PDN: nothing to flip to
+            }
+            sAttemptWasAlternate = true;
+            return alternate;
+        }
+    }
+
+    /** Whether a failed cycle earns one family flip; records it if so. */
+    static boolean scheduleFamilyRetry(String lastRegister) {
+        synchronized (EPOCH_LOCK) {
+            if (sAttemptWasAlternate) {
+                return false; // stock: one flip, then normal backoff
+            }
+            if (!shouldFlipIpVersion(lastRegister,
+                    lastAttemptDualFamily())) {
+                return false;
+            }
+            sFlipPending = true;
+            return true;
+        }
+    }
+
     private JoanAppRegister() {}
 
     static String run(Context ctx) {
@@ -124,9 +235,18 @@ final class JoanAppRegister {
         if (n == null) {
             return "FAIL: no IMS network";
         }
-        if (n.local == null || n.pcscfs.isEmpty()) {
-            return "FAIL: no IMS addresses";
+        JoanImsDiscovery.Plan plan =
+                selectAttemptPlan(n.locals, n.pcscfs);
+        if (plan.local == null || plan.peers.isEmpty()) {
+            return "FAIL: no usable P-CSCF/local pair ("
+                    + (n.pcscfDiag == null ? "unread" : n.pcscfDiag) + ")";
         }
+        n.local = plan.local;
+        String host = plan.local.getHostAddress();
+        n.localHost = host != null && host.contains("%")
+                ? host.substring(0, host.indexOf('%')) : host;
+        n.pcscfs.clear();
+        n.pcscfs.addAll(plan.peers);
 
         Id id;
         try {
@@ -192,8 +312,9 @@ final class JoanAppRegister {
 
     /**
      * REG1 + AKA + IPsec + REG2 against one advertised P-CSCF.
-     * @return null if REG1 was silent (try the next); otherwise a
-     *         diagnosis string, with {@code OK} on REGISTER 200.
+     * @return a sanitized diagnosis for every candidate, including REG1
+     *         setup/send errors and no-matching-final deadlines. Only a
+     *         successful REGISTER 200 carries {@code OK}.
      */
     private static String tryPcscf(Context ctx, Net n, Id id, String pani,
                                    InetAddress pcscf, int reg1TimeoutMs,
@@ -209,24 +330,20 @@ final class JoanAppRegister {
                 .buildRegister(sipId, txn, 1, null, null, null, null, pani)
                 .getBytes(StandardCharsets.US_ASCII);
         String reg1Str = new String(reg1Bytes, StandardCharsets.US_ASCII);
-        String r1 = null;
-        DatagramSocket s1 = null;
-        try {
-            s1 = boundUdp(n.network, n.local, JoanSipBuilder.REG1_PORT);
-            JoanRegTransport.UdpResult r1r = JoanRegTransport.sendRecvUdp(
-                    s1, null, pcscf, JoanSipBuilder.PCSCF_SIP_PORT,
-                    reg1Bytes, reg1TimeoutMs, reg1Str);
-            r1 = r1r == null ? null : r1r.reply;
-        } catch (Exception e) {
-            r1 = null;
-        } finally {
-            closeQuietly(s1);
-        }
-        if (r1 == null) {
-            return null;
-        }
+        sb.append("reg1_local=")
+                .append(n.local instanceof Inet6Address ? "v6" : "v4")
+                .append(" reg1_peer=")
+                .append(pcscf instanceof Inet6Address ? "v6" : "v4").append(' ');
+        Reg1Result first = exchangeReg1(
+                () -> boundUdp(n.network, n.local, JoanSipBuilder.REG1_PORT),
+                pcscf, reg1Bytes, reg1TimeoutMs, reg1Str);
+        sb.append(first.diagnostic);
+        String r1 = first.reply;
         if (superseded(epoch)) {
             return sb + "FAIL: superseded by network/state change";
+        }
+        if (r1 == null) {
+            return sb.toString();
         }
         JoanSipBuilder.Reply p1 = JoanSipBuilder.parseReply(r1);
         if (p1 == null) {
@@ -514,14 +631,15 @@ final class JoanAppRegister {
 
     private static final class Net {
         final Network network;
-        final InetAddress local;
-        final String localHost;
+        final List<InetAddress> locals = new ArrayList<>();
         final List<InetAddress> pcscfs = new ArrayList<>();
+        final String pcscfDiag;
+        InetAddress local;
+        String localHost;
 
-        Net(Network network, InetAddress local, String localHost) {
+        Net(Network network, String pcscfDiag) {
             this.network = network;
-            this.local = local;
-            this.localHost = localHost;
+            this.pcscfDiag = pcscfDiag;
         }
     }
 
@@ -561,91 +679,39 @@ final class JoanAppRegister {
             if (lp == null) {
                 continue;
             }
-            InetAddress local = null;
-            for (android.net.LinkAddress la : lp.getLinkAddresses()) {
-                InetAddress a = la.getAddress();
-                if (a instanceof Inet6Address && !a.isLinkLocalAddress()
-                        && !a.isLoopbackAddress()) {
-                    local = a;
-                    break;
-                }
-            }
-            if (local == null) {
-                for (android.net.LinkAddress la : lp.getLinkAddresses()) {
-                    InetAddress a = la.getAddress();
-                    if (!a.isLoopbackAddress() && !a.isLinkLocalAddress()) {
-                        local = a;
-                        break;
-                    }
-                }
-            }
-            if (local == null) {
+            TelephonyManager tm0 = ctx.getSystemService(TelephonyManager.class);
+            JoanImsDiscovery.Pcscfs pcscfInfo = JoanImsDiscovery.read(lp, tm0);
+            if (pcscfInfo.addresses.isEmpty()) {
                 continue;
             }
-            String host = local.getHostAddress();
-            if (host != null && host.contains("%")) {
-                host = host.substring(0, host.indexOf('%'));
-            }
-            Net n = new Net(network, local, host);
-            try {
-                Method m = lp.getClass().getMethod("getPcscfServers");
-                List<?> list = (List<?>) m.invoke(lp);
-                if (list != null) {
-                    for (Object o : list) {
-                        if (o instanceof InetAddress) {
-                            n.pcscfs.add((InetAddress) o);
-                        }
-                    }
-                }
-            } catch (Exception ignored) {
-                // no P-CSCF API
-            }
-            if (!n.pcscfs.isEmpty()) {
-                /* Same-family P-CSCFs first: the local address family is
-                 * what the sockets bind to, so a mixed v4/v6 advertisement
-                 * must not send a v6-bound socket at a v4 node. Stable
-                 * sort keeps the PDN's own preference inside each group. */
-                orderPcscfsByFamily(n.pcscfs, local);
-                return n;
-            }
+            Net n = new Net(network, pcscfInfo.summary());
+            n.locals.addAll(JoanImsDiscovery.locals(lp));
+            n.pcscfs.addAll(pcscfInfo.addresses);
+            return n;
         }
         return null;
     }
 
     /**
      * Whether the IMS network's subscription ids include the selected one.
-     * Reflects the SystemApi {@code NetworkCapabilities.getSubscriptionIds}
-     * like the P-CSCF read; an opaque/unavailable API accepts (see
-     * {@link JoanRegLifecycle#matchesSubscription}).
+     * AOSP {@code NetworkCapabilities.getSubscriptionIds} returns a Set that
+     * the framework only populates for NETWORK_FACTORY holders — on this
+     * priv-app it can arrive EMPTY (redaction), which must never veto a
+     * network reached through the subscription-scoped request; only a
+     * populated, non-matching set is a mismatch.
      */
     static boolean networkSubsMatch(NetworkCapabilities nc, int sub) {
         if (sub < 0) {
             return true;
         }
-        int[] ids = null;
+        Object ids = null;
         try {
             Method m = nc.getClass().getMethod("getSubscriptionIds");
-            Object v = m.invoke(nc);
-            if (v instanceof int[]) {
-                ids = (int[]) v;
-            }
+            ids = m.invoke(nc);
         } catch (Exception e) {
             return true; // API unavailable: capability check above stands
         }
-        return JoanRegLifecycle.matchesSubscription(ids, sub);
-    }
-
-    private static void orderPcscfsByFamily(List<InetAddress> pcscfs,
-                                            InetAddress local) {
-        final boolean wantV6 = local instanceof Inet6Address;
-        pcscfs.sort((a, b) -> {
-            boolean a6 = a instanceof Inet6Address;
-            boolean b6 = b instanceof Inet6Address;
-            if (a6 == b6) {
-                return 0;
-            }
-            return a6 == wantV6 ? -1 : 1;
-        });
+        return JoanImsDiscovery.matchesSubscription(ids, sub);
     }
 
     private static Id readIdentity(Context ctx) {
@@ -710,15 +776,70 @@ final class JoanAppRegister {
         return "3GPP-E-UTRAN-FDD";
     }
 
+    @FunctionalInterface
+    interface UdpSocketSource {
+        DatagramSocket open() throws Exception;
+    }
+
+    static final class Reg1Result {
+        final String reply, diagnostic;
+
+        Reg1Result(String reply, String diagnostic) {
+            this.reply = reply;
+            this.diagnostic = diagnostic;
+        }
+    }
+
+    /**
+     * Own the REG1 socket and retain evidence at the caller boundary.
+     * RFC 3261 17.1.4 and pjsip sip_transaction.c distinguish transport
+     * errors from deadlines. Counts below describe local API results only;
+     * a successful send is NOT evidence that a packet reached the P-CSCF.
+     * Exception messages may contain IPs/identities and are never emitted.
+     */
+    static Reg1Result exchangeReg1(UdpSocketSource source, InetAddress pcscf,
+                                    byte[] packet, int timeoutMs, String identity) {
+        JoanRegTransport.UdpStats stats = new JoanRegTransport.UdpStats();
+        String base = "reg1len=" + packet.length + " reg1_tpt=udp ";
+        String phase = "setup";
+        DatagramSocket socket = null;
+        try {
+            socket = source.open();
+            phase = "send";
+            JoanRegTransport.UdpResult r = JoanRegTransport.sendRecvUdp(
+                    socket, null, pcscf, JoanSipBuilder.PCSCF_SIP_PORT,
+                    packet, timeoutMs, identity, stats);
+            String result = r.reply == null
+                    ? "reg1_result=timeout FAIL: reg1 no matching final"
+                    : "reg1_result=final ";
+            return new Reg1Result(r.reply, base + stats.summary("reg1") + result);
+        } catch (Exception e) {
+            if (stats.sent > 0) {
+                phase = "transport";
+            }
+            return new Reg1Result(null, base + stats.summary("reg1")
+                    + "reg1_result=" + phase + " FAIL: reg1 " + phase
+                    + " error=" + e.getClass().getSimpleName());
+        } finally {
+            closeQuietly(socket);
+        }
+    }
+
     private static DatagramSocket boundUdp(Network network, InetAddress local,
                                            int port) throws Exception {
         DatagramSocket s = new DatagramSocket(null);
-        s.setReuseAddress(true);
-        if (network != null) {
-            network.bindSocket(s);
+        try {
+            s.setReuseAddress(true);
+            if (network != null) {
+                network.bindSocket(s);
+            }
+            s.bind(new InetSocketAddress(local, port));
+            return s;
+        } catch (Exception e) {
+            // The caller cannot close a socket the factory never returned.
+            closeQuietly(s);
+            throw e;
         }
-        s.bind(new InetSocketAddress(local, port));
-        return s;
     }
 
     /**
@@ -913,13 +1034,38 @@ final class JoanAppRegister {
             return m.isEmpty() ? null : m;
         }
 
+        /** Local API observations, NOT proof of delivery to the peer. */
+        static final class UdpStats {
+            int sent, sendErrors, received, provisionals, rejected, receiveErrors;
+            String sendErrorType, receiveErrorType;
+
+            String summary(String prefix) {
+                String s = prefix + "_send_ok=" + sent
+                        + " " + prefix + "retx=" + Math.max(0, sent - 1)
+                        + " " + prefix + "_send_err=" + sendErrors
+                        + " " + prefix + "_rx=" + received
+                        + " " + prefix + "_1xx=" + provisionals
+                        + " " + prefix + "_rejected=" + rejected
+                        + " " + prefix + "_rx_err=" + receiveErrors;
+                if (sendErrorType != null) {
+                    s += " " + prefix + "_send_error=" + sendErrorType;
+                }
+                if (receiveErrorType != null) {
+                    s += " " + prefix + "_rx_error=" + receiveErrorType;
+                }
+                return s + " ";
+            }
+        }
+
         static final class UdpResult {
             final String reply;
             final int retx;
+            final UdpStats stats;
 
-            UdpResult(String reply, int retx) {
+            UdpResult(String reply, UdpStats stats) {
                 this.reply = reply;
-                this.retx = retx;
+                this.retx = Math.max(0, stats.sent - 1);
+                this.stats = stats;
             }
         }
 
@@ -936,16 +1082,31 @@ final class JoanAppRegister {
          * adopted. Pass {@code identity == null} to accept any final
          * (legacy callers).
          *
-         * @return the matching final, or null on deadline.
+         * @return result with a matching final, or reply=null on deadline;
+         *         statistics survive both cases. First-send errors propagate.
          */
         static UdpResult sendRecvUdp(DatagramSocket primary,
                                      DatagramSocket alt, InetAddress dest,
                                      int dport, byte[] pkt, int timeoutMs,
                                      String identity) throws Exception {
+            return sendRecvUdp(primary, alt, dest, dport, pkt, timeoutMs,
+                    identity, new UdpStats());
+        }
+
+        private static UdpResult sendRecvUdp(DatagramSocket primary,
+                                     DatagramSocket alt, InetAddress dest,
+                                     int dport, byte[] pkt, int timeoutMs,
+                                     String identity, UdpStats stats) throws Exception {
             DatagramPacket out = new DatagramPacket(pkt, pkt.length, dest,
                     dport);
-            primary.send(out);
-            int retx = 0;
+            try {
+                primary.send(out);
+                stats.sent++;
+            } catch (Exception e) {
+                stats.sendErrors++;
+                stats.sendErrorType = e.getClass().getSimpleName();
+                throw e;
+            }
             long start = System.currentTimeMillis();
             long deadline = start + timeoutMs;
             long interval = 500;
@@ -956,11 +1117,13 @@ final class JoanAppRegister {
                 if (now >= nextTx) {
                     try {
                         primary.send(out);
-                        retx++;
+                        stats.sent++;
                     } catch (Exception e) {
-                        /* The first send already left; keep listening for
-                         * the answer instead of abandoning the
-                         * transaction. */
+                        stats.sendErrors++;
+                        stats.sendErrorType = e.getClass().getSimpleName();
+                        /* The first send returned successfully; preserve
+                         * the existing wait/retry behavior, but no longer
+                         * hide failed retries from diagnostics. */
                     }
                     interval = Math.min(interval * 2, 4000);
                     nextTx = now + interval;
@@ -971,33 +1134,49 @@ final class JoanAppRegister {
                 if (slice <= 0) {
                     continue;
                 }
-                String got = tryRecv(primary, buf, slice);
+                String got = tryRecv(primary, buf, slice, stats);
                 if (got == null && alt != null) {
-                    got = tryRecv(alt, buf, slice);
+                    got = tryRecv(alt, buf, slice, stats);
                 }
                 if (got == null) {
                     continue;
                 }
                 int code = statusOf(got);
                 if (code >= 100 && code < 200) {
+                    stats.provisionals++;
                     continue;
                 }
                 if (identity == null || finalMatches(identity, got)) {
-                    return new UdpResult(got, retx);
+                    return new UdpResult(got, stats);
                 }
+                stats.rejected++;
             }
-            return null;
+            return new UdpResult(null, stats);
         }
 
         /** One receive slice; null on timeout or error. */
         static String tryRecv(DatagramSocket s, byte[] buf, int timeoutMs) {
+            return tryRecv(s, buf, timeoutMs, null);
+        }
+
+        private static String tryRecv(DatagramSocket s, byte[] buf, int timeoutMs,
+                                      UdpStats stats) {
             try {
                 s.setSoTimeout(Math.max(1, timeoutMs));
                 DatagramPacket in = new DatagramPacket(buf, buf.length);
                 s.receive(in);
+                if (stats != null) {
+                    stats.received++;
+                }
                 return new String(buf, 0, in.getLength(),
                         StandardCharsets.US_ASCII);
+            } catch (SocketTimeoutException expected) {
+                return null; // A normal poll timeout is not a socket error.
             } catch (Exception e) {
+                if (stats != null) {
+                    stats.receiveErrors++;
+                    stats.receiveErrorType = e.getClass().getSimpleName();
+                }
                 return null;
             }
         }

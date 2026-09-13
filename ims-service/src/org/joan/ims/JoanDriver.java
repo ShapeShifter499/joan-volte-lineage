@@ -174,6 +174,7 @@ final class JoanDriver {
                     JoanRegistration.setRegistered(false, null);
                     if (d.quietIdle) {
                         releaseImsRequest(app);
+                        JoanImsDiagnostics.stop();
                     }
                     logState((d.quietIdle ? "quiet-idle: " : "waiting: ")
                             + d.reason);
@@ -214,6 +215,15 @@ final class JoanDriver {
                     JoanSipUa.release();
                 }
                 JoanRegistration.setRegistered(false, null);
+                /* Stock parity (alpha12, repaired alpha13): a whole-cycle
+                 * failure earns one address-family flip retry when the PDN
+                 * actually has a usable pair of the other family — the
+                 * decision runs at REGISTER time against the real locals
+                 * and peers. v4-only or P-CSCF-less PDNs never flip. */
+                if (JoanAppRegister.scheduleFamilyRetry(sLastRegister)) {
+                    logState("registration failed; one IP-version flip "
+                            + "retry due (stock parity)");
+                }
                 logState("app REGISTER failed; backoff "
                         + (sRegisterBackoffMs / 1000) + "s");
                 Thread.sleep(sRegisterBackoffMs);
@@ -301,6 +311,7 @@ final class JoanDriver {
             return Discovery.quietIdle("SIM not ready (state=" + simState
                     + ")");
         }
+        JoanImsDiagnostics.start(app, sub);
 
         Integer preferredMode = preferredNetworkMode(app, sub);
         if (preferredMode != null && !networkModeAllowsLte(preferredMode)) {
@@ -363,6 +374,7 @@ final class JoanDriver {
         }
 
         if (ims == null || imsLp == null) {
+            JoanImsDiagnostics.networkGone();
             if (dataNetwork != TelephonyManager.NETWORK_TYPE_UNKNOWN
                     && !isLteLike(dataNetwork)) {
                 return Discovery.waitFor(
@@ -376,25 +388,32 @@ final class JoanDriver {
          * loss must be observed so the stale binding gets cleared. */
         ensureImsRequest(cm);
 
-        InetAddress local = pickLocal(imsLp);
-        String pcscf = collectPcscfs(imsLp);
-        if (local == null) {
-            return Discovery.waitFor("IMS network has no usable local address");
+        /* Discovery evidence: usable locals, every advertised/SIM P-CSCF,
+         * and an event-driven data-call line (configured vs negotiated
+         * families) — one trace cycle answers the class-1b questions. */
+        List<InetAddress> locals = JoanImsDiscovery.locals(imsLp);
+        JoanImsDiscovery.Pcscfs pcscfInfo = JoanImsDiscovery.read(imsLp, tm);
+        /* Readiness only. The flip flag is consumed at REGISTER time by
+         * selectAttemptPlan so a discovery pass cannot steal it. */
+        JoanImsDiscovery.Plan attempt = JoanImsDiscovery.plan(
+                locals, pcscfInfo.addresses, false);
+        JoanImsDiscovery.Plan alternate = JoanImsDiscovery.plan(
+                locals, pcscfInfo.addresses, true);
+        JoanAppRegister.noteLastAttemptDualFamily(alternate.local != null);
+        JoanImsDiagnostics.network(sub, safeSimOperator(tm), imsLp,
+                pcscfInfo);
+        if (attempt.local == null || attempt.peers.isEmpty()) {
+            return Discovery.waitFor("no usable P-CSCF/local pair ("
+                    + pcscfInfo.summary() + ")");
         }
-        if (pcscf == null) {
-            /* Say which of the three it is, and what the PDN does have, so
-             * a report distinguishes an empty PCO from an unreadable API. */
-            int n4 = 0;
-            int n6 = 0;
-            for (android.net.LinkAddress la : imsLp.getLinkAddresses()) {
-                if (la.getAddress() instanceof Inet6Address) {
-                    n6++;
-                } else {
-                    n4++;
-                }
+        StringBuilder pcscf = new StringBuilder();
+        for (InetAddress a : attempt.peers) {
+            if (pcscf.length() > 0) {
+                pcscf.append(',');
             }
-            return Discovery.waitFor("IMS network has no P-CSCF: "
-                    + sPcscfReason + " (addrs v4=" + n4 + " v6=" + n6 + ")");
+            String host = a.getHostAddress();
+            int scope = host.indexOf('%');
+            pcscf.append(scope >= 0 ? host.substring(0, scope) : host);
         }
         // Only after radio+IMS prerequisites are met do we ask for identity.
         String domain = hiddenString(tm, "getIsimDomain");
@@ -432,7 +451,7 @@ final class JoanDriver {
             return Discovery.waitFor("no IMS realm derivable from SIM");
         }
         Cycle c = new Cycle();
-        c.pcscf = pcscf;
+        c.pcscf = pcscf.toString();
         return Discovery.ready(c);
     }
 
@@ -702,6 +721,11 @@ final class JoanDriver {
      * only sign was "IMS network has no usable IPv6 local address"
      * repeating forever.
      */
+    /**
+     * A usable local address on the IMS PDN: IPv6 preferred, IPv4 accepted.
+     * Kept as a small compatibility shim for any external reader; discovery
+     * itself now runs through JoanImsDiscovery.locals/plan.
+     */
     private static InetAddress pickLocal(LinkProperties lp) {
         for (android.net.LinkAddress la : lp.getLinkAddresses()) {
             InetAddress a = la.getAddress();
@@ -712,7 +736,27 @@ final class JoanDriver {
         }
         for (android.net.LinkAddress la : lp.getLinkAddresses()) {
             InetAddress a = la.getAddress();
-            if (!a.isLinkLocalAddress() && !a.isLoopbackAddress()) {
+            if (!a.isLoopbackAddress() && !a.isLinkLocalAddress()) {
+                return a;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The other family's address for the stock-parity flip retry: if
+     * pickLocal returned v6, this returns the first v4 (and vice versa).
+     * Null when the PDN is single-family.
+     */
+    private static InetAddress pickLocalFlipped(LinkProperties lp) {
+        boolean preferV6 = pickLocal(lp) instanceof Inet6Address;
+        for (android.net.LinkAddress la : lp.getLinkAddresses()) {
+            InetAddress a = la.getAddress();
+            boolean is6 = a instanceof Inet6Address;
+            if (a.isLoopbackAddress() || a.isLinkLocalAddress()) {
+                continue;
+            }
+            if (is6 != preferV6) {
                 return a;
             }
         }
@@ -729,78 +773,13 @@ final class JoanDriver {
      * fails over across whatever it is given, so give it all of them.
      */
     /**
-     * Why collectPcscfs() came back empty. "no P-CSCF yet" was reported
-     * identically whether the PDN advertised none, the hidden API was
-     * missing, or the call threw -- three different problems with three
-     * different answers, and no way to tell them apart from a user report.
+     * Why discovery found no P-CSCF. Replaced in alpha13 by
+     * JoanImsDiscovery.Pcscfs (link vs SIM source, counts, API status).
      */
     private static volatile String sPcscfReason = "";
 
     static String pcscfReason() {
         return sPcscfReason;
-    }
-
-    private static String collectPcscfs(LinkProperties lp) {
-        Method m;
-        try {
-            m = lp.getClass().getMethod("getPcscfServers");
-        } catch (NoSuchMethodException e) {
-            sPcscfReason = "getPcscfServers absent on this build";
-            return null;
-        } catch (Throwable t) {
-            sPcscfReason = "getPcscfServers lookup "
-                    + t.getClass().getSimpleName();
-            return null;
-        }
-        try {
-            List<?> list = (List<?>) m.invoke(lp);
-            if (list == null) {
-                sPcscfReason = "getPcscfServers returned null";
-                return null;
-            }
-            if (list.isEmpty()) {
-                /* The usual cause is not a fault here: a network hands out
-                 * no P-CSCF to a subscriber it has not provisioned for
-                 * VoLTE. Confirmed once on an old SIM that connected the
-                 * IMS PDN and advertised nothing. Say so, or the next
-                 * person spends a day looking for a bug on this side. */
-                sPcscfReason = "PDN advertised none -- SIM may not be "
-                        + "provisioned for VoLTE";
-                return null;
-            }
-            sPcscfReason = "";
-            StringBuilder v6 = new StringBuilder();
-            StringBuilder rest = new StringBuilder();
-            for (Object o : list) {
-                if (!(o instanceof InetAddress)) {
-                    continue;
-                }
-                String a = stripScope(((InetAddress) o).getHostAddress());
-                if (a == null || a.isEmpty() || a.indexOf(',') >= 0) {
-                    continue;
-                }
-                StringBuilder into = (o instanceof Inet6Address) ? v6 : rest;
-                if (into.length() > 0) {
-                    into.append(',');
-                }
-                into.append(a);
-            }
-            if (v6.length() > 0 && rest.length() > 0) {
-                v6.append(',').append(rest);
-            } else if (v6.length() == 0) {
-                v6 = rest;
-            }
-            if (v6.length() == 0) {
-                sPcscfReason = "P-CSCF list had " + list.size()
-                        + " entries but none usable";
-                return null;
-            }
-            return v6.toString();
-        } catch (Throwable t) {
-            sPcscfReason = "getPcscfServers threw "
-                    + t.getClass().getSimpleName();
-            return null;
-        }
     }
 
     private static String stripScope(String host) {

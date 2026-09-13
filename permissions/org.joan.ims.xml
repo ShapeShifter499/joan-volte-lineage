@@ -4,6 +4,7 @@
     <privapp-permissions package="org.joan.ims">
         <permission name="android.permission.MODIFY_PHONE_STATE" />
         <permission name="android.permission.READ_PRIVILEGED_PHONE_STATE" />
+        <permission name="android.permission.READ_PRECISE_PHONE_STATE" />
         <permission name="android.permission.CONNECTIVITY_USE_RESTRICTED_NETWORKS" />
         <permission name="android.permission.BIND_IMS_SERVICE" />
         <permission name="android.permission.RECORD_AUDIO" />

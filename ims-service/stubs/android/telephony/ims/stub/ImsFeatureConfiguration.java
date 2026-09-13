@@ -1,5 +1,6 @@
-/* Compile-time stub for AOSP ImsFeatureConfiguration. NOT packed. */
-package android.telephony.ims;
+/* Compile-time stub for LOS 22.2 ImsFeatureConfiguration. NOT packed.
+ * Real class lives in android.telephony.ims.stub (ImsService.java import). */
+package android.telephony.ims.stub;
 
 public class ImsFeatureConfiguration {
     public ImsFeatureConfiguration() {}

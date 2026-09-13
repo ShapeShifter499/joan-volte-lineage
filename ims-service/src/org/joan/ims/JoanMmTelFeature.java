@@ -261,6 +261,7 @@ public class JoanMmTelFeature extends MmTelFeature {
     @Override
     public ImsCallSessionImplBase createCallSession(ImsCallProfile profile) {
         Log.i(TAG, "createCallSession");
+        JoanTrace.lastDial("createCallSession");
         if (profile != null
                 && profile.getServiceType()
                         == ImsCallProfile.SERVICE_TYPE_CONFERENCE) {
@@ -303,13 +304,19 @@ public class JoanMmTelFeature extends MmTelFeature {
      */
     @Override
     public int shouldProcessCall(String[] numbers) {
+        int n = numbers == null ? 0 : numbers.length;
         if (!JoanRegistration.isRegistered()) {
+            JoanTrace.lastDial("shouldProcessCall n=" + n
+                    + " registered=false -> CSFB");
             return PROCESS_CALL_CSFB;
         }
         if (anyEmergency(numbers)) {
-            JoanTrace.note("emergency dial -> CSFB");
+            JoanTrace.lastDial("shouldProcessCall n=" + n
+                    + " emergency -> CSFB");
             return PROCESS_CALL_CSFB;
         }
+        JoanTrace.lastDial("shouldProcessCall n=" + n
+                + " registered=true -> IMS");
         return PROCESS_CALL_IMS;
     }
 

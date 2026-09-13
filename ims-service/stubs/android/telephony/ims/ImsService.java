@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.os.IBinder;
 
 import android.telephony.ims.feature.MmTelFeature;
+import android.telephony.ims.stub.ImsFeatureConfiguration;
 import android.telephony.ims.stub.ImsRegistrationImplBase;
 
 /** Shape-compatible with AOSP ImsService for compile-time resolution. */

@@ -65,6 +65,8 @@ final class JoanSipUa {
     private static volatile String sToHdr;
     private static volatile String sFromHdr;
     private static volatile String sHeldInvite;
+    /** Exact 200 OK for the INVITE that established the live dialog. */
+    private static volatile String sInvite200;
     private static volatile String sOurToTag;
     private static volatile String sRingingToTag;
     private static volatile InetAddress sMediaIp;
@@ -334,7 +336,9 @@ final class JoanSipUa {
                 sInS = held[3] instanceof IpSecTransform ? (IpSecTransform) held[3] : null;
             }
             sReg = sPublicId != null && !sPublicId.isEmpty();
-            sCall = false;
+            if (!liveCalls) {
+                sCall = false;
+            }
             sReplyTcp = false;
             sExpiresSec = JoanSipBuilder.grantedExpiresSeconds(
                     reg2Msg, id.contactPort);
@@ -481,7 +485,7 @@ final class JoanSipUa {
                     return "ERR unsupported codec " + media.payloadType;
                 }
                 if (!sendAck2xx(id, dlg, target, route, toHdr, fromHdr,
-                        dlg.cseq)) {
+                        wait.cseq)) {
                     clearInviteWait(wait);
                     return "ERR ack send";
                 }
@@ -489,12 +493,15 @@ final class JoanSipUa {
                     if (addingSecond) {
                         sParked = snapLocked();
                     }
+                    dlg.remoteTag = JoanSipBuilder.tagOf(toHdr);
+                    dlg.remoteCseq = 0;
                     sDlg = dlg;
                     sDest = dest;
                     sTarget = target;
                     sRoute = route;
                     sToHdr = toHdr;
                     sFromHdr = fromHdr;
+                    sOurToTag = JoanSipBuilder.tagOf(fromHdr);
                     sCall = true;
                     sLiveHeld = false;
                     if (media != null) {
@@ -702,7 +709,11 @@ final class JoanSipUa {
             dlg.callId = JoanSipBuilder.header(invite, "Call-ID");
             dlg.cseq = 0;
             dlg.fromTag = tag;
+            dlg.remoteTag = JoanSipBuilder.tagOf(
+                    JoanSipBuilder.header(invite, "From"));
+            dlg.remoteCseq = JoanSipBuilder.cseqForMethod(invite, "INVITE");
             sDlg = dlg;
+            sInvite200 = resp;
             String invTo = JoanSipBuilder.header(invite, "To");
             if (invTo == null) {
                 invTo = "";
@@ -893,7 +904,9 @@ final class JoanSipUa {
             int subCseq = JoanSipBuilder.cseqForMethod(sub, "SUBSCRIBE");
             NonInviteWait subWait = new NonInviteWait(
                     focusLeg.dlg.callId, subCseq, "SUBSCRIBE",
-                    JoanSipBuilder.branchOf(sub), null);
+                    JoanSipBuilder.branchOf(sub), null,
+                    JoanSipBuilder.tagOf(focusLeg.fromHdr),
+                    JoanSipBuilder.tagOf(focusLeg.toHdr));
             sNonInviteWaits.put(subWait.callId + "#SUBSCRIBE#"
                     + subWait.cseq, subWait);
             try {
@@ -1030,7 +1043,7 @@ final class JoanSipUa {
                 sendAck2xx(id, dlg, targetOf(rx, focus), routeOf(rx),
                         nullToEmpty(JoanSipBuilder.header(rx, "To")),
                         nullToEmpty(JoanSipBuilder.header(rx, "From")),
-                        dlg.cseq);
+                        wait.cseq);
                 FocusLeg fl = new FocusLeg();
                 fl.dlg = dlg;
                 fl.target = targetOf(rx, focus);
@@ -1038,7 +1051,22 @@ final class JoanSipUa {
                 fl.toHdr = nullToEmpty(JoanSipBuilder.header(rx, "To"));
                 fl.fromHdr = nullToEmpty(
                         JoanSipBuilder.header(rx, "From"));
+                fl.ourToTag = JoanSipBuilder.tagOf(fl.fromHdr);
                 fl.held = false;
+                JoanSipBuilder.Media media = JoanSipBuilder.parseSdp(rx);
+                if (media != null) {
+                    try {
+                        fl.mediaIp = InetAddress.getByName(media.ip);
+                        fl.mediaPort = media.port;
+                        fl.mediaRtcpPort = media.rtcpPort;
+                        fl.mediaPt = media.payloadType;
+                        fl.mux = media.mux;
+                    } catch (Exception ignored) {
+                        fl.mediaIp = null;
+                    }
+                }
+                dlg.remoteTag = JoanSipBuilder.tagOf(fl.toHdr);
+                dlg.remoteCseq = 0;
                 clearInviteWait(wait);
                 return fl;
             }
@@ -1083,15 +1111,20 @@ final class JoanSipUa {
         final String method;
         final String branch;
         final String referToUri;
+        final String localTag;
+        final String remoteTag;
         boolean notifyFinal;
         boolean notifyFailure;
         NonInviteWait(String callId, int cseq, String method,
-                      String branch, String referToUri) {
+                      String branch, String referToUri,
+                      String localTag, String remoteTag) {
             this.callId = callId;
             this.cseq = cseq;
             this.method = method;
             this.branch = branch;
             this.referToUri = referToUri;
+            this.localTag = localTag == null ? "" : localTag;
+            this.remoteTag = remoteTag == null ? "" : remoteTag;
         }
     }
 
@@ -1138,7 +1171,9 @@ final class JoanSipUa {
         int referCseq = JoanSipBuilder.cseqForMethod(refer, "REFER");
         String branch = JoanSipBuilder.branchOf(refer);
         NonInviteWait w = new NonInviteWait(focusLeg.dlg.callId,
-                referCseq, "REFER", branch, referTo);
+                referCseq, "REFER", branch, referTo,
+                JoanSipBuilder.tagOf(focusLeg.fromHdr),
+                JoanSipBuilder.tagOf(focusLeg.toHdr));
         sNonInviteWaits.put(w.callId + "#REFER#" + w.cseq, w);
         try {
             sendReply(refer.getBytes(StandardCharsets.US_ASCII));
@@ -1722,6 +1757,16 @@ final class JoanSipUa {
                     if (id == null || Integer.parseInt(id) != w.cseq) {
                         continue;
                     }
+                    String notifyTo = JoanSipBuilder.tagOf(
+                            JoanSipBuilder.header(rx, "To"));
+                    String notifyFrom = JoanSipBuilder.tagOf(
+                            JoanSipBuilder.header(rx, "From"));
+                    if (w.localTag.isEmpty() || w.remoteTag.isEmpty()
+                            || !w.localTag.equals(notifyTo)
+                            || !w.remoteTag.equals(notifyFrom)) {
+                        JoanTrace.note("app REFER NOTIFY ignored: dialog mismatch");
+                        continue;
+                    }
                     /* Answer the NOTIFY so the notifier stops retrying. */
                     try {
                         sendReply(buildResponse(rx, 200, "OK", sId,
@@ -1808,10 +1853,16 @@ final class JoanSipUa {
             String cid = JoanSipBuilder.header(rx, "Call-ID");
             String remoteTag = JoanSipBuilder.tagOf(
                     JoanSipBuilder.header(rx, "From"));
+            String localTag = JoanSipBuilder.tagOf(
+                    JoanSipBuilder.header(rx, "To"));
             JoanTrace.note("app inbound BYE");
             synchronized (LOCK) {
                 if (sParked != null && sParked.dlg != null
-                        && cid != null && cid.equals(sParked.dlg.callId)) {
+                        && cid != null && cid.equals(sParked.dlg.callId)
+                        && !remoteTag.isEmpty()
+                        && remoteTag.equals(JoanSipBuilder.tagOf(sParked.toHdr))
+                        && !localTag.isEmpty()
+                        && localTag.equals(sParked.ourToTag)) {
                     String tag = sParked.ourToTag != null
                             ? sParked.ourToTag : "x";
                     sParked = null;
@@ -1826,8 +1877,11 @@ final class JoanSipUa {
                 }
                 boolean liveMatch = sCall && sDlg != null && cid != null
                         && cid.equals(sDlg.callId)
-                        && (remoteTag.isEmpty() || remoteTag.equals(
-                                JoanSipBuilder.tagOf(sToHdr)));
+                        && !remoteTag.isEmpty()
+                        && remoteTag.equals(JoanSipBuilder.tagOf(sToHdr))
+                        && !localTag.isEmpty()
+                        && (localTag.equals(sOurToTag)
+                        || localTag.equals(JoanSipBuilder.tagOf(sFromHdr)));
                 if (!liveMatch) {
                     /* A BYE that names no dialog we own must not tear down
                      * whichever call happens to be live. RFC 3261 15.1.2:
@@ -1966,19 +2020,44 @@ final class JoanSipUa {
                 && invCid.equals(sDlg.callId)) {
             /* Same dialog as the live call: either a retransmission of the
              * answered INVITE or an in-dialog re-INVITE (remote hold etc.).
-             * Neither is a new call. */
-            if (invCseq > 0 && invCseq <= sDlg.cseq) {
-                String tag = sOurToTag != null ? sOurToTag : "dlg";
-                String sdp = sId != null
-                        ? JoanSipBuilder.sdpAnswer(sId.localIp, RTP_PORT, rx)
-                        : null;
+             * Neither is a new call. Local CSeq is never the remote space. */
+            String remoteTag = JoanSipBuilder.tagOf(
+                    JoanSipBuilder.header(rx, "From"));
+            String localTag = JoanSipBuilder.tagOf(
+                    JoanSipBuilder.header(rx, "To"));
+            boolean tagsMatch = !remoteTag.isEmpty()
+                    && remoteTag.equals(sDlg.remoteTag != null
+                    && !sDlg.remoteTag.isEmpty()
+                    ? sDlg.remoteTag : JoanSipBuilder.tagOf(sToHdr))
+                    && (localTag.isEmpty()
+                    || localTag.equals(sOurToTag)
+                    || localTag.equals(JoanSipBuilder.tagOf(sFromHdr)));
+            if (invCseq > 0 && invCseq == sDlg.remoteCseq && tagsMatch) {
+                String cached = sInvite200;
                 try {
-                    sendReply(buildResponse(rx, 200, "OK", sId, tag, sdp)
-                            .getBytes(StandardCharsets.US_ASCII));
+                    if (cached != null && !cached.isEmpty()) {
+                        sendReply(cached.getBytes(StandardCharsets.US_ASCII));
+                    } else {
+                        String tag = sOurToTag != null ? sOurToTag : "dlg";
+                        sendReply(buildResponse(rx, 200, "OK", sId, tag, null)
+                                .getBytes(StandardCharsets.US_ASCII));
+                    }
                 } catch (Exception ignored) {
                     // ignore
                 }
                 JoanTrace.note("app inbound INVITE retransmit; 200 resent");
+                return;
+            }
+            if (!tagsMatch) {
+                try {
+                    sendReply(buildResponse(rx, 481,
+                            "Call/Transaction Does Not Exist", sId,
+                            "stale", null)
+                            .getBytes(StandardCharsets.US_ASCII));
+                } catch (Exception ignored) {
+                    // ignore
+                }
+                JoanTrace.note("app inbound INVITE dialog-tag mismatch; 481");
                 return;
             }
             if (inFlightOn(invCid)) {
@@ -2005,6 +2084,17 @@ final class JoanSipUa {
                 // ignore
             }
             JoanTrace.note("app inbound in-dialog re-INVITE declined 488");
+            return;
+        }
+        if (sHeldInvite != null) {
+            try {
+                sendReply(buildResponse(rx, 486, "Busy Here", sId,
+                        "busy", null)
+                        .getBytes(StandardCharsets.US_ASCII));
+            } catch (Exception ignored) {
+                // ignore
+            }
+            JoanTrace.note("app inbound INVITE busy; ringing already held");
             return;
         }
         JoanSipBuilder.Media offer = JoanSipBuilder.parseSdp(rx);
@@ -2069,14 +2159,24 @@ final class JoanSipUa {
             held = sHeldInvite;
         }
         String callId = JoanSipBuilder.header(rx, "Call-ID");
+        int cancelCseq = JoanSipBuilder.cseqForMethod(rx, "CANCEL");
+        int inviteCseq = held != null
+                ? JoanSipBuilder.cseqForMethod(held, "INVITE") : -1;
         boolean mine = held != null && callId != null
-                && callId.equals(JoanSipBuilder.header(held, "Call-ID"));
+                && callId.equals(JoanSipBuilder.header(held, "Call-ID"))
+                && cancelCseq > 0 && cancelCseq == inviteCseq;
         String tag = sRingingToTag != null ? sRingingToTag
                 : (sOurToTag != null ? sOurToTag : "x");
         /* A UAS answers the CANCEL transaction either way. */
         try {
-            sendReply(buildResponse(rx, 200, "OK", sId, tag, null)
-                    .getBytes(StandardCharsets.US_ASCII));
+            if (mine) {
+                sendReply(buildResponse(rx, 200, "OK", sId, tag, null)
+                        .getBytes(StandardCharsets.US_ASCII));
+            } else {
+                sendReply(buildResponse(rx, 481,
+                        "Call/Transaction Does Not Exist", sId, tag, null)
+                        .getBytes(StandardCharsets.US_ASCII));
+            }
         } catch (Exception ignored) {
             // ignore
         }
@@ -2261,34 +2361,34 @@ final class JoanSipUa {
     private static String buildResponse(String req, int code, String reason,
                                         JoanSipBuilder.Id id, String toTag,
                                         String sdp, String extraHeaders) {
-        String via = JoanSipBuilder.header(req, "Via");
+        java.util.List<String> vias = JoanSipBuilder.headers(req, "Via");
+        java.util.List<String> rrs = JoanSipBuilder.headers(req, "Record-Route");
         String from = JoanSipBuilder.header(req, "From");
         String to = JoanSipBuilder.header(req, "To");
         String callId = JoanSipBuilder.header(req, "Call-ID");
         String cseq = JoanSipBuilder.header(req, "CSeq");
-        String rr = JoanSipBuilder.header(req, "Record-Route");
         if (to != null && to.indexOf("tag=") < 0 && toTag != null) {
             to = to + ";tag=" + toTag;
         }
         String host = JoanSipBuilder.bracket(id.localIp);
         String contactUser = "joan";
         if (sPublicId != null && !sPublicId.isEmpty()) {
-            String a = sPublicId;
-            if (a.startsWith("sip:")) {
-                a = a.substring(4);
-            } else if (a.startsWith("tel:")) {
-                a = a.substring(4);
+            String aor = sPublicId;
+            if (aor.startsWith("sip:")) {
+                aor = aor.substring(4);
+            } else if (aor.startsWith("tel:")) {
+                aor = aor.substring(4);
             }
-            int at = a.indexOf('@');
-            contactUser = at >= 0 ? a.substring(0, at) : a;
+            int at = aor.indexOf('@');
+            contactUser = at >= 0 ? aor.substring(0, at) : aor;
         }
         StringBuilder a = new StringBuilder(800);
         a.append("SIP/2.0 ").append(code).append(' ').append(reason)
                 .append("\r\n");
-        if (via != null) {
+        for (String via : vias) {
             a.append("Via: ").append(via).append("\r\n");
         }
-        if (rr != null) {
+        for (String rr : rrs) {
             a.append("Record-Route: ").append(rr).append("\r\n");
         }
         if (from != null) {
@@ -2305,8 +2405,11 @@ final class JoanSipUa {
         }
         a.append("Contact: <sip:").append(contactUser).append('@')
                 .append(host).append(':').append(id.contactPort).append(">\r\n");
-        if (extraHeaders != null) {
+        if (extraHeaders != null && !extraHeaders.isEmpty()) {
             a.append(extraHeaders);
+            if (!extraHeaders.endsWith("\r\n")) {
+                a.append("\r\n");
+            }
         }
         if (sdp != null) {
             a.append("Content-Type: application/sdp\r\n");
@@ -2451,6 +2554,7 @@ final class JoanSipUa {
                 f.result.complete("ERR binding released");
             }
             sInviteFlights.clear();
+            closeTransportLocked();
             return;
         }
         sCall = false;
@@ -2463,6 +2567,7 @@ final class JoanSipUa {
         sNonInviteWaits.clear();
         sMergedDialogIds.clear();
         sHeldInvite = null;
+        sInvite200 = null;
         sRingingToTag = null;
         sOurToTag = null;
         sConfFocusCallId = null;
@@ -2494,6 +2599,11 @@ final class JoanSipUa {
             sTcpClient = null;
         }
         sTcpClientAcc.setLength(0);
+        closeTransportLocked();
+    }
+
+    /** UDP sockets, IPsec SAs, and the listen thread. Dialogs stay. */
+    private static void closeTransportLocked() {
         if (sListen != null) {
             sListen.interrupt();
             sListen = null;
@@ -2530,5 +2640,7 @@ final class JoanSipUa {
             }
             sHeld = null;
         }
+        sOutC = sInC = sOutS = sInS = null;
+        sIpsec = null;
     }
 }

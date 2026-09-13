@@ -2,8 +2,8 @@ package org.joan.ims;
 
 import android.util.Log;
 
-import android.telephony.ims.ImsFeatureConfiguration;
 import android.telephony.ims.feature.ImsFeature;
+import android.telephony.ims.stub.ImsFeatureConfiguration;
 
 /**
  * Framework ImsService: the binder entry telephony binds to (manifest

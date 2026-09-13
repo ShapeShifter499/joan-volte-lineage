@@ -202,6 +202,162 @@ public class TestJoanRegistration {
         }
     }
 
+    /* A timeout must retain evidence instead of discarding the entire
+     * result. This also protects the REG2 caller's retransmission count. */
+    static void udpDiagnosticTests() throws Exception {
+        try (DatagramWire w = new DatagramWire()) {
+            w.frames.add(reply(100));
+            w.frames.add(reply(401).replace("reg@example.invalid",
+                    "wrong@example.invalid"));
+            JoanAppRegister.JoanRegTransport.UdpResult result = udp(w, REQUEST, 30);
+            check(result != null, "udp-timeout-retains-diagnostic-result");
+            check(result.reply == null, "udp-timeout-is-not-a-final-response");
+            check(result.retx == w.sends - 1,
+                    "udp-timeout-retains-successful-retransmissions");
+            check(result.stats.received == 2 && result.stats.provisionals == 1
+                            && result.stats.rejected == 1,
+                    "udp-timeout-retains-provisional-and-rejected-counts");
+            check(result.stats.receiveErrors == 0,
+                    "udp-normal-poll-timeout-is-not-receive-error");
+        }
+        // Real loopback UDP: the peer socket exists but intentionally never
+        // answers. Exercises Timer E without sleeps or a fake clock.
+        InetAddress loopback = InetAddress.getLoopbackAddress();
+        try (DatagramSocket peer = new DatagramSocket(0, loopback);
+             DatagramSocket client = new DatagramSocket(0, loopback)) {
+            JoanAppRegister.JoanRegTransport.UdpResult r =
+                    JoanAppRegister.JoanRegTransport.sendRecvUdp(client, null,
+                            loopback, peer.getLocalPort(),
+                            REQUEST.getBytes(StandardCharsets.US_ASCII), 900, REQUEST);
+            check(r.reply == null && r.retx > 0,
+                    "udp-real-timeout-retains-nonzero-retransmissions");
+            check(r.stats.sent == r.retx + 1 && r.stats.received == 0,
+                    "udp-sent-count-is-local-api-observation");
+        }
+        try (DatagramSocket peer = new DatagramSocket(0, loopback);
+             DatagramSocket client = new DatagramSocket(0, loopback) {
+                 int attempts;
+                 @Override
+                 public void send(DatagramPacket p) throws IOException {
+                     if (++attempts > 1) {
+                         throw new IOException("private-address-and-subscriber");
+                     }
+                     super.send(p);
+                 }
+             }) {
+            JoanAppRegister.JoanRegTransport.UdpResult r =
+                    JoanAppRegister.JoanRegTransport.sendRecvUdp(client, null,
+                            loopback, peer.getLocalPort(),
+                            REQUEST.getBytes(StandardCharsets.US_ASCII), 900, REQUEST);
+            check(r.reply == null && r.stats.sendErrors > 0 && r.retx == 0
+                            && r.stats.sent == 1,
+                    "udp-failed-retransmit-not-counted-as-success");
+            check(r.stats.summary("reg1").contains("reg1_send_error=IOException")
+                            && !r.stats.summary("reg1")
+                                    .contains("private-address-and-subscriber"),
+                    "udp-retransmit-error-type-without-sensitive-message");
+        }
+    }
+
+    static JoanAppRegister.Reg1Result reg1(JoanAppRegister.UdpSocketSource source)
+            throws Exception {
+        return JoanAppRegister.exchangeReg1(source, PEER,
+                REQUEST.getBytes(StandardCharsets.US_ASCII), 30, REQUEST);
+    }
+
+    static class ReceiveErrorWire extends DatagramWire {
+        boolean first = true;
+        ReceiveErrorWire() throws Exception {}
+
+        @Override
+        public void receive(DatagramPacket packet) throws IOException {
+            if (first) {
+                first = false;
+                throw new PortUnreachableException("private-address-and-subscriber");
+            }
+            super.receive(packet);
+        }
+    }
+
+    static void reg1BoundaryTests() throws Exception {
+        // Bind/permission/send failures must not become network silence, and
+        // exception messages must never leak into the shareable diagnostic.
+        JoanAppRegister.Reg1Result setup = reg1(() -> {
+            throw new BindException("private-address-and-subscriber");
+        });
+        check(setup.reply == null && setup.diagnostic.contains("reg1_result=setup")
+                        && setup.diagnostic.contains("error=BindException")
+                        && setup.diagnostic.contains("reg1_send_ok=0"),
+                "reg1-setup-failure-is-not-timeout");
+        check(!setup.diagnostic.contains("private-address-and-subscriber")
+                        && !setup.diagnostic.contains(" OK"),
+                "reg1-error-message-not-exposed-or-success-shaped");
+        JoanAppRegister.Reg1Result permission = reg1(() -> {
+            throw new SecurityException("private-address-and-subscriber");
+        });
+        check(permission.diagnostic.contains("error=SecurityException"),
+                "reg1-permission-type-retained");
+        try (FailSendWire w = new FailSendWire()) {
+            JoanAppRegister.Reg1Result r = reg1(() -> w);
+            check(r.reply == null && r.diagnostic.contains("reg1_result=send")
+                            && r.diagnostic.contains("reg1_send_err=1")
+                            && r.diagnostic.contains("reg1_send_ok=0"),
+                    "reg1-first-send-failure-reaches-caller");
+            check(!r.diagnostic.contains("fixture no route"),
+                    "reg1-send-exception-message-not-exposed");
+            check(w.isClosed(), "reg1-closes-failed-send-socket");
+        }
+        try (DatagramWire w = new DatagramWire()) {
+            JoanAppRegister.Reg1Result r = reg1(() -> w);
+            check(r.reply == null && r.diagnostic.contains("reg1_result=timeout")
+                            && r.diagnostic.contains("reg1_rx=0 ")
+                            && r.diagnostic.contains("reg1_send_ok=1"),
+                    "reg1-empty-timeout-reported-with-send-count");
+            check(r.diagnostic.contains("reg1len="
+                            + REQUEST.getBytes(StandardCharsets.US_ASCII).length),
+                    "reg1-actual-message-byte-length-retained");
+            check(w.isClosed(), "reg1-closes-timed-out-socket");
+        }
+        try (DatagramWire w = new DatagramWire()) {
+            w.frames.add(reply(100));
+            w.frames.add("malformed private-address-and-subscriber");
+            w.frames.add(reply(401).replace("reg@example.invalid", "wrong@example.invalid"));
+            JoanAppRegister.Reg1Result r = reg1(() -> w);
+            check(r.reply == null && r.diagnostic.contains("reg1_rx=3 ")
+                            && r.diagnostic.contains("reg1_1xx=1 ")
+                            && r.diagnostic.contains("reg1_rejected=2 "),
+                    "reg1-no-matching-final-distinguished-from-zero-packets");
+            check(!r.diagnostic.contains("private-address-and-subscriber")
+                            && !r.diagnostic.contains("example.invalid"),
+                    "reg1-rejected-sip-never-logged");
+        }
+        try (ReceiveErrorWire w = new ReceiveErrorWire()) {
+            JoanAppRegister.Reg1Result r = reg1(() -> w);
+            check(r.reply == null && r.diagnostic.contains("reg1_rx_err=1 ")
+                            && r.diagnostic.contains("reg1_rx_error=PortUnreachableException"),
+                    "reg1-receive-error-is-visible-on-timeout");
+            check(!r.diagnostic.contains("private-address-and-subscriber"),
+                    "reg1-receive-exception-message-not-exposed");
+        }
+        try (ReceiveErrorWire w = new ReceiveErrorWire()) {
+            w.frames.add(reply(401));
+            JoanAppRegister.Reg1Result r = reg1(() -> w);
+            check(reply(401).equals(r.reply) && r.diagnostic.contains("reg1_result=final")
+                            && r.diagnostic.contains("reg1_rx_err=1 "),
+                    "reg1-preserves-later-final-after-receive-error");
+            check(w.isClosed(), "reg1-closes-completed-socket");
+        }
+        try (ReceiveErrorWire primary = new ReceiveErrorWire();
+             DatagramWire alt = new DatagramWire()) {
+            alt.frames.add(reply(401));
+            JoanAppRegister.JoanRegTransport.UdpResult r =
+                    JoanAppRegister.JoanRegTransport.sendRecvUdp(primary, alt, PEER,
+                            40020, REQUEST.getBytes(StandardCharsets.US_ASCII), 100, REQUEST);
+            check(reply(401).equals(r.reply) && r.stats.receiveErrors == 1,
+                    "udp-alternate-socket-still-answers-after-primary-error");
+        }
+    }
+
     /* ----------------------------- TCP -------------------------------- */
 
     static void tcpFramingTests() throws Exception {
@@ -523,11 +679,99 @@ public class TestJoanRegistration {
     public static void main(String[] args) throws Exception {
         matchingTests();
         udpTests();
+        udpDiagnosticTests();
+        reg1BoundaryTests();
         tcpFramingTests();
         tcpSocketTests();
         epochTests();
         lifecycleTableTests();
         driverPokeTests();
+        ipFlipTests();
+        akaParseTests();
         System.out.println("REGISTRATION_CHECKS=" + checks + " FAILURES=0");
+    }
+
+    /**
+     * Stock-parity IP-version flip (alpha12): only a whole-cycle wait-out
+     * failure on a dual-family PDN earns one flip retry; v4-only PDNs,
+     * successes, supersessions and non-timeout failures never flip.
+     */
+    private static void ipFlipTests() throws Exception {
+        String reg1Silence = "addrs=ims pani=x pcscf_n=2 pcscf_tried=2 "
+                + "FAIL: reg1 no answer from any of 2";
+        String reg2Timeout = "reg1=401 aka=AKAv1-MD5 reg2len=1824 tpt=udp "
+                + "reg2retx=4 FAIL: reg2 timeout";
+        check(JoanAppRegister.shouldFlipIpVersion(
+                        "reg1_result=timeout FAIL: reg1 no matching final", true),
+                "flip: actual REG1 diagnostic reaches retry decision");
+        check(JoanAppRegister.shouldFlipIpVersion(reg1Silence, true),
+                "flip: dual-family REG1 silence earns a retry");
+        check(JoanAppRegister.shouldFlipIpVersion(reg2Timeout, true),
+                "flip: dual-family REG2 timeout earns a retry");
+        check(!JoanAppRegister.shouldFlipIpVersion(reg1Silence, false),
+                "flip: v4-only PDN (NOS trace) never flips");
+        check(!JoanAppRegister.shouldFlipIpVersion(null, true),
+                "flip: no result yet never flips");
+        check(!JoanAppRegister.shouldFlipIpVersion(
+                        "reg1=403 FAIL: reg1 unexpected", true),
+                "flip: explicit rejection is not a flip trigger");
+        // End-to-end: failure records the retry; the REGISTER planner
+        // consumes it on the alternate family; a later failure cannot loop.
+        JoanAppRegister.stop();
+        JoanAppRegister.noteLastAttemptDualFamily(true);
+        check(JoanAppRegister.scheduleFamilyRetry(reg1Silence),
+                "flip flag set by failure scheduler");
+        check(JoanAppRegister.flipPending(), "flip flag visible before planning");
+        List<InetAddress> locals = new ArrayList<>();
+        locals.add(InetAddress.getByName("2001:db8::1"));
+        locals.add(InetAddress.getByName("192.0.2.1"));
+        List<InetAddress> peers = new ArrayList<>();
+        peers.add(InetAddress.getByName("2001:db8::99"));
+        peers.add(InetAddress.getByName("192.0.2.99"));
+        JoanImsDiscovery.Plan plan =
+                JoanAppRegister.selectAttemptPlan(locals, peers);
+        check(plan.local instanceof java.net.Inet4Address,
+                "flip consumed at REGISTER planning (alternate family)");
+        check(!JoanAppRegister.flipPending(), "flip flag consumed exactly once");
+        check(!JoanAppRegister.scheduleFamilyRetry(reg2Timeout),
+                "failed alternate does not loop flips forever");
+        // stop() clears any pending flip (fresh state after network loss)
+        JoanAppRegister.stop();
+        check(!JoanAppRegister.flipPending(),
+                "flip flag cleared by stop()/network loss");
+    }
+
+    /** APDU/framework AKA material, never live AUTN/IMSI. */
+    private static void akaParseTests() {
+        String ck = "11".repeat(16);
+        String ik = "22".repeat(16);
+        check(JoanAka.parseAuthResponse(
+                        "RES=" + "33".repeat(8) + " CK=" + ck + " IK=" + ik) != null,
+                "8-byte RES control");
+        String[] four = JoanAka.parseAuthResponse(
+                "RES=" + "33".repeat(4) + " CK=" + ck + " IK=" + ik);
+        check(four != null && four[0].equals("33".repeat(4))
+                        && four[1].equals(ck) && four[2].equals(ik),
+                "4-byte RES accepted across APDU-to-auth-parser seam");
+        byte[] raw = new byte[52];
+        raw[0] = (byte) 0xdb;
+        raw[1] = 16;
+        java.util.Arrays.fill(raw, 2, 18, (byte) 0x33);
+        raw[18] = 16;
+        java.util.Arrays.fill(raw, 19, 35, (byte) 0x11);
+        raw[35] = 16;
+        java.util.Arrays.fill(raw, 36, 52, (byte) 0x22);
+        String[] tlv;
+        try {
+            java.lang.reflect.Method m = JoanAka.class.getDeclaredMethod(
+                    "parseUiccTlv", byte[].class);
+            m.setAccessible(true);
+            tlv = (String[]) m.invoke(null, (Object) raw);
+        } catch (Exception e) {
+            throw new AssertionError("parseUiccTlv " + e);
+        }
+        check(tlv != null && tlv[0].equals("33".repeat(16))
+                        && tlv[1].equals(ck) && tlv[2].equals(ik),
+                "framework fallback decodes DB/length fields without shifting RES CK IK");
     }
 }

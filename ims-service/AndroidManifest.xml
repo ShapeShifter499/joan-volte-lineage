@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.joan.ims"
-    android:versionCode="18"
-    android:versionName="0.4.0-alpha11">
+    android:versionCode="24"
+    android:versionName="0.4.0-alpha16">
     <!-- pm install rejects an APK with no uses-sdk ("found 0");
          the zip sideloads into priv-app, which does not check. -->
     <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="34" />
@@ -48,4 +48,7 @@
             <meta-data android:name="android.telephony.ims.MMTEL_FEATURE" android:value="true" />
         </service>
     </application>
+    <!-- READ_PRECISE_PHONE_STATE (signature|privileged) powers the event
+         data-call diagnostics line; granted via permissions/org.joan.ims.xml. -->
+    <uses-permission android:name="android.permission.READ_PRECISE_PHONE_STATE" />
 </manifest>

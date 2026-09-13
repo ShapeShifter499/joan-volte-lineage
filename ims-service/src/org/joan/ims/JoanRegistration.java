@@ -1,6 +1,5 @@
 package org.joan.ims;
 
-import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -82,7 +81,7 @@ public final class JoanRegistration {
                             ImsReasonInfo.CODE_REGISTRATION_ERROR,
                             -1, "joan ua not registered"),
                             0 /* SUGGESTED_ACTION_NONE */,
-                            null /* subscriber uris */);
+                            REGISTRATION_TECH_NONE);
                 }
             } catch (Throwable t) {
                 android.util.Log.w("JoanIms", "reg notify failed "

@@ -12,5 +12,6 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 javac -classpath "$SDK" -d "$OUT" \
   $(find ims-service/stubs ims-service/src -name '*.java') \
-  tests/registration/org/joan/ims/TestJoanRegistration.java
+  tests/registration/org/joan/ims/*.java
 java -cp "$OUT:$SDK" org.joan.ims.TestJoanRegistration
+java -cp "$OUT:$SDK" org.joan.ims.TestJoanDiscovery

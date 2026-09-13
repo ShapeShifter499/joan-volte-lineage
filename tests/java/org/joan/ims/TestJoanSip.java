@@ -10,6 +10,7 @@ public final class TestJoanSip {
         testEspKeys();
         testSecAgreeSelect();
         testRegisterOffer();
+        testGlobalCriterion();
         testInviteAckTransactions();
         testImei();
         testGrantedExpires();
@@ -202,11 +203,17 @@ public final class TestJoanSip {
                         "ims.mnc002.mcc460.3gppnetwork.org", 1024),
                 "other MCC 460 MNC also criterion-bound");
         check(!JoanSipBuilder.preferProtectedTcp(
+                        "ims.mnc001.mcc460.3gppnetwork.org", 1824),
+                "CU must not inherit CMCC instead of GLOBAL");
+        check(!JoanSipBuilder.preferProtectedTcp(
                         "ims.mnc260.mcc310.3gppnetwork.org", 1024),
                 "T-Mobile home REGISTER stays UDP");
         check(!JoanSipBuilder.preferProtectedTcp(
                         "ims.mnc260.mcc310.3gppnetwork.org", 9216),
                 "T-Mobile registration never leaves UDP (criterion off)");
+        check(JoanSipBuilder.preferProtectedTcp(
+                        "ims.mnc999.mcc310.3gppnetwork.org", 5000),
+                "unmapped MCC-310 PLMN must receive GLOBAL not TMUS disabled threshold");
         check(!JoanSipBuilder.preferProtectedTcp("msg.pc.t-mobile.com", 9216),
                 "non-3GPP realm never flips transport");
         check(!JoanSipBuilder.preferProtectedTcp(null, 9216)
@@ -244,6 +251,26 @@ public final class TestJoanSip {
                 null, null, "3GPP-E-UTRAN-TDD", false);
         check(udp.contains("Via: SIP/2.0/UDP [2001:db8::2]:15000"),
                 "explicit UDP REGISTER keeps UDP Via");
+        // Stock parity (alpha12): libims never emits `integrity-protected`
+        // (verified absent from libims.lge.so). Joan must match stock.
+        String prot = udp;
+        check(prot.contains("Authorization: Digest username="),
+                "protected REGISTER carries a Digest Authorization");
+        check(!prot.contains("integrity-protected"),
+                "stock parity: REGISTER never carries integrity-protected");
+    }
+
+    /** Stock global profile: unknown carriers keep a LIVE 4096 criterion. */
+    private static void testGlobalCriterion() {
+        check(!JoanSipBuilder.preferProtectedTcp(
+                        "ims.mnc04.mcc452.3gppnetwork.org", 1024),
+                "Viettel-sized REGISTER stays UDP on global criterion");
+        check(!JoanSipBuilder.preferProtectedTcp(
+                        "ims.mnc03.mcc268.3gppnetwork.org", 1024),
+                "NOS-sized REGISTER stays UDP on global criterion");
+        check(JoanSipBuilder.preferProtectedTcp(
+                        "ims.mnc04.mcc452.3gppnetwork.org", 5000),
+                "unknown-PLMN message over 4096 goes TCP (stock 4096 live)");
     }
 
     private static void testInvite() {

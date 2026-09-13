@@ -97,7 +97,7 @@ public class JoanCallSession extends ImsCallSessionImplBase {
     @Override
     public void start(String callee, ImsCallProfile p) {
         Log.i(TAG, "call session start");
-        JoanTrace.note("call session start");
+        JoanTrace.lastDial("call session start");
         state = STATE_ESTABLISHING;
         ImsCallProfile used = p != null ? p : profile;
         notifyInitiating(used);
@@ -566,6 +566,17 @@ public class JoanCallSession extends ImsCallSessionImplBase {
         state = STATE_TERMINATED;
         watchHangup = false;
         JoanMedia.stop();
+        String reason = why == null ? "unknown" : why;
+        if ("empty callee".equals(reason)
+                || "not registered".equals(reason)
+                || "invite failed".equals(reason)
+                || "no negotiated media".equals(reason)) {
+            JoanTrace.lastDial("start failed: " + reason);
+        } else if (reason.startsWith("OK")) {
+            JoanTrace.lastDial("start failed: unexpected OK");
+        } else {
+            JoanTrace.lastDial("start failed: invite refused");
+        }
         Log.w(TAG, "call start failed: " + why);
         ImsCallSessionListener l = listener;
         if (l == null) {

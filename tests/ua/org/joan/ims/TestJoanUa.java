@@ -156,6 +156,35 @@ public class TestJoanUa {
         String got=(String)sr.invoke(null,w,null,InetAddress.getLoopbackAddress(),5060,new byte[]{1},20);
         boolean provisional=got!=null&&got.startsWith("SIP/2.0 100");
         defect("register-stops-at-provisional",provisional,"sendRecv returned "+(got==null?"null (correct: no final)":got.split("\r\n")[0]));
+
+        // 13: successful refresh must keep the live call and retire old UDP/SAs.
+        w=reset();
+        final int[] closed=new int[1];
+        AutoCloseable sa=()->closed[0]++;
+        DatagramSocket oldS=new DatagramSocket((SocketAddress)null);
+        set("sSockS",oldS);set("sHeld",new AutoCloseable[]{sa});
+        invoke("releaseLocked",new Class<?>[]{boolean.class},false);
+        defect("refresh-clears-call",!JoanSipUa.callActive(),"sCall cleared on preserve release");
+        defect("refresh-leaks-udp",!w.isClosed()||!oldS.isClosed()||closed[0]!=1,
+                "closed c="+w.isClosed()+" s="+oldS.isClosed()+" sa="+closed[0]);
+        oldS.close();
+
+        // 14: wrong-dialog REFER NOTIFY cannot confirm a transfer.
+        w=reset();
+        Class<?> nwc=Class.forName("org.joan.ims.JoanSipUa$NonInviteWait");
+        Constructor<?> nctor=nwc.getDeclaredConstructors()[0];nctor.setAccessible(true);
+        Object nw=nctor.newInstance(nctor.getParameterCount()==7
+                ? new Object[]{"focus",7,"REFER","z9hG4bK-good","sip:x@example.invalid","local","remote"}
+                : new Object[]{"focus",7,"REFER","z9hG4bK-good","sip:x@example.invalid"});
+        ((Map<String,Object>)get("sNonInviteWaits")).put("focus#REFER#7",nw);
+        inbound("NOTIFY sip:x@example.invalid SIP/2.0\r\nVia: SIP/2.0/UDP 127.0.0.1;branch=z9hG4bK-bad\r\nFrom: <sip:x@example.invalid>;tag=WRONG-REMOTE\r\nTo: <sip:y@example.invalid>;tag=WRONG-LOCAL\r\nCall-ID: focus\r\nCSeq: 12 NOTIFY\r\nEvent: refer;id=7\r\nSubscription-State: terminated\r\nContent-Type: message/sipfrag\r\nContent-Length: 16\r\n\r\nSIP/2.0 200 OK\r\n");
+        defect("wrong-dialog-refer-notify",field(nwc,"notifyFinal").getBoolean(nw),"notifyFinal set from mismatched dialog tags");
+        ((Map<?,?>)get("sNonInviteWaits")).clear();
+
+        // 15: tagless/mismatched BYE cannot kill the live dialog.
+        w=reset();
+        inbound("BYE sip:joan@example.invalid SIP/2.0\r\nVia: SIP/2.0/UDP 127.0.0.1;branch=z9hG4bK-bad\r\nFrom: <sip:peer@example.invalid>\r\nTo: <sip:joan@example.invalid>;tag=WRONG\r\nCall-ID: A\r\nCSeq: 18 BYE\r\nContent-Length: 0\r\n\r\n");
+        defect("tagless-bye-kills-live",!JoanSipUa.callActive(),"callActive="+JoanSipUa.callActive());
         w.close();System.out.println("UA_REGRESSION_FAILURES="+defects);System.exit(defects==0?0:1);
     }
 }

@@ -21,7 +21,7 @@ public class ImsRegistrationImplBase {
 
     public void onDeregistered(
             android.telephony.ims.ImsReasonInfo info,
-            int suggestedAction, android.net.Uri[] uris) {}
+            int suggestedAction, int imsRadioTech) {}
 
     public void onSubscriberAssociatedUriChanged(android.net.Uri[] uris) {}
 

@@ -117,6 +117,11 @@ public class JoanStateProvider extends ContentProvider {
         c.addRow(new Object[] { "last_state", JoanDriver.lastState() });
         c.addRow(new Object[] { "aka_stage", JoanTrace.akaStage() });
         c.addRow(new Object[] { "last_register", JoanDriver.lastRegister() });
+        c.addRow(new Object[] { "ims_diag_listener", JoanImsDiagnostics.listener() });
+        c.addRow(new Object[] { "ims_diag_data", JoanImsDiagnostics.data() });
+        c.addRow(new Object[] { "ims_diag_network", JoanImsDiagnostics.network() });
+        c.addRow(new Object[] { "ims_diag_ages", JoanImsDiagnostics.ages() });
+        c.addRow(new Object[] { "last_dial", JoanTrace.lastDial() });
         c.addRow(new Object[] { "sub_debug", JoanDriver.subscriptionDebug(ctx) });
         return c;
     }

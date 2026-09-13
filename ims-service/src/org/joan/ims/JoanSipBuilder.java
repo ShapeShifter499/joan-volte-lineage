@@ -218,28 +218,34 @@ final class JoanSipBuilder {
      * field trace reference.
      *
      * Returns true only when the message exceeds the carrier's
-     * criterion, mirroring GetTCPCriterionLength. TMUS
-     * {@code AdjustTcpCriterionPerMtu} must not flip T-Mobile's
-     * proven UDP REGISTER.
+     * criterion, mirroring GetTCPCriterionLength. Policy is full
+     * PLMN (MCC+MNC), never MCC alone.
      */
     static boolean preferProtectedTcp(String realm, int messageLen) {
-        int criterion = tcpCriterionFor(plmnOf(realm));
+        int criterion = tcpCriterionFor(realm);
         return criterion > 0 && messageLen > criterion;
     }
 
     /**
-     * TCP criterion length per home MCC, from stock carrier XML
-     * (read-only). Semantics per SKU: TMUS ships per-reg criterion 0
-     * = DISABLED (registration never leaves UDP, whatever the size --
-     * protect the proven path); CMCC's common 1300 is live. Returns
-     * 0 to disable the TCP path for that PLMN.
+     * TCP criterion length from stock Ims6 XML, resolved by full PLMN.
+     * CMCC 460-00 keeps 1300. Unprofiled MCC-460 (CU 460-01) and
+     * unprofiled MCC-310 fall back to GLOBAL 4096. Only TMUS
+     * 310-260 keeps Joan's bench-proven UDP exception (-1 / never
+     * TCP) — that is Joan policy, not stock AdjustTcpCriterionPerMtu.
      */
-    private static int tcpCriterionFor(int mcc) {
-        switch (mcc) {
-            case 460: return 1300;  // CMCC common_tcp_criterion_len
-            case 310: return 0;     // TMUS per-reg criterion disabled
-            default:  return -1;    // unknown: TCP path disabled
+    private static int tcpCriterionFor(String realm) {
+        int mcc = plmnOf(realm);
+        int mnc = mncOf(realm);
+        if (mcc == -1) {
+            return -1; // non-3GPP realm: never flip transport
         }
+        if (mcc == 460 && mnc == 0) {
+            return 1300; // CMCC common_tcp_criterion_len
+        }
+        if (mcc == 310 && mnc == 260) {
+            return 0; // Joan TMUS UDP exception, PLMN-scoped
+        }
+        return 4096; // stock GLOBAL root config
     }
 
     /**
@@ -252,6 +258,31 @@ final class JoanSipBuilder {
         }
         String r = realm.toLowerCase(java.util.Locale.ROOT);
         int i = r.indexOf(".mcc");
+        if (i < 0) {
+            return -1;
+        }
+        int from = i + 4;
+        int to = from;
+        while (to < r.length() && r.charAt(to) >= '0' && r.charAt(to) <= '9') {
+            to++;
+        }
+        if (to - from != 3) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(r.substring(from, to));
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    /** Home MNC from the same realm, or -1. 3-digit field, unpadded value. */
+    static int mncOf(String realm) {
+        if (realm == null || realm.isEmpty()) {
+            return -1;
+        }
+        String r = realm.toLowerCase(java.util.Locale.ROOT);
+        int i = r.indexOf(".mnc");
         if (i < 0) {
             return -1;
         }
@@ -330,7 +361,14 @@ final class JoanSipBuilder {
                     + "\", uri=\"" + requestUri + "\", response=\""
                     + respHex + "\", algorithm=" + ch.algorithm
                     + ", qop=" + qop + ", nc=00000001, cnonce=\""
-                    + txn.cnonce + "\", integrity-protected=yes";
+                    + txn.cnonce + "\"";
+            // Stock parity (alpha12): libims.lge.so NEVER emits an
+            // `integrity-protected` parameter (verified: zero occurrences
+            // of the token in the 18.7 MB US998/V300L/H930DS engines;
+            // HTTP_encodeAuthorization* builds the header without it).
+            // T-Mobile's core accepted ours, but strict cores can reject
+            // the protected REGISTER over a digest parameter they do not
+            // expect, so match stock byte-shape instead.
         } else {
             authLine = "Digest username=\"" + id.impi + "\", realm=\""
                     + id.realm + "\", nonce=\"\", uri=\"" + requestUri
@@ -762,6 +800,9 @@ final class JoanSipBuilder {
         String fromTag;
         String branch;
         int cseq = 1;
+        /** Peer's CSeq space; never compared to {@link #cseq}. */
+        int remoteCseq;
+        String remoteTag;
     }
 
     /**

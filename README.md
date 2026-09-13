@@ -13,68 +13,134 @@ loopback control socket.
 > and earpiece follow Dialer. Caller ID is the asserted number; Dialer
 > can still overlay a matching contact.
 
-## Help wanted: USIM-only cards
+## Current tester build: v0.4.0-alpha16
 
-**If your SIM has no ISIM application, this needs testers and logs.**
+`v0.4.0-alpha16` (versionCode 24) is the current tester zip. It is a
+prerelease: offline suites passed; it is **not** a live-carrier qualifier
+and has not replaced the last T-Mobile bench-validated build
+(`v0.4.0-alpha12` on the development US998). Sideload
+`joan-volte-recovery.zip` from the GitHub release, reboot, then confirm
+the `build` row below reads `0.4.0-alpha16 (24)`.
 
-Support for deriving the IMS identity from the IMSI (TS 23.003
-§13.3) and authenticating against the USIM instead of an ISIM landed in
-the `v0.4.0-alpha*` prereleases. Both halves are confirmed working on one
-handset: the identity is derived and AKA succeeds. On China Mobile the
-protected REGISTER was then sent over UDP and timed out.
-`v0.4.0-alpha7` sent that second REGISTER over TCP to P-CSCF `port-s`
-on MCC 460 only; `v0.4.0-alpha9` replaces the blanket rule with stock's
-size criterion (`GetTCPCriterionLength`): TCP only when the message
-exceeds the carrier's XML value (CMCC 1300, TMUS disabled — a ~1.8 kB
-REGISTER stays UDP on both), with UDP fallback if TCP fails. It also
-advances to the next advertised P-CSCF if REG2 is silent (T-Mobile
-stays on the proven UDP path). `v0.4.0-alpha8` adds SIP hold
-(`a=sendonly`) and call waiting (a second INVITE rings instead of 486;
-accept holds the first). `v0.4.0-alpha10` repairs ACK identity: a 2xx
-ACK is a fresh in-dialog request (new Via branch), a non-2xx ACK
-belongs to the INVITE transaction, and every final response is
-re-answered from an archive of the exact ACK bytes per (Call-ID, INVITE
-CSeq) — this is what finally quenches the P-CSCF retransmission queue
-between hold/resume swaps. Conference merge is not implemented;
-`docs/call-waiting-conference-routing-2026-09-05.md` records how stock
-LG routes it (conference factory URI + REFER + conference-info).
+What landed after the last public GitHub alpha (`v0.4.0-alpha10`), plus
+the 2026-09-13 fresh pass:
 
-The remaining open question is IPsec with **NULL encryption**. Android
-exposes no NULL cipher constant, so an authentication-only
-`IpSecTransform` is *assumed* to produce ESP-NULL, and that has never
-been verified anywhere. It cannot be reproduced on the development
-handset, whose network offers only `aes-cbc`. A report from a network
-that selects `null` and *works* would settle it as fast as one that
-fails.
+- **Hold / call waiting / ACK repair** from alpha10 is still there.
+- **Network-hosted conference merge** is implemented (focus INVITE +
+  REFER / Replaces + conference-info) and offline-tested. It is **not**
+  live-carrier qualified. Two-call merge on a real core is still an open
+  test, not a claimed pass. The focus dialog now keeps the negotiated
+  media and local tag instead of a zeroed Leg.
+- **Registration diagnostics** (`ims_diag_*` rows, REG1 send/rx/error
+  counters, configured vs negotiated IMS protocol). Framework view only;
+  `raw_modem_pco=unobserved` is honest, not a missing field.
+- **P-CSCF discovery** uses the IMS link list, then ISIM literals if the
+  link list is empty. No guessed `pcscf.ims.mnc…` DNS, no “SIM is not
+  provisioned” verdict from an empty list.
+- **IP-family flip retry** after dual-stack REG1 silence / REG2 timeout,
+  consumed at REGISTER planning (not eaten in discovery).
+- **LOS 22.2 ImsService ABI** (`ImsFeatureConfiguration` in
+  `android.telephony.ims.stub`, `onDeregistered(ImsReasonInfo,int,int)`).
+- **Refresh** keeps an active call and closes the previous UDP sockets /
+  IPsec SAs before adopting the new binding.
+- **AKA** follows AOSP EAP-AKA / TS 31.102: DB + length-delimited
+  RES/CK/IK, 4–16 byte RES, exact 16-byte CK/IK. Untagged 48-byte blobs,
+  DC sync-failure, extra CK hex, and non-9000 APDU status words are
+  refused instead of being treated as keys.
+- **NOTIFY / BYE** require both dialog tags; a tagless or wrong-dialog
+  request does not tear down the live call. MO BYE matches the UAC local
+  tag on From.
+- **Remote CSeq is separate from local CSeq.** A peer re-INVITE is not
+  compared against our outbound sequence; a mismatched-tag re-INVITE is
+  481; a retransmitted answered INVITE replays the exact cached 200.
+- **Ringing overwrite / CANCEL identity.** A second initial INVITE while
+  one is ringing is 486; CANCEL must match Call-ID **and** the INVITE
+  CSeq, otherwise 481 and the ringing INVITE stays.
+- **Responses copy every Via and Record-Route** in original order
+  (RFC 3261 §8.2.6 / §16.7). Extra headers are terminated before
+  Content-Length.
+- **TCP criterion is full PLMN** (MCC+MNC), matching stock’s size
+  threshold: China Mobile 460-00 uses 1300; T-Mobile 310-260 stays on the
+  proven UDP path; other PLMNs (including China Unicom 460-01 and
+  unmapped MCC 310) use the stock GLOBAL 4096 threshold. `integrity-protected`
+  is not sent.
+- **Dialer routing (`last_dial`).** The state provider records whether
+  Telephony asked Joan to place a call (`shouldProcessCall` → IMS or
+  CSFB, `createCallSession`, `call session start`, or `start failed`).
+  An empty `last_dial` after a failed Dialer attempt means the framework
+  never handed the call to this ImsService. Counts and flags only; the
+  callee is never stored.
 
-If you are on a USIM-only card, please try the latest `v0.4.0-alpha`
-prerelease and send:
+USIM-only identity (TS 23.003) and USIM AKA are still in these alphas.
+NULL-encryption ESP (`ealg=null`) is still unverified on the development
+handset (that core offers `aes-cbc`).
+
+## Obtaining logs
+
+Do this after a failed or interesting registration, **before** rebooting
+or clearing logcat. The state provider is the safe paste; the rotating
+trace is the detail. Neither should contain IMPI, IMSI, AUTN, RES, CK,
+IK, nonce, or P-CSCF addresses. If a dump does, redact those before
+opening an issue.
+
+**1. Confirm the build, then paste the state rows** (safe for a public
+issue):
 
 ```
+adb root
 adb shell content query --uri content://org.joan.ims.state
 ```
 
-The `last_register` row carries the whole diagnosis — how many P-CSCFs
-were advertised and tried, the reg1 status, the AKA algorithm, the
-selected cipher and integrity algorithm, RES/CK/IK lengths, whether the
-IPsec SAs applied, the retransmission count and the reg2 status. It
-contains counts, status codes and algorithm names only: no IMPI, no IMSI,
-no P-CSCF address, no nonce, no keys. It is safe to paste in an issue.
+Useful rows:
 
-Two results that are especially useful:
+- `build` — must be `0.4.0-alpha16 (24)` for this zip
+- `registered`, `last_state`, `aka_stage`, `last_register`, `last_dial`
+- `ims_diag_listener`, `ims_diag_data`, `ims_diag_network`, `ims_diag_ages`
 
-- **`ealg=null` and `reg2=200 OK`** — NULL-encryption ESP works, and the
-  remaining failure is something else
+`last_register` is counts, status codes and algorithm names: P-CSCFs
+advertised/tried, reg1 result, AKA algorithm, cipher/integrity, RES/CK/IK
+*lengths*, whether IPsec SAs applied, `tpt=udp|tcp`, `tcp_fail=…`,
+retransmit counts, reg2 status. `ims_diag_data` is telephony’s view of
+the IMS data call (configured vs negotiated protocol, cause, address
+families). Empty P-CSCF / `PDN advertised none` is a discovery clue, **not**
+proof the SIM lacks VoLTE provisioning.
+
+**2. Pull the rotating trace** (survives logcat rotation; needs root
+because `adbd` drops root across reboot):
+
+```
+adb root
+adb shell cat /data/user_de/0/org.joan.ims/files/joan-trace.log > joan-trace.log
+```
+
+If that path is `Permission denied`, run `adb root` again and retry —
+that is lost adbd root, not an empty log. The file is 256 KB rotating.
+Look for `IMS data_call`, `IMS network`, `AKA/REG stage`, `reg1`,
+`reg2`, `tcp_fail`, and `pcscf` *counts* (not addresses).
+
+**3. Optional, only if IMS never starts** (redact numbers / IMSI / cell
+before sharing):
+
+```
+adb logcat -d -s JoanIms:V Telephony:V Telecom:V > joan-logcat.txt
+```
+
+Do not paste full REGISTER / 401 bodies, AKA payloads, or `dumpsys`
+output that includes the subscriber identity.
+
+Results that are especially useful:
+
+- **`ealg=null` and `reg2=200 OK`** — NULL-encryption ESP works
 - **`tpt=tcp` then `reg2=200 OK`** — protected TCP REGISTER is what that
   core wanted
-- **`tpt=tcp tcp_fail=timeout` with `FAIL: reg2 timeout`** — TCP connected
-  and the core still stayed silent; ESP-NULL is still a live suspect
+- **`tpt=tcp tcp_fail=timeout` with `FAIL: reg2 timeout`** — TCP
+  connected; the core stayed silent
 - **`tpt=tcp tcp_fail=connect tpt=udp reg2retx=4`** — TCP never
-  established, UDP retried and also timed out
-
-If registration never starts and the state says the PDN advertised no
-P-CSCF, that usually means the SIM is not provisioned for VoLTE rather
-than a fault here.
+  established; UDP retried and also timed out
+- **IMS callback + empty app P-CSCF list** — class 1b discovery; include
+  `ims_diag_data` / `ims_diag_network` (configured vs negotiated protocol)
+- **`reg1_send_ok` / `reg1_rx` / `reg1_result`** — distinguishes bind/send
+  failure from a matching-final timeout
 
 ## Emergency calling — read this
 
@@ -215,7 +281,8 @@ LineageOS 22 inherit: `upstream/` (`joan-ims.mk` + `Android.bp`).
 
 `org.joan.ims` is an Android `ImsService` / `MmTelFeature`:
 
-- Identity and AKA from the ISIM
+- Identity and AKA from the ISIM, or from the USIM (TS 23.003) when
+  the SIM has no ISIM application
 - 3GPP sec-agree (`Security-Client` offers hmac-sha-1-96 / hmac-md5-96
   × aes-cbc / null; the P-CSCF picks)
 - Transport-mode ESP via `IpSecTransform` on the IMS PDN sockets
@@ -240,9 +307,9 @@ so far been exercised on one live IMS core.
 - **SMS / MMS over IMS.** Not implemented and no longer advertised, so
   the core keeps delivering SMS over CS/SGs, which works and owes nothing
   to this app. MMS rides the data APN and is likewise unaffected.
-- **Codecs other than PCMU.** G.711 u-law only. AMR-WB is the largest
-  available audio quality win and is not done; a core that requires AMR
-  will now reject the INVITE rather than be sent u-law it did not ask for.
+- **Conference merge.** Implemented as a network-hosted focus INVITE +
+  REFER / Replaces flow and offline-tested. Not live-carrier qualified.
+  Do not treat Dialer merge as proven on your network until you try it.
 - **DTMF.** No RFC 4733; keypresses in an IVR do nothing.
 - VoWiFi (see `docs/vowifi-feasibility-2026-08-29.md`)
 
