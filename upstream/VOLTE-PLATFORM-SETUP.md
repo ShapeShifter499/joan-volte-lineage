@@ -149,6 +149,60 @@ both the ROM and the zip. See `README.md`.
 constant; it appears harmless but nothing in this repo demonstrates that
 it is required. Treat it as unproven rather than as part of the recipe.
 
+## Other capability gates, and which ones actually matter
+
+The obvious next question once VoLTE works is whether video, VoWiFi,
+conference and emergency need the same treatment. They do not all work the
+same way. Measured on an LG US998, LineageOS 22.2, T-Mobile US.
+
+### The `config_device_*` family is only three things
+
+framework-res carries exactly three device-level IMS media capability bools,
+and they behave identically:
+
+| Resource | joan ships | Meaning |
+|---|---|---|
+| `config_device_volte_available` | `false` | fixed by the overlay in this repo |
+| `config_device_vt_available` | `false` | video calling |
+| `config_device_wfc_ims_available` | `false` | VoWiFi |
+
+So **video and VoWiFi are the true analogues of the VoLTE problem** — same
+gate, same fix shape, both still off. Do not flip either speculatively:
+turning the capability on advertises a UI for a stack that cannot deliver it.
+
+### Conference and merge need nothing here
+
+Every conference permission flag is already on by AOSP default, and the
+carrier asset does not turn them off:
+
+    support_conference_call_bool             true
+    support_ims_conference_call_bool         true
+    support_manage_ims_conference_call_bool  true
+    support_ims_conference_event_package     true
+    support_swap_after_merge_bool            true
+    ims_conference_size_limit_int            5
+
+`imsvoice.conference_factory_uri_string` reads **empty**, and that looks
+alarming until you check what consumes it. It is a red herring: the
+conference factory URI is *derived*, not configured. 3GPP TS 24.147 gives
+the form, LG's own stack has it compiled in as a format string, and
+`JoanCarrierProfile.defaults()` derives the same thing:
+
+    sip:mmtel@conf-factory.ims.mnc<MNC>.mcc<MCC>.3gppnetwork.org
+
+The key is empty on stock firmware too, where conference works. Nothing to
+set.
+
+### Emergency calling needs nothing here either
+
+    carrier_use_ims_first_for_emergency_bool  true
+    allow_hold_call_during_emergency_bool     true
+
+The platform is already willing to try IMS first for emergency calls. This
+repo's ImsService deliberately does not advertise emergency support, so those
+dials go CS. That is a safety decision, not a missing flag, and it should
+stay that way until someone has tested against a real PSAP.
+
 ## Privileged permissions — and a boot trap
 
 The app is privileged and platform-signed, so every signature|privileged

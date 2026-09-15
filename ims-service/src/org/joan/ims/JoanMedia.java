@@ -51,6 +51,11 @@ final class JoanMedia {
 
     private static final int RTP_HDR = 12;
     private static volatile InetAddress sDest;
+    /* Where the RTP we receive actually comes from. Deliberately counters
+     * and a match/differ verdict rather than addresses: an IMS PDN address
+     * identifies a subscriber, and testers post these traces in public. */
+    private static volatile long sRtpFromDest;
+    private static volatile long sRtpFromOther;
     private static volatile int sDestPort;
     private static volatile int sRtcpPort;
     private static volatile boolean sMux;
@@ -127,7 +132,12 @@ final class JoanMedia {
         sPlay = new Thread(() -> playback(app), "joan-ims-play");
         sCap.start();
         sPlay.start();
+        sRtpFromDest = 0;
+        sRtpFromOther = 0;
         JoanTrace.note("media start rtp mux=" + mux
+                + " fam=" + (local instanceof java.net.Inet6Address ? "v6" : "v4")
+                + " local_port=" + JoanSipUa.RTP_PORT
+                + " dest_port=" + destPort
                 + " rtcp_port=" + (sMux ? sDestPort : sRtcpPort)
                 + " codec=" + (sAmr == null ? "PCMU"
                         : (sAmr.wideband() ? "AMR-WB" : "AMR-NB"))
@@ -175,6 +185,27 @@ final class JoanMedia {
             JoanTrace.note("media " + which + " priority "
                     + t.getClass().getSimpleName());
         }
+    }
+
+    /**
+     * Pure summary of where received RTP came from. Host-testable.
+     *
+     * <p>This is the line that tells a one-way-audio report apart: silence
+     * from the expected peer is a media-negotiation or core problem, silence
+     * with nothing arriving at all is a routing problem, and packets from an
+     * unexpected source means the peer moved and we never followed.
+     */
+    static String rtpSourceSummary(long fromDest, long fromOther) {
+        if (fromDest == 0 && fromOther == 0) {
+            return "rtp_src=none";
+        }
+        if (fromOther == 0) {
+            return "rtp_src=peer";
+        }
+        if (fromDest == 0) {
+            return "rtp_src=other-only n=" + fromOther;
+        }
+        return "rtp_src=mixed peer=" + fromDest + " other=" + fromOther;
     }
 
     private static AudioAttributes voiceAttrs() {
@@ -346,6 +377,12 @@ final class JoanMedia {
                 } catch (SocketTimeoutException e) {
                     continue;
                 }
+                InetAddress from = in.getAddress();
+                if (from != null && from.equals(sDest)) {
+                    sRtpFromDest++;
+                } else {
+                    sRtpFromOther++;
+                }
                 int m = in.getLength();
                 if (m < RTP_HDR) {
                     continue;
@@ -432,7 +469,8 @@ final class JoanMedia {
         } finally {
             try { if (trk != null) trk.release(); } catch (Throwable ignored) {}
             JoanTrace.note("media dl stopped frames=" + dl + " "
-                    + level(dlSumSq, dlSamples, dlPeak, dlActSq, dlActSamples));
+                    + level(dlSumSq, dlSamples, dlPeak, dlActSq, dlActSamples)
+                    + " " + rtpSourceSummary(sRtpFromDest, sRtpFromOther));
         }
     }
 
