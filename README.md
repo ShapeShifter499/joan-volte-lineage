@@ -8,6 +8,24 @@ SIP, AKA, and IPsec run in a privileged `ImsService` (`org.joan.ims`)
 using public `IpSecManager` APIs. There is no native daemon and no
 loopback control socket.
 
+> ### Read this before you flash: use LineageOS recovery, not TWRP
+>
+> `joan` uses **dynamic partitions** — `/system` and `/product` live inside
+> `super` and have to be mapped before anything can write to them.
+> **LineageOS 22 recovery does that. TWRP on this device generally does
+> not.**
+>
+> On a recovery that cannot map them, `/dev/block/mapper/` is empty or
+> absent and the installer fails with:
+>
+> ```
+> ERROR: cannot mount system (looked in /dev/block/mapper and by-name)
+> ```
+>
+> That is the recovery, not the zip, and no zip can work around it — the
+> tools to map a logical partition are not present in recovery. Flash from
+> LineageOS recovery instead.
+
 > **Working on LineageOS 22.2:** IMS REGISTER 200, Dialer outbound and
 > inbound PCMU calls, two-way audio, hangup from either side. Speaker
 > and earpiece follow Dialer. Caller ID is the asserted number; Dialer
@@ -301,9 +319,9 @@ stock-shaped Android ROM.
 
 ## Flash
 
-Use a recovery that can write **dynamic system** partitions the way
-LineageOS 22 recovery does (Lineage recovery qualifies). TWRP on this
-device generally cannot.
+Use LineageOS 22 recovery — see the warning at the top of this file. A
+recovery that cannot map dynamic partitions will fail with `cannot mount
+system`, and that is not something the zip can work around.
 
 1. Install LineageOS 22 (and GApps if you want them).
 2. Sideload `joan-volte-recovery.zip` (skip signature verification if
