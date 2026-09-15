@@ -92,6 +92,26 @@ if [ -d rro ]; then
     echo "   rro: $(stat -c%s rro/build/joan-ims-rro.apk) bytes"
 fi
 
+echo "== 3b. framework rro build (config_device_volte_available)"
+# Part 2 term 1 of the VoLTE admit gate: ImsManager.isVolteEnabledByPlatform()
+# ANDs this framework-res bool with the carrier config. joan ships it false,
+# which hides the Settings VoLTE toggle and sends every MO dial to CS. A ROM
+# build sets it in the device tree instead -- see upstream/VOLTE-PLATFORM-SETUP.md.
+if [ -d rro-fw ]; then
+    rm -rf rro-fw/build
+    mkdir -p rro-fw/build
+    "$BT/aapt2" compile --dir rro-fw/res -o rro-fw/build/res.zip
+    "$BT/aapt2" link -o rro-fw/build/joan-fw-volte-unsigned.apk \
+        -I "$SDK/platforms/android-36/android.jar" \
+        --manifest rro-fw/AndroidManifest.xml rro-fw/build/res.zip \
+        --auto-add-overlay
+    "$BT/apksigner" sign --ks ims-service/build/keystore/joan-dev.jks \
+        --ks-pass pass:joanims --key-pass pass:joanims \
+        --out rro-fw/build/joan-fw-volte.apk \
+        rro-fw/build/joan-fw-volte-unsigned.apk
+    echo "   rro-fw: $(stat -c%s rro-fw/build/joan-fw-volte.apk) bytes"
+fi
+
 echo "== 4. assemble recovery zip"
 INSTALLED_SIZE=$(stat -c%s ims-service/build/joan-ims.apk)
 [ "$INSTALLED_SIZE" -gt 5000 ] || { echo "apk too small"; exit 1; }
@@ -111,6 +131,9 @@ files = {
     'app/joan-ims-rro.apk': os.path.join(root,
         'rro/build/joan-ims-rro.apk') if os.path.exists(
             os.path.join(root, 'rro/build/joan-ims-rro.apk')) else None,
+    'app/joan-fw-volte.apk': os.path.join(root,
+        'rro-fw/build/joan-fw-volte.apk') if os.path.exists(
+            os.path.join(root, 'rro-fw/build/joan-fw-volte.apk')) else None,
     'etc/permissions/org.joan.ims.xml': os.path.join(root,
         'permissions/org.joan.ims.xml') if os.path.exists(
             os.path.join(root, 'permissions/org.joan.ims.xml')) else None,

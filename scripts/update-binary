@@ -76,13 +76,38 @@ TMPDM=$(stat -c %d /tmp 2>/dev/null)
 mount_part() {
   name="$1"
   mp="$2"
+  MP_RESULT="$mp"
+  MP_OWNED=0
   mkdir -p "$mp"
-  if ! mount | grep -q " $mp "; then
+  if mount | grep -q " $mp "; then
+    MP_OWNED=1
+  else
     for dev in /dev/block/mapper/$name /dev/block/by-name/$name; do
       [ -b "$dev" ] || continue
-      mount -o rw "$dev" "$mp" 2>/dev/null && break
+      real=$(readlink -f "$dev" 2>/dev/null)
+      [ -n "$real" ] || real="$dev"
+      # Recovery mounts /system itself, to read otacerts.zip while it
+      # verifies the package signature. ext4 refuses a second rw mount of
+      # a device it already holds read-only, so a plain "mount -o rw"
+      # here failed with "cannot mount system" -- intermittently, since it
+      # depends on whether recovery has let go by the time we run.
+      # Observed on US998 2026-09-14: same zip, same state, sideload
+      # failed while the identical run from a recovery shell succeeded.
+      # Reuse recovery's mount rather than compete for the device.
+      cur=$(mount | grep "^$real " | head -1 | sed "s/^[^ ]* on \\(.*\\) type .*/\\1/")
+      if [ -n "$cur" ] && [ "$cur" != "/" ]; then
+        mount -o rw,remount "$cur" 2>/dev/null || true
+        MP_RESULT="$cur"
+        ui_print "  $name is already mounted at $cur; reusing that mount"
+        break
+      fi
+      if mount -o rw "$dev" "$mp" 2>/dev/null; then
+        MP_OWNED=1
+        break
+      fi
     done
   fi
+  mp="$MP_RESULT"
   mount | grep -q " $mp " || error "cannot mount $name (looked in /dev/block/mapper and by-name)"
   mount -o rw,remount "$mp" 2>/dev/null || true
 
@@ -102,7 +127,8 @@ mount_part() {
   else
     # Distinguish the two, because they need different answers and
     # guessing sent me chasing verity when /odm was simply full.
-    free=$(df -k "$mp" 2>/dev/null | tail -1 | awk "{print \$4}")
+    # No awk in recovery -- this used to print nothing at all.
+    free=$(df -k "$mp" 2>/dev/null | tail -1 | tr -s " " | cut -d" " -f4)
     if mount | grep " $mp " | grep -q "[(,]ro[,)]"; then
       error "$name is mounted read-only; cannot install"
     else
@@ -113,8 +139,10 @@ mount_part() {
 
 ui_print "Mounting system"
 mount_part system "$SYSMNT"
+SYSMNT="$MP_RESULT"; SYSMNT_OWNED="$MP_OWNED"
 ui_print "Mounting product"
 mount_part product "$PRODMNT"
+PRODMNT="$MP_RESULT"; PRODMNT_OWNED="$MP_OWNED"
 
 # system-as-root: the partition root is /, and the /system tree sits in
 # a system/ subdirectory of it.
@@ -136,9 +164,44 @@ if [ -f "$TMP/etc/permissions/org.joan.ims.xml" ]; then
   copy_file "$TMP/etc/permissions/org.joan.ims.xml" \
     "$SYS/etc/permissions/org.joan.ims.xml" 644 u:object_r:system_file:s0
 fi
-if [ -f "$TMP/etc/permissions/android.hardware.telephony.ims.xml" ]; then
-  copy_file "$TMP/etc/permissions/android.hardware.telephony.ims.xml" \
-    "$SYS/etc/permissions/android.hardware.telephony.ims.xml" 644 u:object_r:system_file:s0
+# The IMS feature declaration needs an ownership record, or uninstall
+# cannot put the device back as it found it. A ROM that already declares
+# android.hardware.telephony.ims must get ITS file back; a ROM that does
+# not must end up with no file at all. Decide once, before the first
+# overwrite, and leave a marker -- a re-flash must not re-decide, or it
+# would back up our own copy as if it were the ROM's.
+#
+#   absent, or already byte-identical to ours -> .joan-added (remove on uninstall)
+#   present and different                     -> .joan-orig  (restore on uninstall)
+#   neither marker at uninstall time          -> leave it alone
+#
+# The byte-identical case also migrates installs from before this marker
+# existed: their file is ours, so it is correctly claimed rather than
+# mistaken for the ROM's.
+IMSFEAT_SRC="$TMP/etc/permissions/android.hardware.telephony.ims.xml"
+if [ -f "$IMSFEAT_SRC" ]; then
+  IMSFEAT="$SYS/etc/permissions/android.hardware.telephony.ims.xml"
+  IMSFEAT_BAK="$IMSFEAT.joan-orig"
+  IMSFEAT_OWN="$IMSFEAT.joan-added"
+  # Path as it reads on a booted system; $SYS is the recovery mountpoint
+  # and would only confuse anyone trying to find the file later.
+  IMSFEAT_SHOWN="/system/etc/permissions/android.hardware.telephony.ims.xml"
+  if [ ! -f "$IMSFEAT_BAK" ] && [ ! -f "$IMSFEAT_OWN" ]; then
+    if [ ! -f "$IMSFEAT" ] || cmp -s "$IMSFEAT" "$IMSFEAT_SRC"; then
+      echo joan > "$IMSFEAT_OWN" || error "write $IMSFEAT_OWN"
+      chmod 644 "$IMSFEAT_OWN"
+      chcon u:object_r:system_file:s0 "$IMSFEAT_OWN" 2>/dev/null || true
+      ui_print "  IMS feature xml: not present in this ROM, so it is ours."
+      ui_print "    Marker: $IMSFEAT_SHOWN.joan-added"
+      ui_print "    Uninstall will delete the xml and the marker."
+    else
+      copy_file "$IMSFEAT" "$IMSFEAT_BAK" 644 u:object_r:system_file:s0
+      ui_print "  IMS feature xml: this ROM ships its own, kept a backup."
+      ui_print "    Backup: $IMSFEAT_SHOWN.joan-orig"
+      ui_print "    Uninstall restores it from there."
+    fi
+  fi
+  copy_file "$IMSFEAT_SRC" "$IMSFEAT" 644 u:object_r:system_file:s0
 fi
 
 # --- RRO: device-default ImsService in com.android.phone ----------------
@@ -149,6 +212,20 @@ if [ -f "$TMP/app/joan-ims-rro.apk" ]; then
   mkdir -p "$PRODMNT/overlay"
   copy_file "$TMP/app/joan-ims-rro.apk" \
     "$PRODMNT/overlay/JoanImsPhoneDefault.apk" 644 u:object_r:system_file:s0
+fi
+
+# --- RRO: framework VoLTE admit (config_device_volte_available) ---------
+# ImsManager.isVolteEnabledByPlatform() ANDs this framework-res bool with
+# carrier_volte_available_bool and isGbaValid(). joan ships it false, so
+# without this the Settings VoLTE toggle never renders and every outbound
+# dial goes CS -- while REGISTER still succeeds and MT calls still arrive,
+# which makes it look like a SIP bug. A ROM build should set this in the
+# device tree instead; see upstream/VOLTE-PLATFORM-SETUP.md.
+if [ -f "$TMP/app/joan-fw-volte.apk" ]; then
+  ui_print "Installing framework overlay (VoLTE admit)"
+  mkdir -p "$PRODMNT/overlay"
+  copy_file "$TMP/app/joan-fw-volte.apk" \
+    "$PRODMNT/overlay/JoanFwVolte.apk" 644 u:object_r:system_file:s0
 fi
 
 # --- Viettel 45204 APN overlay (merge, never replace) -------------------
@@ -167,6 +244,9 @@ if [ -f "$TMP/apn/viettel-45204.xml" ] && [ -f "$TMP/scripts/merge-viettel-apns.
   fi
   if [ ! -f "$BACKUP" ]; then
     copy_file "$ORIG" "$BACKUP" 644 u:object_r:system_file:s0
+    ui_print "  APN list: saved the ROM copy before merging."
+    ui_print "    Backup: /product/etc/apns-conf.xml.joan-orig"
+    ui_print "    Uninstall restores it from there."
   fi
   need_file "$BACKUP" 200
   MERGE_TMP="$TMP/viettel-apn-blocks"
@@ -185,8 +265,10 @@ if [ -f "$TMP/apn/viettel-45204.xml" ] && [ -f "$TMP/scripts/merge-viettel-apns.
 fi
 
 sync
-umount "$PRODMNT" 2>/dev/null || true
-umount "$SYSMNT" 2>/dev/null || true
+# Only unmount what we mounted. Tearing down recovery's own mount would
+# pull the ground out from under it mid-install.
+[ "$PRODMNT_OWNED" = "1" ] && umount "$PRODMNT" 2>/dev/null
+[ "$SYSMNT_OWNED" = "1" ] && umount "$SYSMNT" 2>/dev/null
 
 sync
 ui_print "Done. Reboot system."

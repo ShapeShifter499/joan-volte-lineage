@@ -32,4 +32,13 @@ javac -d "$JAVA_OUT" \
     "$JAVA_SRC/JoanSipBuilder.java" \
     "$JAVA_SRC/JoanAmr.java" \
     "$JAVA_TEST/org/joan/ims/TestJoanSip.java"
-exec java -cp "$JAVA_OUT" org.joan.ims.TestJoanSip
+java -cp "$JAVA_OUT" org.joan.ims.TestJoanSip
+
+echo "== viettel volte carrier gate"
+SDK_JAR=${ANDROID_SDK:-$HOME/Android/Sdk}/platforms/android-36/android.jar
+GATE_OUT="$ROOT/native/build/java-gate-host"
+mkdir -p "$GATE_OUT"
+javac -cp "$SDK_JAR" -d "$GATE_OUT" \
+    "$JAVA_SRC/JoanVolteCarrierGate.java" \
+    "$JAVA_TEST/org/joan/ims/TestJoanVolteCarrierGate.java"
+exec java -cp "$GATE_OUT:$SDK_JAR" org.joan.ims.TestJoanVolteCarrierGate

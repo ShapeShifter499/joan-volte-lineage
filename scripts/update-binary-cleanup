@@ -13,39 +13,106 @@ ui_print() {
 
 ui_print "joan-volte uninstall: removing ImsService"
 
+# Mount a partition for writing, reusing any mount recovery already
+# holds. Recovery mounts /system itself to read otacerts.zip during
+# signature verification, and ext4 refuses a second rw mount of a device
+# it already has read-only -- which made the installer fail with "cannot
+# mount system" on some runs and not others. The old code here hid that
+# case behind "|| true" and then happily removed nothing while reporting
+# success, which is worse: an uninstall that silently no-ops leaves the
+# user believing they rolled back.
+MP_RESULT=""
+MP_OWNED=0
+mount_rw() {
+  name="$1"
+  mp="$2"
+  MP_RESULT="$mp"
+  MP_OWNED=0
+  mkdir -p "$mp"
+  if mount | grep -q " $mp "; then
+    MP_OWNED=1
+    return 0
+  fi
+  for dev in /dev/block/mapper/$name /dev/block/by-name/$name; do
+    [ -b "$dev" ] || continue
+    real=$(readlink -f "$dev" 2>/dev/null)
+    [ -n "$real" ] || real="$dev"
+    cur=$(mount | grep "^$real " | head -1 | sed "s/^[^ ]* on \\(.*\\) type .*/\\1/")
+    if [ -n "$cur" ] && [ "$cur" != "/" ]; then
+      mount -o rw,remount "$cur" 2>/dev/null || true
+      MP_RESULT="$cur"
+      return 0
+    fi
+    if mount -o rw "$dev" "$mp" 2>/dev/null; then
+      MP_OWNED=1
+      return 0
+    fi
+  done
+  return 1
+}
+
 SYSMNT=/mnt/joan_system
-mkdir -p "$SYSMNT"
-mount | grep -q " $SYSMNT " || \
-  mount -o rw /dev/block/mapper/system "$SYSMNT" 2>/dev/null || \
-  mount -o rw /dev/block/by-name/system "$SYSMNT" 2>/dev/null || true
+if ! mount_rw system "$SYSMNT"; then
+  ui_print "ERROR: cannot mount system; nothing was removed."
+  ui_print "  Reboot to recovery and run the uninstaller again."
+  exit 1
+fi
+SYSMNT="$MP_RESULT"; SYSMNT_OWNED="$MP_OWNED"
+mount -o rw,remount "$SYSMNT" 2>/dev/null || true
 SYS="$SYSMNT/system"
 rm -rf "$SYS/priv-app/JoanIms"
 rm -f "$SYS/etc/permissions/org.joan.ims.xml"
+# The IMS feature declaration is only ours to touch if the installer said
+# so. Without a marker we cannot tell our file from a ROM that ships its
+# own, so leave it -- a stale feature declaration is a far smaller harm
+# than deleting one the ROM needs.
+IMSFEAT="$SYS/etc/permissions/android.hardware.telephony.ims.xml"
+if [ -f "$IMSFEAT.joan-orig" ]; then
+  cat "$IMSFEAT.joan-orig" > "$IMSFEAT" \
+    || ui_print "  /system: IMS feature restore FAILED"
+  rm -f "$IMSFEAT.joan-orig" "$IMSFEAT.joan-added"
+  ui_print "  IMS feature xml: restored the ROM copy from"
+  ui_print "    /system/etc/permissions/android.hardware.telephony.ims.xml.joan-orig"
+elif [ -f "$IMSFEAT.joan-added" ]; then
+  rm -f "$IMSFEAT" "$IMSFEAT.joan-added"
+  ui_print "  IMS feature xml: removed (it was ours, per the install marker)"
+else
+  ui_print "  IMS feature xml: LEFT IN PLACE - no install marker, so it"
+  ui_print "    cannot be told apart from a ROM copy. Delete by hand if"
+  ui_print "    you know it was ours: /system/etc/permissions/"
+  ui_print "    android.hardware.telephony.ims.xml"
+fi
 rm -f "$SYS/bin/joan-ims" "$SYS/bin/joan-ims-ua" \
       "$SYS/etc/init/joan-ims.rc" "$SYS/etc/init/joan-imsd.rc"
 rm -f "$SYSMNT/system_ext/bin/joan-ims-ua" "$SYSMNT/system_ext/etc/init/joan-ims.rc"
 ui_print "  /system: JoanIms + leftovers removed (or absent)"
 
 PRODMNT=/mnt/joan_product
-mkdir -p "$PRODMNT"
-mount | grep -q " $PRODMNT " || \
-  mount -o rw /dev/block/mapper/product "$PRODMNT" 2>/dev/null || \
-  mount -o rw /dev/block/by-name/product "$PRODMNT" 2>/dev/null || true
+if ! mount_rw product "$PRODMNT"; then
+  ui_print "ERROR: cannot mount product; overlays and the APN list were"
+  ui_print "  left as they are. Reboot to recovery and run this again."
+  exit 1
+fi
+PRODMNT="$MP_RESULT"; PRODMNT_OWNED="$MP_OWNED"
+mount -o rw,remount "$PRODMNT" 2>/dev/null || true
 rm -f "$PRODMNT/overlay/JoanImsPhoneDefault.apk"
+rm -f "$PRODMNT/overlay/JoanFwVolte.apk"
 if [ -f "$PRODMNT/etc/apns-conf.xml.joan-orig" ]; then
   cat "$PRODMNT/etc/apns-conf.xml.joan-orig" > "$PRODMNT/etc/apns-conf.xml" \
     || ui_print "  /product: APN backup restore failed"
   rm -f "$PRODMNT/etc/apns-conf.xml.joan-orig"
-  ui_print "  /product: restored apns-conf.xml from joan-orig backup"
+  ui_print "  APN list: restored the ROM copy from"
+  ui_print "    /product/etc/apns-conf.xml.joan-orig"
 else
-  ui_print "  /product: no joan-orig APN backup (left apns-conf.xml)"
+  ui_print "  APN list: no backup at /product/etc/apns-conf.xml.joan-orig,"
+  ui_print "    so apns-conf.xml was left as it is."
 fi
-ui_print "  /product: overlay removed (or absent)"
+ui_print "  /product: overlays removed (or absent)"
 
 sync
+# Only unmount what we mounted ourselves.
+[ "$PRODMNT_OWNED" = "1" ] && umount "$PRODMNT" 2>/dev/null
+[ "$SYSMNT_OWNED" = "1" ] && umount "$SYSMNT" 2>/dev/null
+
 ui_print "Uninstall done. Reboot system."
 exit 0
-
-sync
-umount "$PRODMNT" 2>/dev/null || true
-umount "$SYSMNT" 2>/dev/null || true

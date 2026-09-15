@@ -13,14 +13,14 @@ loopback control socket.
 > and earpiece follow Dialer. Caller ID is the asserted number; Dialer
 > can still overlay a matching contact.
 
-## Current tester build: v0.4.0-alpha18
+## Current tester build: v0.4.0-alpha20
 
-`v0.4.0-alpha18` (versionCode 26) is the current tester zip. It is a
+`v0.4.0-alpha20` (versionCode 28) is the current tester zip. It is a
 prerelease: offline suites passed; it is **not** a live-carrier qualifier
 and has not replaced the last T-Mobile bench-validated build
 (`v0.4.0-alpha12` on the development US998). Sideload
 `joan-volte-recovery.zip` from the GitHub release, reboot, then confirm
-the `build` row below reads `0.4.0-alpha18 (26)`.
+the `build` row below reads `0.4.0-alpha20 (28)`.
 
 What landed after the last public GitHub alpha (`v0.4.0-alpha16`), plus
 the 2026-09-13 NOS/Viettel pass:
@@ -37,6 +37,43 @@ the 2026-09-13 NOS/Viettel pass:
 - **REG2 receive counters.** A protected UDP timeout now prints
   `reg2_send_ok` / `reg2_rx` / `reg2_rejected` / `reg2_rx_err`, not only
   `reg2retx`.
+- **Framework VoLTE admit overlay (alpha20).** `ImsManager
+  .isVolteEnabledByPlatform()` ANDs three things: the framework-res bool
+  `config_device_volte_available`, the carrier config
+  `carrier_volte_available_bool`, and `isGbaValid()`. joan ships the
+  framework bool **false**, so before this the VoLTE toggle did not
+  render anywhere in Settings and every outbound call went CS — while
+  REGISTER still succeeded and inbound calls still arrived, which looks
+  exactly like a SIP bug and is not one. The zip now installs a runtime
+  resource overlay setting that bool true. Verified on the development
+  US998: the Settings toggle appears and reads ON, with no user-setting
+  written. Uninstall removes the overlay. A ROM build should set this in
+  the device tree instead — see `upstream/VOLTE-PLATFORM-SETUP.md`.
+  The toggle lives at Settings -> Network & internet -> SIMs -> VoLTE;
+  LineageOS ships no VoLTE quick-settings tile, so do not look there.
+- **Default-on VoLTE admit gate (alpha19).** On boot the service asks
+  Telephony to treat VoLTE as carrier-available for **any** carrier whose
+  ROM leaves `carrier_volte_available_bool` unconfigured (the AOSP
+  default is false, and most LOS trees ship no asset for smaller
+  carriers). This is non-persistent: uninstall + reboot restores
+  production values. The **opt-out is the stock Settings toggle**
+  ("VoLTE" / "Enhanced 4G LTE Mode") — the framework honors it before
+  every dial, so a carrier that cannot use IMS just has the user turn
+  the toggle off. **Turning it off is not a guaranteed escape hatch:** it
+  gives a working call only where the network still runs CS voice, and on
+  a VoLTE-only carrier outbound calling stops entirely (observed on
+  T-Mobile US). The gate also forces that toggle
+  visible/editable when a restored carrier config would hide it, and it
+  never runs before carrier config has loaded. Look for `volte_gate`
+  rows (`applied` / `applied-visibility` / `skip:already-true` /
+  `wait:config-not-applied`) when reporting. The admit is re-checked on
+  carrier-config reload rather than remembered: the override lives in
+  `com.android.phone`, so if that process restarts it is lost while this
+  service keeps running. The service listens for
+  `ACTION_CARRIER_CONFIG_CHANGED` and re-applies, because once registered
+  the driver sleeps until the REGISTER refresh and would otherwise not
+  look again for up to half an hour. A `reapplied=N` suffix on the row
+  means the override had to be put back N times.
 - **Viettel 45204 APN overlay (alpha18).** Recovery **merges** AOSP-shaped
   IMS (`apn=ims`) and XCAP/UT (`apn=xcap`) rows, plus IPV4V6 on internet,
   into the existing product `apns-conf.xml`. It does **not** replace the
@@ -114,7 +151,7 @@ adb shell content query --uri content://org.joan.ims.state
 
 Useful rows:
 
-- `build` — must be `0.4.0-alpha18 (26)` for this zip
+- `build` — must be `0.4.0-alpha20 (28)` for this zip
 - `registered`, `last_state`, `aka_stage`, `last_register`, `last_dial`
 - `ims_diag_listener`, `ims_diag_data`, `ims_diag_network`, `ims_diag_ages`
 

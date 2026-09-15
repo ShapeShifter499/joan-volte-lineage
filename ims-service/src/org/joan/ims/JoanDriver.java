@@ -140,6 +140,10 @@ final class JoanDriver {
             poke("manual poke");
             return;
         }
+        /* Watch carrier config reloads so a com.android.phone restart
+         * cannot silently drop the VoLTE admit until the next REGISTER
+         * refresh, which can be half an hour out. */
+        JoanVolteCarrierGate.watch(ctx.getApplicationContext());
         JoanTrace.note("starting registration driver");
         Thread t = new Thread(() -> loop(ctx.getApplicationContext()),
                 "joan-ims-cycle");
@@ -311,6 +315,7 @@ final class JoanDriver {
             return Discovery.quietIdle("SIM not ready (state=" + simState
                     + ")");
         }
+        JoanVolteCarrierGate.applyIfNeeded(app, sub, tm);
         JoanImsDiagnostics.start(app, sub);
 
         Integer preferredMode = preferredNetworkMode(app, sub);

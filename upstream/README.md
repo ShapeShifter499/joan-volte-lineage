@@ -4,6 +4,40 @@ AP-side IMS (VoLTE) for the LG V30 (joan). SIP, AKA, and IPsec run in
 the Java `ImsService` over public `IpSecManager` APIs. There is no
 native daemon and no loopback control socket.
 
+## The split
+
+Getting VoLTE working on a LineageOS device takes two separate things,
+and confusing them wastes a lot of time:
+
+**Part 1 — the IMS implementation.** This directory. The `ImsService`
+app, the service-discovery RRO, the permission files, and the build
+wiring. It is device-specific work and it is the part that is finished
+and confirmed working.
+
+**Part 2 — the platform VoLTE variables.** `VOLTE-PLATFORM-SETUP.md`.
+The device-tree resources and carrier config keys the framework checks
+before it will admit VoLTE *at all*. None of it is joan-specific; any
+device with an AP-side `ImsService` needs the same list.
+
+Part 1 without part 2 produces a stack that registers successfully,
+receives inbound calls, and still sends every outbound call over GSM,
+with no VoLTE toggle anywhere in Settings. That is a configuration
+result, not a SIP bug, and part 2 exists so nobody spends a week reading
+packet captures to discover it.
+
+## Where the flashable zips fit
+
+The repo root builds `joan-volte-recovery.zip`, a sideload package that
+installs the same app plus the overlays and permission files into an
+existing LineageOS build. **It is a stopgap.** It exists so people can
+run this before LineageOS carries it, and so testers on carriers we
+cannot reach can try a build without compiling a ROM.
+
+Once a device tree inherits `joan-ims.mk` and carries the part 2
+settings, the zip is redundant and should not be used — see "Do not"
+below. Treat the zip path as the temporary one and this directory as the
+destination.
+
 ## Inherit
 
 Copy this directory to `vendor/lge/joan-ims` (or keep it as a git
@@ -18,12 +52,48 @@ this makefile (this repo's layout). If you vendor only this folder,
 point `LOCAL_PATH` at a checkout that also contains `ims-service/` and
 `permissions/`.
 
+Inheriting this module covers part 1 only. You still have to apply
+`VOLTE-PLATFORM-SETUP.md` to your device tree and carrier config.
+
 ## Layout
 
     Android.bp          JoanIms privileged app
     joan-ims.mk         PRODUCT_PACKAGES + overlays + IMS feature xml
     rro/                JoanImsPhoneDefault RRO: config_ims_mmtel_package
+    rro-fw/             framework-res RRO: config_device_volte_available
+                        (part 2 term 1, for the out-of-tree path only —
+                        in a ROM build use a device-tree overlay instead)
     permissions/        telephony.ims feature + privapp allowlist
+
+Only `Android.bp` and `joan-ims.mk` live in this directory. Everything
+they build — `ims-service/`, `permissions/`, `rro/`, `rro-fw/` — sits at
+the repo root, which is why both files refer to those paths with `../`.
+
+## Confirmed working — part 1
+
+- `ImsService` / `MmTelFeature` registration, including AKA from the ISIM
+  or from the USIM (TS 23.003) when the SIM has no ISIM application
+- 3GPP sec-agree and transport-mode ESP over `IpSecTransform`
+- REGISTER, INVITE/ACK/BYE, PCMU RTP, RTCP SR+SDES
+- MO and MT calls with two-way audio, demonstrated on the development
+  handset
+- Device-service binding via `config_ims_mmtel_package`
+
+One caveat on the MO result: until 2026-09-14 the development handset
+read `config_device_volte_available = false` with no
+`persist.dbg.volte_avail_ovr` set, which by the part 2 gate should have
+sent outbound dials to CS — and indeed it had no VoLTE toggle in Settings
+at all. Either the earlier MO demonstrations ran with that property set,
+or MO reached IMS by a path the gate does not cover. Setting term 1 made
+the toggle appear (ON, with no user-setting write), so the gate analysis
+holds; how MO previously succeeded without it does not, and is worth
+resolving before anyone treats the older MO result as a baseline. It is
+the reason part 2 is written as a checklist to verify rather than a story
+to trust.
+
+See the repo root `README.md` for what is explicitly **not** carried —
+emergency calling, SMS/MMS over IMS, DTMF, VoWiFi — before relying on
+this on a daily-driver handset.
 
 ## Do not
 
@@ -31,10 +101,9 @@ point `LOCAL_PATH` at a checkout that also contains `ims-service/` and
 - Do not listen on `127.0.0.1:15090`.
 - Do not flash the recovery zip on a ROM that already inherits this
   module — you would install the app twice.
-
-## Licence
-
-Apache-2.0. See `LICENSE`.
+- Do not ship the `rro-fw/` overlay in a ROM build. Set
+  `config_device_volte_available` in the device tree instead; an RRO is
+  the mechanism for installing into a build you do not control.
 
 ## Uplink gain: patch audio_effects.xml in the device tree
 
@@ -114,3 +183,7 @@ stands down while nothing is applied.
 
 And vendor cannot be written back: it returns ENOSPC even for blocks it
 has just freed. Such a deletion is only repaired by the next nightly.
+
+## Licence
+
+Apache-2.0. See `LICENSE`.

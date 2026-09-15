@@ -7,3 +7,4 @@ ims-service/build/
 # Build artifact: pack-zip.sh regenerates this from native/build/
 root/system/bin/joan-ims
 rro/build/
+rro-fw/build/
