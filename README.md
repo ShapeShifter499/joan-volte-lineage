@@ -347,6 +347,12 @@ LineageOS 22 inherit: `upstream/` (`joan-ims.mk` + `Android.bp`).
 
 ## How it works
 
+**What the zip contains and what each piece does:**
+[`docs/zip-contents-and-how-it-works.md`](docs/zip-contents-and-how-it-works.md)
+— every file in the flashable zip, the four conditions that must all hold
+before VoLTE is admitted, what the installer does and why, and what uninstall
+reverses.
+
 `org.joan.ims` is an Android `ImsService` / `MmTelFeature`:
 
 - Identity and AKA from the ISIM, or from the USIM (TS 23.003) when
