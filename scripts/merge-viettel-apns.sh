@@ -82,13 +82,20 @@ if [ "$saw_ims" -eq 0 ] || [ "$saw_xcap" -eq 0 ]; then
     exit 1
 fi
 
+# A row is ours if it is 452/04 however the ROM spelled the MNC.
+# apns-conf.xml is not normalised: AOSP writes mnc="04", but an
+# unpadded mnc="4" is equally valid XML and TelephonyProvider reads
+# both as MNC 4. Matching only the padded form would leave the ROM's
+# own Viettel rows in place beside ours, and TelephonyProvider would
+# then have two candidates per type -- the duplicate-APN failure this
+# whole merge exists to avoid.
 is_viettel_45204() {
     case "$1" in
-        *'mcc="452"'*)
-            case "$1" in
-                *'mnc="04"'*) return 0 ;;
-            esac
-            ;;
+        *'mcc="452"'*) ;;
+        *) return 1 ;;
+    esac
+    case "$1" in
+        *'mnc="04"'*|*'mnc="4"'*) return 0 ;;
     esac
     return 1
 }

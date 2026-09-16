@@ -52,7 +52,13 @@ orig = ET.parse(sys.argv[2]).getroot()
 mrows = [el.attrib for el in merged.iter("apn")]
 orows = [el.attrib for el in orig.iter("apn")]
 def plmn(d):
-    return d.get("mcc"), d.get("mnc")
+    """452/04 however the ROM spelled the MNC -- "04" and "4" are the
+    same network, and a ROM that writes the unpadded form must still
+    have its Viettel rows replaced rather than left beside ours."""
+    mcc, mnc = d.get("mcc"), d.get("mnc")
+    if mcc == "452" and mnc in ("04", "4"):
+        return "452", "04"
+    return mcc, mnc
 keep = [d for d in orows if plmn(d) != ("452", "04")]
 got_keep = [d for d in mrows if plmn(d) != ("452", "04")]
 assert [(d.get("carrier"), d.get("apn")) for d in keep] == [
@@ -60,6 +66,8 @@ assert [(d.get("carrier"), d.get("apn")) for d in keep] == [
 ], (keep, got_keep)
 vt = [d for d in mrows if plmn(d) == ("452", "04")]
 assert len(vt) == 4, vt
+assert not any(d.get("carrier") == "Viettel unpadded" for d in mrows), \
+    "an unpadded mnc=\"4\" Viettel row survived the merge"
 by_apn = {d.get("apn"): d for d in vt}
 assert by_apn["ims"]["type"] == "ims"
 assert by_apn["ims"]["protocol"] == "IPV4V6"
@@ -96,5 +104,37 @@ assert len(rows) == 4
 print("overlay must be merged, never copied over product/etc/apns-conf.xml")
 PY
 pass "overlay is Viettel-only (installer must merge)"
+
+# The installer verifies the merge with shell tools, not python. Run
+# the same assertions here: a check that only ever runs inside recovery
+# is a check nobody has seen pass.
+grep -q 'joan-viettel-45204-begin' "$merged" \
+    || fail "merged file has no joan Viettel block marker"
+sed -n '/joan-viettel-45204-begin/,/joan-viettel-45204-end/p' "$merged" \
+    > "$OUT/viettel-block.xml"
+grep -q 'apn="ims"' "$OUT/viettel-block.xml" || fail "block missing ims"
+grep -q 'apn="xcap"' "$OUT/viettel-block.xml" || fail "block missing xcap"
+vnet=$(grep -c 'apn="v-internet"' "$merged" || true)
+[ "$vnet" = "1" ] || fail "merged has $vnet v-internet rows, expected 1"
+# The weak form the installer used to use: passes on the ROM's own rows
+# even with the Viettel block gone. Prove it is weak, so nobody puts it
+# back thinking it tested anything.
+python3 - "$merged" <<'PY' || fail "weak-check demonstration"
+import re, sys
+text = open(sys.argv[1]).read()
+without = re.sub(r"<!-- joan-viettel-45204-begin -->.*?"
+                 r"<!-- joan-viettel-45204-end -->", "", text, flags=re.S)
+assert 'apn="ims"' not in without or True
+# The fixture's other PLMNs carry no ims row, so construct the case the
+# real world has: one foreign ims row, no Viettel block.
+foreign = without.replace("</apns>",
+    '    <apn mcc="310" mnc="260" apn="ims" type="ims" />\n'
+    '    <apn mcc="310" mnc="260" apn="xcap" type="xcap" />\n</apns>')
+assert 'apn="ims"' in foreign and 'apn="xcap"' in foreign, \
+    "bare greps would have failed here"
+assert "joan-viettel-45204-begin" not in foreign, \
+    "marker check would have caught it"
+PY
+pass "installer-style checks prove OUR rows landed, not just any ims row"
 
 echo "APN overlay tests passed"

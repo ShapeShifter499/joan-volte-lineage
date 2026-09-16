@@ -259,8 +259,23 @@ if [ -f "$TMP/apn/viettel-45204.xml" ] && [ -f "$TMP/scripts/merge-viettel-apns.
   osz=$(wc -c < "$TMP/apn/viettel-45204.xml" | tr -d ' ')
   msz=$(wc -c < "$TMP/apns-merged.xml" | tr -d ' ')
   [ "$msz" -gt "$osz" ] || error "merged apns-conf.xml not larger than overlay ($msz <= $osz)"
-  grep -q 'apn="ims"' "$TMP/apns-merged.xml" || error "merged APN list missing ims"
-  grep -q 'apn="xcap"' "$TMP/apns-merged.xml" || error "merged APN list missing xcap"
+  # These have to prove OUR rows landed, not that the file contains an
+  # ims row somewhere: every world list already ships ims and xcap rows
+  # for other carriers, so a bare grep for them passes even if the
+  # Viettel block were dropped entirely. Check the marker the merge
+  # writes, and that the block between the markers carries both rows.
+  grep -q 'joan-viettel-45204-begin' "$TMP/apns-merged.xml" \
+    || error "merged APN list has no joan Viettel block"
+  sed -n '/joan-viettel-45204-begin/,/joan-viettel-45204-end/p' \
+    "$TMP/apns-merged.xml" > "$TMP/apns-viettel-block.xml"
+  grep -q 'apn="ims"' "$TMP/apns-viettel-block.xml" \
+    || error "joan Viettel block missing ims"
+  grep -q 'apn="xcap"' "$TMP/apns-viettel-block.xml" \
+    || error "joan Viettel block missing xcap"
+  # And exactly one Viettel internet row survived, in either MNC spelling.
+  vnet=$(grep -c 'apn="v-internet"' "$TMP/apns-merged.xml" || true)
+  [ "$vnet" = "1" ] \
+    || error "merged APN list has $vnet Viettel internet rows, expected 1"
   copy_file "$TMP/apns-merged.xml" "$ORIG" 644 u:object_r:system_file:s0
 fi
 

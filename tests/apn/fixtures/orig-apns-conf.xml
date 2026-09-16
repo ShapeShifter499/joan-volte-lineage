@@ -18,5 +18,6 @@
         mmsproxy="192.168.233.10"
         type="mms"
     />
+    <apn mcc="452" mnc="4" carrier="Viettel unpadded" apn="v-internet" type="default,supl" />
     <apn mcc="452" mnc="01" carrier="Mobifone 3G" apn="m-wap" type="default,supl" />
 </apns>
