@@ -9,6 +9,16 @@ import android.telephony.ims.ImsCallProfile;
 import android.telephony.ims.stub.ImsCallSessionImplBase;
 
 public abstract class MmTelFeature extends ImsFeature {
+
+    public void notifySrvccStarted(java.util.function.Consumer<
+            java.util.List<android.telephony.ims.SrvccCall>> consumer) {}
+
+    public void notifySrvccCompleted() {}
+
+    public void notifySrvccFailed() {}
+
+    public void notifySrvccCanceled() {}
+
     public static class MmTelCapabilities {
         public static final int CAPABILITY_TYPE_VOICE = 1 << 0;
         public static final int CAPABILITY_TYPE_VIDEO = 1 << 1;

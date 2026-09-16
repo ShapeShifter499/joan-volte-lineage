@@ -511,6 +511,57 @@ public class JoanCallSession extends ImsCallSessionImplBase {
      * so a peer hold uses the Received variants, and the
      * once-per-session guard on our own hold is left alone.
      */
+    /* PreciseCallState values, as SrvccCall wants them. Not in the
+     * public SDK surface we compile against, so named here. */
+    private static final int PRECISE_ACTIVE = 1;
+    private static final int PRECISE_HOLDING = 2;
+    private static final int PRECISE_ALERTING = 4;
+    private static final int PRECISE_INCOMING = 5;
+
+    /** The SIP Call-ID this session is bound to, for SRVCC reporting. */
+    String sipCallId() {
+        return sipCallId;
+    }
+
+    ImsCallProfile callProfile() {
+        return profile;
+    }
+
+    /**
+     * This session's state in the terms SrvccCall uses.
+     *
+     * <p>The modem needs to know which call is talking and which is
+     * ringing to rebuild them on the CS side; reporting everything as
+     * active would hand back a ringing call as an answered one.
+     */
+    int preciseState(boolean held) {
+        switch (state) {
+            case STATE_ESTABLISHED:
+                return held ? PRECISE_HOLDING : PRECISE_ACTIVE;
+            case STATE_ESTABLISHING:
+            case STATE_NEGOTIATING:
+                return incoming ? PRECISE_INCOMING : PRECISE_ALERTING;
+            case STATE_INITIATED:
+                return incoming ? PRECISE_INCOMING : PRECISE_ALERTING;
+            default:
+                return PRECISE_ACTIVE;
+        }
+    }
+
+    /**
+     * SRVCC completed: this call now lives in the circuit-switched
+     * domain and the IMS dialog behind it is gone.
+     *
+     * <p>No BYE. The network moved the call; sending one would tear down
+     * the CS leg the handover just created. The session is closed
+     * locally and the framework already knows, because it drove the
+     * handover.
+     */
+    void onSrvccCompleted() {
+        state = STATE_TERMINATED;
+        JoanMedia.stop();
+    }
+
     void onPeerHold(boolean held) {
         ImsCallSessionListener l = listener;
         if (l == null) {

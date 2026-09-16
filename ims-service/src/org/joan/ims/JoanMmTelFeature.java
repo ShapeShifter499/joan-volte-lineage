@@ -93,6 +93,81 @@ public class JoanMmTelFeature extends MmTelFeature {
         }
     }
 
+    /**
+     * The network started an SRVCC: our LTE calls are being handed to the
+     * circuit-switched domain.
+     *
+     * <p>The modem cannot rebuild the calls on the CS side without
+     * knowing what is up and what state each leg is in, and this callback
+     * is the only place it can learn that -- so a stack that does not
+     * answer it drops every call at the moment coverage leaves LTE, which
+     * is exactly when a handover was supposed to save them.
+     *
+     * <p>Held legs are reported as holding and ringing legs as alerting
+     * or incoming: handing a ringing call back as an answered one would
+     * have the modem rebuild it already connected.
+     */
+    @Override
+    public void notifySrvccStarted(
+            java.util.function.Consumer<
+                    java.util.List<android.telephony.ims.SrvccCall>> consumer) {
+        java.util.List<android.telephony.ims.SrvccCall> calls =
+                new java.util.ArrayList<>();
+        try {
+            boolean held = JoanSipUa.liveHeld();
+            String liveId = JoanSipUa.currentCallId();
+            for (java.util.Map.Entry<String, JoanCallSession> e
+                    : sBySip.entrySet()) {
+                JoanCallSession s = e.getValue();
+                if (s == null || s.callProfile() == null) {
+                    continue;
+                }
+                boolean thisHeld = held && e.getKey().equals(liveId);
+                calls.add(new android.telephony.ims.SrvccCall(
+                        e.getKey(), s.preciseState(thisHeld),
+                        s.callProfile()));
+            }
+        } catch (Throwable t) {
+            JoanTrace.note("srvcc started " + t.getClass().getSimpleName());
+        }
+        JoanTrace.note("srvcc started; reporting " + calls.size() + " call(s)");
+        if (consumer != null) {
+            consumer.accept(calls);
+        }
+    }
+
+    /**
+     * The handover finished. The calls are CS now and the IMS dialogs
+     * behind them are gone.
+     *
+     * <p>Deliberately no BYE: the network moved the call, and sending one
+     * would tear down the CS leg the handover just built. The dialogs are
+     * dropped locally instead.
+     */
+    @Override
+    public void notifySrvccCompleted() {
+        JoanTrace.note("srvcc completed; releasing " + sBySip.size()
+                + " dialog(s) without BYE");
+        for (JoanCallSession s : sBySip.values()) {
+            if (s != null) {
+                s.onSrvccCompleted();
+            }
+        }
+        sBySip.clear();
+        sIncoming = null;
+        JoanSipUa.forgetCallsAfterSrvcc();
+    }
+
+    @Override
+    public void notifySrvccFailed() {
+        JoanTrace.note("srvcc failed; the IMS call stands");
+    }
+
+    @Override
+    public void notifySrvccCanceled() {
+        JoanTrace.note("srvcc canceled; the IMS call stands");
+    }
+
     /** The far end held or resumed the call identified by its Call-ID. */
     static void onPeerHoldChanged(String sipCallId, boolean held) {
         JoanCallSession s = sipCallId != null ? sBySip.get(sipCallId) : null;

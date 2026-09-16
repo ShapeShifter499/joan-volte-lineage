@@ -553,6 +553,26 @@ final class JoanSipUa {
                 sMediaAmrBitrate, sMediaAmrOct, sMediaAmrMaxMode, sMediaTePt);
     }
 
+    /**
+     * Drop all call state after an SRVCC, without signalling.
+     *
+     * <p>The dialogs are gone because the network moved them, not because
+     * they ended: a BYE here would reach a core that has already handed
+     * the call to CS. The registration stays -- SRVCC moves the calls,
+     * not the binding.
+     */
+    static void forgetCallsAfterSrvcc() {
+        synchronized (LOCK) {
+            sessionTimerStop("srvcc");
+            sCall = false;
+            sLiveHeld = false;
+            sParked = null;
+            sDlg = null;
+            sHeldInvite = null;
+        }
+        JoanMedia.stop();
+    }
+
     /** Whether the reg-event subscription is already in place. */
     private static volatile boolean sRegEventSubscribed;
 
