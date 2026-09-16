@@ -49,6 +49,9 @@ final class JoanMedia {
     private static Thread sPlay;
     private static DatagramSocket sSock;
 
+    /** Consecutive codec errors tolerated before a direction gives up. */
+    private static final int MAX_CODEC_FAILS = 25;
+
     private static final int RTP_HDR = 12;
     private static volatile InetAddress sDest;
     /* Where the RTP we receive actually comes from. Deliberately counters
@@ -72,7 +75,8 @@ final class JoanMedia {
     static boolean startRtp(Context ctx, Network net, InetAddress local,
                             InetAddress dest, int destPort, int rtcpPort,
                             boolean mux) {
-        return startRtp(ctx, net, local, dest, destPort, rtcpPort, mux, 0, null);
+        return startRtp(ctx, net, local, dest, destPort, rtcpPort, mux, 0,
+                null, 0);
     }
 
     /**
@@ -85,14 +89,15 @@ final class JoanMedia {
      */
     static boolean startRtp(Context ctx, Network net, InetAddress local,
                             InetAddress dest, int destPort, int rtcpPort,
-                            boolean mux, int payloadType, Boolean amrWideband) {
+                               boolean mux, int payloadType, Boolean amrWideband,
+                            int amrBitrate) {
         stop();
         sPt = payloadType;
         sAmr = null;
         sRate = PCMU_HZ;
         sFrame = PCMU_SAMPLES;
         if (amrWideband != null) {
-            JoanAmrCodec c = JoanAmrCodec.open(amrWideband);
+            JoanAmrCodec c = JoanAmrCodec.open(amrWideband, amrBitrate);
             if (c != null) {
                 sAmr = c;
                 sRate = c.sampleRate();
@@ -151,7 +156,8 @@ final class JoanMedia {
                 + " rtcp_port=" + (sMux ? sDestPort : sRtcpPort)
                 + " codec=" + (sAmr == null ? "PCMU"
                         : (sAmr.wideband() ? "AMR-WB" : "AMR-NB"))
-                + " pt=" + sPt + " rate=" + sRate);
+                + " pt=" + sPt + " rate=" + sRate
+                + " bitrate=" + (amrBitrate > 0 ? amrBitrate : 0));
         return true;
     }
 
@@ -257,9 +263,14 @@ final class JoanMedia {
             /* AMR-WB's largest frame is 60 bytes plus a ToC; the RTP
              * payload is far smaller than a PCMU frame, but the buffer has
              * to fit whichever codec is running. */
-            byte[] storage = new byte[80];
-            byte[] payload = new byte[96];
-            byte[] rtp = new byte[RTP_HDR + Math.max(sFrame, 96)];
+            /* Sized for a whole output buffer, not for one nominal frame:
+             * MediaCodec may hand back more than the 60-byte AMR-WB
+             * maximum, and an outsized frame must be skippable rather
+             * than fatal. */
+            byte[] storage = new byte[512];
+            byte[] payload = new byte[544];
+            int encFails = 0;
+            byte[] rtp = new byte[RTP_HDR + Math.max(sFrame, payload.length)];
             DatagramPacket out = new DatagramPacket(
                     rtp, rtp.length, dest, dport);
             AudioManager cam = app.getSystemService(AudioManager.class);
@@ -303,8 +314,18 @@ final class JoanMedia {
                 if (amr != null) {
                     int slen = amr.encode(pcm, m, storage);
                     if (slen < 0) {
-                        break;
+                        /* One encoder error is a lost frame, not a lost
+                         * call. Breaking here killed the uplink silently
+                         * for the rest of the call and left "media ul
+                         * stopped" as the only clue. */
+                        if (++encFails >= MAX_CODEC_FAILS) {
+                            JoanTrace.note("media cap: encoder failed "
+                                    + encFails + " times; stopping uplink");
+                            break;
+                        }
+                        continue;
                     }
+                    encFails = 0;
                     if (slen == 0) {
                         /* Encoder still filling its pipeline. Send nothing
                          * this tick rather than a malformed packet. */
@@ -378,7 +399,8 @@ final class JoanMedia {
             byte[] down = new byte[512];
             JoanAmrCodec amr = sAmr;
             short[] pcm = new short[sFrame];
-            byte[] storage = new byte[80];
+            byte[] storage = new byte[512];
+            int decFails = 0;
             DatagramPacket in = new DatagramPacket(down, down.length);
             JoanTrace.note("media play rolling voice mode="
                     + (am == null ? -1 : am.getMode()));
@@ -427,8 +449,16 @@ final class JoanMedia {
                     }
                     m = amr.decode(storage, slen, pcm);
                     if (m < 0) {
-                        break;
+                        /* Same rule as the uplink: a bad frame is a bad
+                         * frame, not the end of the downlink. */
+                        if (++decFails >= MAX_CODEC_FAILS) {
+                            JoanTrace.note("media play: decoder failed "
+                                    + decFails + " times; stopping downlink");
+                            break;
+                        }
+                        continue;
                     }
+                    decFails = 0;
                     if (m == 0) {
                         continue;
                     }

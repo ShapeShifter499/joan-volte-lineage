@@ -44,8 +44,23 @@ final class JoanAmrCodec {
     private final boolean wideband;
     private final MediaCodec encoder;
     private final MediaCodec decoder;
-    private final MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-    private long ptsUs;
+    /*
+     * One BufferInfo and one pts per DIRECTION. encode() runs on the
+     * capture thread and decode() on the playback thread, so a single
+     * shared BufferInfo is written by both at once: each
+     * dequeueOutputBuffer() fills it in, and whichever thread reads it
+     * second sees the other's size and offset. That produced an encoder
+     * frame "larger" than its 80-byte buffer -- which used to kill the
+     * uplink for the rest of the call -- and decoded sample counts
+     * belonging to the encoder. PCMU never hit it because PCMU has no
+     * codec object, which is why only AMR calls fell apart.
+     */
+    private final MediaCodec.BufferInfo encInfo = new MediaCodec.BufferInfo();
+    private final MediaCodec.BufferInfo decInfo = new MediaCodec.BufferInfo();
+    private long encPtsUs;
+    private long decPtsUs;
+    private int encNoInput;
+    private int decNoInput;
 
     private JoanAmrCodec(boolean wideband, MediaCodec enc, MediaCodec dec) {
         this.wideband = wideband;
@@ -186,6 +201,16 @@ final class JoanAmrCodec {
     }
 
     static JoanAmrCodec open(boolean wideband) {
+        return open(wideband, 0);
+    }
+
+    /**
+     * @param bitrate encoder bitrate from the negotiated mode-set, or 0 to
+     *        use this codec's default. Encoding above the peer's mode-set
+     *        yields frames they discard, which presents as a call where
+     *        our microphone works and nobody hears us.
+     */
+    static JoanAmrCodec open(boolean wideband, int bitrate) {
         String mime = wideband ? MIME_WB : MIME_NB;
         MediaCodec enc = null;
         MediaCodec dec = null;
@@ -193,7 +218,7 @@ final class JoanAmrCodec {
             int rate = wideband ? 16000 : 8000;
             MediaFormat fmt = MediaFormat.createAudioFormat(mime, rate, 1);
             fmt.setInteger(MediaFormat.KEY_BIT_RATE,
-                    wideband ? WB_BITRATE : NB_BITRATE);
+                    bitrate > 0 ? bitrate : (wideband ? WB_BITRATE : NB_BITRATE));
 
             enc = MediaCodec.createEncoderByType(mime);
             enc.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
@@ -234,24 +259,38 @@ final class JoanAmrCodec {
                 for (int i = 0; i < samples; i++) {
                     b.putShort(pcm[i]);
                 }
-                encoder.queueInputBuffer(in, 0, samples * 2, ptsUs, 0);
-                ptsUs += (samples * 1000000L) / sampleRate();
+                encoder.queueInputBuffer(in, 0, samples * 2, encPtsUs, 0);
+                encPtsUs += (samples * 1000000L) / sampleRate();
+            } else if (++encNoInput % 50 == 1) {
+                /* No input buffer this tick means 20 ms of microphone is
+                 * dropped. Rate-limited because it is a glitch, not a
+                 * failure -- but it was previously invisible. */
+                JoanTrace.note("amr encode: no input buffer (" + encNoInput + ")");
             }
-            int idx = encoder.dequeueOutputBuffer(info, TIMEOUT_US);
+            int idx = encoder.dequeueOutputBuffer(encInfo, TIMEOUT_US);
             while (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED
                     || idx == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
-                idx = encoder.dequeueOutputBuffer(info, TIMEOUT_US);
+                idx = encoder.dequeueOutputBuffer(encInfo, TIMEOUT_US);
             }
             if (idx < 0) {
                 return 0;
             }
-            int n = info.size;
-            if (n > out.length) {
+            if ((encInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                /* Configuration, not speech: AMR carries no out-of-band
+                 * header in RTP, so it is dropped rather than packetised. */
                 encoder.releaseOutputBuffer(idx, false);
-                return -1;
+                return 0;
+            }
+            int n = encInfo.size;
+            if (n > out.length) {
+                /* One outsized frame is a frame to skip, not a reason to
+                 * stop sending audio for the rest of the call. */
+                JoanTrace.note("amr encode: frame " + n + " > " + out.length);
+                encoder.releaseOutputBuffer(idx, false);
+                return 0;
             }
             ByteBuffer b = encoder.getOutputBuffer(idx);
-            b.position(info.offset);
+            b.position(encInfo.offset);
             b.get(out, 0, n);
             encoder.releaseOutputBuffer(idx, false);
             return n;
@@ -274,22 +313,29 @@ final class JoanAmrCodec {
                 ByteBuffer b = decoder.getInputBuffer(in);
                 b.clear();
                 b.put(storage, 0, len);
-                decoder.queueInputBuffer(in, 0, len, ptsUs, 0);
+                decoder.queueInputBuffer(in, 0, len, decPtsUs, 0);
+                decPtsUs += (samplesPerFrame() * 1000000L) / sampleRate();
+            } else if (++decNoInput % 50 == 1) {
+                JoanTrace.note("amr decode: no input buffer (" + decNoInput + ")");
             }
-            int idx = decoder.dequeueOutputBuffer(info, TIMEOUT_US);
+            int idx = decoder.dequeueOutputBuffer(decInfo, TIMEOUT_US);
             while (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED
                     || idx == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
-                idx = decoder.dequeueOutputBuffer(info, TIMEOUT_US);
+                idx = decoder.dequeueOutputBuffer(decInfo, TIMEOUT_US);
             }
             if (idx < 0) {
                 return 0;
             }
-            int samples = info.size / 2;
+            if ((decInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                decoder.releaseOutputBuffer(idx, false);
+                return 0;
+            }
+            int samples = decInfo.size / 2;
             if (samples > pcm.length) {
                 samples = pcm.length;
             }
             ByteBuffer b = decoder.getOutputBuffer(idx);
-            b.position(info.offset);
+            b.position(decInfo.offset);
             for (int i = 0; i < samples; i++) {
                 pcm[i] = b.getShort();
             }
