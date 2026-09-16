@@ -1231,6 +1231,50 @@ final class JoanSipBuilder {
         boolean amrOctetAligned() {
             return fmtp.replace(" ", "").contains("octet-align=1");
         }
+
+        /**
+         * Highest AMR mode the peer will accept, or -1 when they named no
+         * mode-set and any mode is allowed.
+         *
+         * <p>Encoding above a negotiated mode-set produces frames the far
+         * end discards, which sounds exactly like a dead uplink: the call
+         * connects, our microphone is plainly working, and nobody hears
+         * us. AOSP negotiates this in NegotiateAmrFmtp; ignoring it is
+         * only safe while the other side happens not to restrict it.
+         */
+        int maxAmrMode() {
+            String f = fmtp.replace(" ", "");
+            int i = f.indexOf("mode-set=");
+            if (i < 0) {
+                return -1;
+            }
+            int end = f.indexOf(';', i);
+            String list = f.substring(i + "mode-set=".length(),
+                    end < 0 ? f.length() : end);
+            int max = -1;
+            for (String part : list.split(",")) {
+                try {
+                    int m = Integer.parseInt(part.trim());
+                    if (m > max) {
+                        max = m;
+                    }
+                } catch (NumberFormatException ignored) {
+                    // not a mode number; skip
+                }
+            }
+            return max;
+        }
+
+        /** The mode-set parameter as offered, or "" when unrestricted. */
+        String modeSet() {
+            String f = fmtp.replace(" ", "");
+            int i = f.indexOf("mode-set=");
+            if (i < 0) {
+                return "";
+            }
+            int end = f.indexOf(';', i);
+            return f.substring(i, end < 0 ? f.length() : end);
+        }
     }
 
     /**
@@ -1363,6 +1407,33 @@ final class JoanSipBuilder {
         return b.toString();
     }
 
+    /** RFC 4867 bitrates, indexed by mode. */
+    private static final int[] AMR_WB_BPS = {
+            6600, 8850, 12650, 14250, 15850, 18250, 19850, 23050, 23850 };
+    private static final int[] AMR_NB_BPS = {
+            4750, 5150, 5900, 6700, 7400, 7950, 10200, 12200 };
+
+    /**
+     * Encoder bitrate for a negotiated codec: the highest mode the peer
+     * allows, or 0 to leave the codec's own default alone when they named
+     * no mode-set.
+     */
+    static int amrBitrate(Codec c) {
+        Capability cap = capabilityFor(c);
+        if (cap == null || cap.amrWideband() == null) {
+            return 0;
+        }
+        int mode = c.maxAmrMode();
+        if (mode < 0) {
+            return 0;
+        }
+        int[] table = cap.amrWideband() ? AMR_WB_BPS : AMR_NB_BPS;
+        if (mode >= table.length) {
+            mode = table.length - 1;
+        }
+        return table[mode];
+    }
+
     /** The capability matching a codec's encoding name and rate, or null. */
     static Capability capabilityFor(Codec c) {
         if (c == null) {
@@ -1485,7 +1556,12 @@ final class JoanSipBuilder {
             rtpmap = "a=rtpmap:" + pt + ' ' + cap.name + '/' + cap.rate
                     + (cap.amrWideband() != null ? "/1" : "") + "\r\n";
             if (cap.needsOctetAlign) {
-                fmtp = "a=fmtp:" + pt + " octet-align=1\r\n";
+                /* Echo their mode-set: an answer that stays silent about
+                 * it claims every mode, and we are about to encode inside
+                 * theirs. */
+                String ms = chosen.modeSet();
+                fmtp = "a=fmtp:" + pt + " octet-align=1"
+                        + (ms.isEmpty() ? "" : ";" + ms) + "\r\n";
             }
         }
         return "v=0\r\n"

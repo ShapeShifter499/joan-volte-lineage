@@ -565,7 +565,8 @@ public class JoanCallSession extends ImsCallSessionImplBase {
         if (JoanMedia.startRtp(app, JoanSipUa.network(), JoanSipUa.localAddr(),
                 JoanSipUa.mediaIp(), JoanSipUa.mediaPort(),
                 JoanSipUa.mediaRtcpPort(), JoanSipUa.mediaMux(),
-                JoanSipUa.mediaPt(), JoanSipUa.mediaAmrWideband())) {
+                JoanSipUa.mediaPt(), JoanSipUa.mediaAmrWideband(),
+                JoanSipUa.mediaAmrBitrate())) {
             return;
         }
         JoanTrace.note("media did not start; ending call");

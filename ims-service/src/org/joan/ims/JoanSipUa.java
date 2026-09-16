@@ -74,6 +74,8 @@ final class JoanSipUa {
     private static volatile int sMediaRtcpPort;
     /** Negotiated payload type, and TRUE/FALSE for AMR-WB/NB, null=PCMU. */
     private static volatile int sMediaPt;
+    /** Encoder bitrate from the negotiated AMR mode-set; 0 = codec default. */
+    private static volatile int sMediaAmrBitrate;
     private static volatile Boolean sMediaAmrWb;
     private static volatile boolean sMediaMux;
     /** True when the live dialog is on hold (sendonly, no RTP). */
@@ -263,6 +265,10 @@ final class JoanSipUa {
 
     static int mediaPt() {
         return sMediaPt;
+    }
+
+    static int mediaAmrBitrate() {
+        return sMediaAmrBitrate;
     }
 
     static Boolean mediaAmrWideband() {
@@ -514,9 +520,13 @@ final class JoanSipUa {
                             sMediaMux = media.mux;
                             sMediaPt = media.payloadType;
                             sMediaAmrWb = JoanSipBuilder.amrWideband(answered);
+                            sMediaAmrBitrate = JoanSipBuilder.amrBitrate(answered);
                             JoanTrace.note("app invite codec="
                                     + (enc.isEmpty() ? "PCMU" : enc)
-                                    + " pt=" + media.payloadType);
+                                    + " pt=" + media.payloadType
+                                    + " fmtp=\"" + (answered == null
+                                            ? "" : answered.fmtp) + "\""
+                                    + " bitrate=" + sMediaAmrBitrate);
                         } catch (Exception e) {
                             sMediaIp = null;
                         }
@@ -748,10 +758,13 @@ final class JoanSipUa {
              * answer chose. */
             sMediaPt = chosen == null ? 0 : chosen.pt;
             sMediaAmrWb = JoanSipBuilder.amrWideband(chosen);
+            sMediaAmrBitrate = JoanSipBuilder.amrBitrate(chosen);
         }
         JoanTrace.note("app ANSWER 200 codec="
                 + (chosen == null ? "PCMU" : chosen.name)
-                + " pt=" + (chosen == null ? 0 : chosen.pt));
+                + " pt=" + (chosen == null ? 0 : chosen.pt)
+                + " fmtp=\"" + (chosen == null ? "" : chosen.fmtp) + "\""
+                + " bitrate=" + sMediaAmrBitrate);
         return "OK";
     }
 
@@ -2600,6 +2613,7 @@ final class JoanSipUa {
         sMediaPort = 0;
         sMediaRtcpPort = 0;
         sMediaPt = 0;
+        sMediaAmrBitrate = 0;
         sMediaAmrWb = null;
         sMediaMux = false;
         sExpiresSec = 0;

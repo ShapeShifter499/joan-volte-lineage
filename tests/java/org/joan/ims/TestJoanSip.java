@@ -328,6 +328,47 @@ public final class TestJoanSip {
         check("none".equals(JoanSipBuilder.codecSummary(null)),
                 "no offer summarises as none");
 
+        /* mode-set: encoding above what the peer allows produces frames
+         * they discard, which sounds like a dead uplink on a call whose
+         * microphone is plainly working. */
+        String pinned = head
+                + "m=audio 40000 RTP/AVP 110 0\r\n"
+                + "a=rtpmap:110 AMR-WB/16000/1\r\n"
+                + "a=fmtp:110 octet-align=1; mode-set=0,1,2\r\n"
+                + "a=rtpmap:0 PCMU/8000\r\n";
+        JoanSipBuilder.Codec pinnedPick =
+                JoanSipBuilder.selectAnswerCodec(JoanSipBuilder.parseSdp(pinned));
+        check(pinnedPick != null && pinnedPick.maxAmrMode() == 2,
+                "highest offered AMR mode is read from mode-set");
+        check(JoanSipBuilder.amrBitrate(pinnedPick) == 12650,
+                "AMR-WB mode 2 clamps the encoder to 12650 bps");
+        String pinnedAns = JoanSipBuilder.sdpAnswer("2001:db8::2", 40000, pinned);
+        check(pinnedAns.contains("a=fmtp:110 octet-align=1;mode-set=0,1,2"),
+                "the answer echoes the peer's mode-set");
+        // No mode-set means unrestricted, and the codec default stands.
+        String unpinned = head + "m=audio 40000 RTP/AVP 110\r\n"
+                + "a=rtpmap:110 AMR-WB/16000/1\r\n"
+                + "a=fmtp:110 octet-align=1\r\n";
+        JoanSipBuilder.Codec free = JoanSipBuilder.selectAnswerCodec(
+                JoanSipBuilder.parseSdp(unpinned));
+        check(free != null && free.maxAmrMode() == -1,
+                "an fmtp with no mode-set reads as unrestricted");
+        check(JoanSipBuilder.amrBitrate(free) == 0,
+                "no mode-set leaves the codec default alone");
+        check(!JoanSipBuilder.sdpAnswer("2001:db8::2", 40000, unpinned)
+                        .contains("mode-set"),
+                "an answer invents no mode-set the peer did not name");
+        check(JoanSipBuilder.amrBitrate(
+                        JoanSipBuilder.parseSdp(beAmr).codec(0)) == 0,
+                "PCMU has no AMR bitrate");
+        // A mode beyond the table must clamp, not throw.
+        String wild = head + "m=audio 40000 RTP/AVP 110\r\n"
+                + "a=rtpmap:110 AMR-WB/16000/1\r\n"
+                + "a=fmtp:110 octet-align=1;mode-set=0,99\r\n";
+        check(JoanSipBuilder.amrBitrate(JoanSipBuilder.selectAnswerCodec(
+                        JoanSipBuilder.parseSdp(wild))) == 23850,
+                "an out-of-range mode clamps to the top of the table");
+
         // Nothing usable is the only honest reason to decline.
         String none = head + "m=audio 40000 RTP/AVP 9\r\n"
                 + "a=rtpmap:9 G722/8000\r\n";
