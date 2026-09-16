@@ -952,15 +952,37 @@ final class JoanMedia {
                 if (sPeerSsrc == 0) {
                     sPeerSsrc = get32(down, 8);
                 }
-                sRx.observe(inSeq, inTs,
-                        (System.nanoTime() / 1000000L)
-                                * Math.max(1, sRate / 1000),
-                        System.currentTimeMillis());
+                long nowMs = System.currentTimeMillis();
+                if (sRx.onSsrc(get32(down, 8))) {
+                    JoanTrace.note("media dl: peer SSRC changed; buffer reset");
+                }
                 int off = RTP_HDR;
                 m -= RTP_HDR;
                 if (m <= 0) {
                     continue;
                 }
+                /* Into the buffer, not straight to the decoder. What comes
+                 * back out is in sequence order and has been held long
+                 * enough to absorb the arrival jitter this link actually
+                 * has -- measured at about 14 ms, most of a packet
+                 * interval, which straight-through playback passes
+                 * directly to the speaker. */
+                byte[] held = new byte[m];
+                System.arraycopy(down, off, held, 0, m);
+                boolean isSid = amr != null
+                        && JoanAmr.isSid(held, 0, m, sAmrOct, amr.wideband());
+                sRx.offer(inSeq, inTs,
+                        (System.nanoTime() / 1000000L)
+                                * Math.max(1, sRate / 1000),
+                        held, isSid, nowMs);
+                byte[] play = sRx.poll(nowMs);
+                if (play == null) {
+                    /* Still filling, or a gap we cannot fill. Either way
+                     * there is nothing to decode this tick. */
+                    continue;
+                }
+                System.arraycopy(play, 0, down, off, play.length);
+                m = play.length;
                 if (amr != null) {
                     /* The peer can ask us to change mode in every packet.
                      * We advertise mode-change-capability and then ignore

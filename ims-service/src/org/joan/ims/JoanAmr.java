@@ -328,6 +328,48 @@ final class JoanAmr {
         return 1 + n;
     }
 
+    /**
+     * AMR frame type reserved for comfort noise (SID).
+     *
+     * <p>8 in both AMR-NB and AMR-WB; the tables above give it 5 bytes of
+     * payload in either. A SID frame means the sender has stopped
+     * transmitting speech, which is the one moment a jitter buffer can
+     * give latency back without anyone hearing the stream shorten.
+     */
+    static final int FT_SID = 8;
+
+    /**
+     * Whether an RTP payload's first frame is comfort noise.
+     *
+     * <p>Octet-aligned and bandwidth-efficient put the ToC in different
+     * places, so the framing has to be known -- reading the wrong one
+     * misclassifies speech as silence, which would have the buffer
+     * shorten while somebody is talking.
+     *
+     * <p>Anything it cannot parse reads as "not SID", so an unreadable
+     * frame never causes a shrink.
+     */
+    static boolean isSid(byte[] rtp, int off, int len, boolean octetAligned,
+                         boolean wideband) {
+        if (rtp == null || off < 0 || len < 2 || off + len > rtp.length) {
+            return false;
+        }
+        int ft;
+        if (octetAligned) {
+            /* CMR octet, then the ToC octet: FT is bits 6..3. */
+            ft = ftOf(rtp[off + 1]);
+        } else {
+            /* Bandwidth-efficient packs CMR in the top 4 bits and the
+             * ToC immediately after, so FT straddles the octet boundary:
+             * the low 4 bits of the first octet carry F and the top 3
+             * bits of FT, and the next octet supplies the last. */
+            int b0 = rtp[off] & 0xff;
+            int b1 = rtp[off + 1] & 0xff;
+            ft = ((b0 & 0x07) << 1) | ((b1 >> 7) & 0x01);
+        }
+        return ft == FT_SID;
+    }
+
     /** CMR the peer is requesting, or CMR_NONE. */
     static int requestedMode(byte[] rtp, int off, int len) {
         if (rtp == null || len < 1 || off < 0 || off >= rtp.length) {

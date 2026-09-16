@@ -1318,6 +1318,26 @@ public final class TestJoanSip {
                 "refuses to pack a short storage frame");
         check(JoanAmr.requestedMode(new byte[] { (byte) 0x20 }, 0, 1) == 2,
                 "CMR is read from the top nibble");
+
+        /* SID detection decides when the jitter buffer may shorten.
+         * Reading the wrong framing misclassifies speech as silence and
+         * would shrink the buffer while somebody is talking. */
+        byte[] octSid = { (byte) 0xf0, (byte) (JoanAmr.FT_SID << 3), 0, 0, 0, 0, 0 };
+        check(JoanAmr.isSid(octSid, 0, octSid.length, true, true),
+                "octet-aligned SID is recognised");
+        byte[] octSpeech = { (byte) 0xf0, (byte) (2 << 3), 0, 0, 0, 0, 0 };
+        check(!JoanAmr.isSid(octSpeech, 0, octSpeech.length, true, true),
+                "octet-aligned speech is not mistaken for SID");
+        /* Bandwidth-efficient: FT straddles the octet boundary. */
+        byte[] beSid = { (byte) 0xf4, (byte) 0x00, 0, 0, 0, 0 };
+        check(JoanAmr.isSid(beSid, 0, beSid.length, false, true),
+                "bandwidth-efficient SID is recognised");
+        check(!JoanAmr.isSid(beSid, 0, beSid.length, true, true),
+                "and reading it with the wrong framing does not say SID");
+        check(!JoanAmr.isSid(null, 0, 4, true, true)
+                        && !JoanAmr.isSid(new byte[]{ 1 }, 0, 1, true, true)
+                        && !JoanAmr.isSid(new byte[]{ 1, 2 }, 0, 9, true, true),
+                "an unparseable payload never reads as SID");
     }
 
     private static void testOfferSummary() {
