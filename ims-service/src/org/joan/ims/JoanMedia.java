@@ -69,10 +69,10 @@ final class JoanMedia {
 
     private JoanMedia() {}
 
-    static void startRtp(Context ctx, Network net, InetAddress local,
-                         InetAddress dest, int destPort, int rtcpPort,
-                         boolean mux) {
-        startRtp(ctx, net, local, dest, destPort, rtcpPort, mux, 0, null);
+    static boolean startRtp(Context ctx, Network net, InetAddress local,
+                            InetAddress dest, int destPort, int rtcpPort,
+                            boolean mux) {
+        return startRtp(ctx, net, local, dest, destPort, rtcpPort, mux, 0, null);
     }
 
     /**
@@ -83,9 +83,9 @@ final class JoanMedia {
      *        codec is negotiated, so a silent failure here is a silent
      *        call.
      */
-    static void startRtp(Context ctx, Network net, InetAddress local,
-                         InetAddress dest, int destPort, int rtcpPort,
-                         boolean mux, int payloadType, Boolean amrWideband) {
+    static boolean startRtp(Context ctx, Network net, InetAddress local,
+                            InetAddress dest, int destPort, int rtcpPort,
+                            boolean mux, int payloadType, Boolean amrWideband) {
         stop();
         sPt = payloadType;
         sAmr = null;
@@ -98,8 +98,18 @@ final class JoanMedia {
                 sRate = c.sampleRate();
                 sFrame = c.samplesPerFrame();
             } else {
-                JoanTrace.note("amr requested but unavailable; PCMU");
-                sPt = 0;
+                /* The codec was negotiated. Streaming u-law on the AMR
+                 * payload type instead would leave the peer sending AMR
+                 * and both directions dead, with the call still showing as
+                 * connected -- the exact silent failure an OEM guarantee
+                 * is supposed to rule out, and we do not have one. Refuse
+                 * instead, and let the caller end the call audibly.
+                 * JoanAmrCodec.selfTest() at startup should have removed
+                 * this codec from the profile already, so reaching here
+                 * means a transient, not a missing codec. */
+                JoanTrace.note("amr negotiated but will not open wb="
+                        + amrWideband + "; refusing to carry PCMU instead");
+                return false;
             }
         }
         Context app = ctx.getApplicationContext();
@@ -125,7 +135,7 @@ final class JoanMedia {
             sSock.setSoTimeout(500);
         } catch (Exception e) {
             JoanTrace.note("media sock " + e.getClass().getSimpleName());
-            return;
+            return false;
         }
         sRun = true;
         sCap = new Thread(() -> capture(app), "joan-ims-cap");
@@ -142,6 +152,7 @@ final class JoanMedia {
                 + " codec=" + (sAmr == null ? "PCMU"
                         : (sAmr.wideband() ? "AMR-WB" : "AMR-NB"))
                 + " pt=" + sPt + " rate=" + sRate);
+        return true;
     }
 
     static void stop() {

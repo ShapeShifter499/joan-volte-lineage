@@ -555,11 +555,21 @@ public class JoanCallSession extends ImsCallSessionImplBase {
         return true;
     }
 
+    /**
+     * Start RTP, and end the call if the negotiated codec cannot be
+     * carried. A call that stays up while carrying a codec nobody agreed
+     * to is silent in both directions and reports nothing; ending it is
+     * the honest outcome and the one the user can act on.
+     */
     private void startMedia() {
-        JoanMedia.startRtp(app, JoanSipUa.network(), JoanSipUa.localAddr(),
+        if (JoanMedia.startRtp(app, JoanSipUa.network(), JoanSipUa.localAddr(),
                 JoanSipUa.mediaIp(), JoanSipUa.mediaPort(),
                 JoanSipUa.mediaRtcpPort(), JoanSipUa.mediaMux(),
-                JoanSipUa.mediaPt(), JoanSipUa.mediaAmrWideband());
+                JoanSipUa.mediaPt(), JoanSipUa.mediaAmrWideband())) {
+            return;
+        }
+        JoanTrace.note("media did not start; ending call");
+        hangupAsync();
     }
 
     private void failStart(String why) {
