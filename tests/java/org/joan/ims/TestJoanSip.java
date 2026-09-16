@@ -846,15 +846,17 @@ public final class TestJoanSip {
                 null, null, 40000, "3GPP-E-UTRAN-FDD");
         check(!inv.contains("Supported: replaces"),
                 "INVITE does not claim Replaces");
-        /* REFER/SUBSCRIBE/NOTIFY/PRACK/INFO are now implemented
-         * (conference merge path); MESSAGE still is not — SMS would be
-         * dropped. UPDATE remains unhandled too. */
-        for (String m2 : new String[] { "UPDATE", "MESSAGE" }) {
+        /* MESSAGE still is not implemented -- SMS would be dropped -- so
+         * it must not appear. Allow lists only what we answer. */
+        for (String m2 : new String[] { "MESSAGE" }) {
             check(!reg.contains(m2) && !inv.contains(m2),
                     "neither request allows " + m2);
         }
+        /* UPDATE joined the list because we answer it: a network
+         * refreshing the session (RFC 4028) picks a method the peer
+         * allows, and an unanswered refresh tears the call down. */
         for (String m2 : new String[] { "REFER", "SUBSCRIBE", "NOTIFY",
-                "PRACK", "INFO" }) {
+                "PRACK", "INFO", "UPDATE" }) {
             check(reg.contains(m2) && inv.contains(m2),
                     "both allow " + m2 + " (implemented)");
         }

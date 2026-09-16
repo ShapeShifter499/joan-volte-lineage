@@ -20,7 +20,12 @@ final class JoanSipBuilder {
      * else is dropped. Advertising more than that invites the network to
      * send us traffic we silently discard.
      */
-    static final String ALLOW = "INVITE, ACK, CANCEL, BYE, OPTIONS, REFER, SUBSCRIBE, NOTIFY, PRACK, INFO";
+    /* UPDATE is listed because we answer it: a network refreshing the
+     * session (RFC 4028) picks a method the peer allows, and leaving it
+     * out pushes a refresh onto re-INVITE or, worse, onto a method we
+     * silently ignored. Only methods we actually answer belong here. */
+    static final String ALLOW = "INVITE, ACK, CANCEL, BYE, UPDATE, OPTIONS, "
+            + "REFER, SUBSCRIBE, NOTIFY, PRACK, INFO";
     static final int PCSCF_SIP_PORT = 5060;
 
     static final class Params {

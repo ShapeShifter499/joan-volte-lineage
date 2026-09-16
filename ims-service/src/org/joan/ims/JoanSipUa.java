@@ -1969,6 +1969,51 @@ final class JoanSipUa {
             handleCancel(rx);
             return;
         }
+        if ("UPDATE".equals(method)) {
+            /* RFC 4028 session refresh, and RFC 3311 more generally. The
+             * network is asking whether the session is still wanted; the
+             * answer is a 200 with our media, not silence. Unanswered, the
+             * refresh fails and the call is torn down -- the one way a
+             * healthy long call dies for a protocol reason.
+             *
+             * An UPDATE that names no dialog we own gets 481 rather than
+             * an answer that would confirm a session we are not in. */
+            String cid = JoanSipBuilder.header(rx, "Call-ID");
+            String se = JoanSipBuilder.header(rx, "Session-Expires");
+            synchronized (LOCK) {
+                boolean mine = sCall && sDlg != null && cid != null
+                        && cid.equals(sDlg.callId);
+                String tag = sOurToTag != null && !sOurToTag.isEmpty()
+                        ? sOurToTag : "x";
+                JoanTrace.note("app inbound UPDATE dialog=" + (mine ? "ours" : "unknown")
+                        + (se == null ? "" : " session-expires=\"" + se.trim() + "\""));
+                if (!mine) {
+                    try {
+                        sendReply(buildResponse(rx, 481,
+                                "Call/Transaction Does Not Exist", sId, tag, null)
+                                .getBytes(StandardCharsets.US_ASCII));
+                    } catch (Exception ignored) {
+                        // ignore
+                    }
+                    return;
+                }
+                /* If it carries an offer, answer with the codec already
+                 * negotiated rather than renegotiating mid-call. */
+                String sdp = null;
+                if (JoanSipBuilder.parseSdp(rx) != null) {
+                    JoanSipBuilder.Media o = JoanSipBuilder.parseSdp(rx);
+                    sdp = JoanSipBuilder.sdpAnswer(sId.localIp, RTP_PORT, o,
+                            JoanSipBuilder.selectAnswerCodec(o));
+                }
+                try {
+                    sendReply(buildResponse(rx, 200, "OK", sId, tag, sdp)
+                            .getBytes(StandardCharsets.US_ASCII));
+                } catch (Exception ignored) {
+                    // ignore
+                }
+            }
+            return;
+        }
         if ("OPTIONS".equals(method)) {
             /* Cores use OPTIONS as a liveness probe. Silence can get the
              * binding torn down, and we advertise OPTIONS in Allow, so
@@ -2025,16 +2070,24 @@ final class JoanSipUa {
             return;
         }
         if (!"INVITE".equals(method)) {
-            /* Anything else is dropped without a reply. That is worth
-             * saying out loud: the REGISTER Contact advertises
-             * +g.3gpp.smsip and Allow lists MESSAGE, so a core is entitled
-             * to deliver SMS here as a SIP MESSAGE -- which would land
-             * exactly here and vanish. Log the method, never the message:
-             * a MESSAGE body is the text of someone's SMS. */
+            /* Log the method, never the message: the REGISTER Contact
+             * advertises +g.3gpp.smsip, so a core may deliver SMS here as
+             * a SIP MESSAGE and its body is the text of someone's SMS. */
             if (!"ACK".equals(method)) {
-                /* ACK needs no response and ignoring it is correct;
-                 * calling that "unhandled" in the log is misleading. */
-                JoanTrace.note("app inbound unhandled method=" + method);
+                /* ACK needs no response and ignoring it is correct.
+                 * Everything else does: RFC 3261 8.2.1 requires a UAS to
+                 * answer a request it cannot handle, and dropping one
+                 * silently makes the sender retransmit and then tear the
+                 * dialog down. An unanswered in-dialog UPDATE is exactly
+                 * how a session refresh becomes a dropped call. */
+                JoanTrace.note("app inbound unhandled method=" + method
+                        + "; answered 501");
+                try {
+                    sendReply(buildResponse(rx, 501, "Not Implemented", sId,
+                            null, null).getBytes(StandardCharsets.US_ASCII));
+                } catch (Exception ignored) {
+                    // nothing further to try
+                }
             }
             return;
         }
