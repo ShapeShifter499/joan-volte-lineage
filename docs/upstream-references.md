@@ -254,6 +254,47 @@ from reading them rather than from RFC 4733 alone:
 
 Their default duration (200 ms) and volume (10) are the values we use.
 
+## AOSP framework IMS (outside `packages/modules`)
+
+`packages/modules` carries exactly two IMS repos, ImsStack and ImsMedia,
+and reading only those left a gap: the code that *drives* an ImsService
+lives elsewhere in the tree. Three more repos, all at
+`android-security-17.0.0_r1`, all Apache-2.0, reference only:
+
+- `frameworks/base`, sparse at `telephony/java/android/telephony/ims/` --
+  the SystemApi surface our `ims-service/stubs/` imitate.
+- `frameworks/opt/net/ims` -- `com.android.ims.ImsCall`, the wrapper that
+  forwards framework calls into our session.
+- `frameworks/opt/telephony` -- `ImsPhone`, `ImsPhoneCallTracker`,
+  `ImsPhoneConnection`: the state machine that decides *when* our
+  overrides are called and what it expects back.
+
+What reading them settled:
+
+- **Our stub signatures are right, not merely plausible.** `sendDtmf(char,
+  Message)`, `startDtmf(char)`, `stopDtmf()` and `callSessionNotifyAnbr(int,
+  int, int)` match the real `ImsCallSessionImplBase`, and
+  `MEDIA_STREAM_DIRECTION_UPLINK` is 1 -- which is the constant our ANBR
+  handler compares against, previously assumed.
+- **The DTMF Message is a pacing signal, not an ack.**
+  `ImsPhoneConnection.processPostDialChar()` sends one digit, waits for
+  that Message, waits `mDtmfToneDelay`, then sends the next. Answering it
+  at queue time drops digits out of post-dial strings; see the commit
+  that moved the callback to tone completion.
+- **Session timers are carrier configuration, not a constant.**
+  `ImsStack/core/config/CarrierConfig.java` reads
+  `CarrierConfigManager.ImsVoice.KEY_SESSION_TIMER_SUPPORTED_BOOL`,
+  `KEY_SESSION_EXPIRES_TIMER_SEC_INT`,
+  `KEY_MINIMUM_SESSION_EXPIRES_TIMER_SEC_INT` and
+  `KEY_SESSION_REFRESHER_TYPE_INT`. Those keys exist on LineageOS 22, so
+  our RFC 4028 support should read them rather than pick numbers.
+- **Local IP change is detected in Java and acted on below it.**
+  `Apn.ImsNetworkCallback.onLinkPropertiesChanged()` compares the cached
+  link addresses, separates an IP change from a P-CSCF change, and raises
+  `EVENT_IP_CHANGED` -> `EDataState.DATA_STATE_IP_CHANGED`. The response
+  is in the native stack, so AOSP gives us the detection pattern and not
+  the recovery.
+
 ## LG IMS (reverse engineered)
 
 - `docs/lg-ims-fullstack-re-2026-09-05.md`,
