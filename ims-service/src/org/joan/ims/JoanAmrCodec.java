@@ -22,7 +22,12 @@ import java.nio.ByteBuffer;
  */
 final class JoanAmrCodec {
     static final String MIME_WB = "audio/amr-wb";
-    static final String MIME_NB = "audio/amr-nb";
+    /* Android's AMR-NB MIME is "audio/3gpp" (MediaFormat.MIMETYPE_AUDIO_AMR_NB),
+     * not "audio/amr-nb" -- only the wideband name follows the obvious
+     * pattern. The device declares c2.android.amrnb.{encoder,decoder} under
+     * audio/3gpp, so the old string matched no codec anywhere and open(false)
+     * could never succeed on any Android build. */
+    static final String MIME_NB = "audio/3gpp";
 
     /** 20 ms at the codec's sample rate. */
     static final int WB_SAMPLES = 320;
