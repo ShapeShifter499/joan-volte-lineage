@@ -936,10 +936,19 @@ final class JoanAppRegister {
             sub = SubscriptionManager.getDefaultSubscriptionId();
         }
         TelephonyManager tm = sub >= 0 ? tm0.createForSubscriptionId(sub) : tm0;
-        String impi = hidden(tm, "getIsimImpi");
+        Read impiRead = readIsim(tm, "getIsimImpi");
+        Read domainRead = readIsim(tm, "getIsimDomain");
+        String impi = impiRead.value;
         String impu = firstImpu(tm);
-        String domain = hidden(tm, "getIsimDomain");
+        String domain = domainRead.value;
         String imei = hidden(tm, "getImei");
+        /* Outcomes only -- never the values. An IMPI contains the IMSI. */
+        JoanTrace.note("isim read impi=" + impiRead.outcome
+                + " domain=" + domainRead.outcome
+                + " impu=" + (impu == null || impu.isEmpty()
+                        ? "absent" : "ok")
+                + (impi != null && !impi.contains("@")
+                        ? " impi_malformed=yes" : ""));
         if (impi == null || !impi.contains("@")) {
             /* USIM-only card: derive per TS 23.003 13.3. impu stays null,
              * so the public identity must come from P-Associated-URI in
@@ -956,7 +965,10 @@ final class JoanAppRegister {
             if (domain == null || domain.isEmpty()) {
                 domain = JoanSipBuilder.derivedDomain(mccMnc);
             }
-            JoanTrace.note("identity derived from IMSI (no ISIM)");
+            /* Say which of the failures it was. "no ISIM" was asserted
+             * for all of them, including the ones that are our fault. */
+            JoanTrace.note("identity derived from IMSI (isim impi="
+                    + impiRead.outcome + ")");
         }
         if (impi == null || !impi.contains("@")) {
             return null;
@@ -966,6 +978,13 @@ final class JoanAppRegister {
         }
         String realm = (domain != null && !domain.isEmpty())
                 ? domain : impi.substring(impi.indexOf('@') + 1);
+        /* The realm is a network name, not a subscriber identity, so it
+         * is safe to record -- and it is the one field a rejected
+         * REGISTER is most often arguing about. Saying where it came from
+         * separates "the card told us" from "we worked it out". */
+        JoanTrace.note("ims realm=" + realm + " source="
+                + (domain != null && !domain.isEmpty()
+                        ? "isim" : "derived-from-imsi"));
         return new Id(impi, impu, realm, imei == null ? "" : imei);
     }
 
@@ -1170,6 +1189,58 @@ final class JoanAppRegister {
     /** One receive slice; kept here because JoanSipUa calls it. */
     static String tryRecv(DatagramSocket s, byte[] buf, int timeoutMs) {
         return JoanRegTransport.tryRecv(s, buf, timeoutMs);
+    }
+
+    /**
+     * The result of one ISIM read, and why it produced nothing.
+     *
+     * <p>{@link #hidden} returns null for every failure alike -- no such
+     * method, a SecurityException, a card with no ISIM -- and the trace
+     * then said "no ISIM" for all of them. That line was a claim we could
+     * not support: all we knew was that we got null. On a carrier where
+     * the derived identity happens to match the provisioned one nobody
+     * notices; on one where it does not, the difference between "this
+     * card has no ISIM" and "our read failed" is the whole diagnosis.
+     */
+    private static final class Read {
+        final String value;
+        final String outcome;
+
+        Read(String value, String outcome) {
+            this.value = value;
+            this.outcome = outcome;
+        }
+    }
+
+    /**
+     * Read one ISIM field, recording why it failed.
+     *
+     * <p>Outcomes: {@code ok}, {@code absent} (the call worked and the
+     * card has no such record), {@code no-api} (the platform does not
+     * expose it), {@code denied} (we lack the permission), or the
+     * exception's simple name.
+     */
+    private static Read readIsim(TelephonyManager tm, String name) {
+        try {
+            Method m = TelephonyManager.class.getMethod(name);
+            Object v = m.invoke(tm);
+            String str = v == null ? null : String.valueOf(v);
+            if (str == null || str.isEmpty()) {
+                return new Read(null, "absent");
+            }
+            return new Read(str, "ok");
+        } catch (NoSuchMethodException e) {
+            return new Read(null, "no-api");
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            Throwable c = e.getCause();
+            if (c instanceof SecurityException) {
+                return new Read(null, "denied");
+            }
+            return new Read(null,
+                    c == null ? "error" : c.getClass().getSimpleName());
+        } catch (Exception e) {
+            return new Read(null, e.getClass().getSimpleName());
+        }
     }
 
     private static String hidden(TelephonyManager tm, String name) {

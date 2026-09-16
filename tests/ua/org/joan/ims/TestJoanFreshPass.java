@@ -150,6 +150,37 @@ public final class TestJoanFreshPass extends TestJoanUa {
         check("focus-negotiated-media-reaches-live-leg", JoanSipUa.mediaIp() != null && JoanSipUa.mediaPort() == 40002);
         check("focus-local-tag-preserved", JoanSipBuilder.tagOf((String)get("sFromHdr")).equals(get("sOurToTag")));
         fw.close();
+        /* MCC 460 is all of China, not one operator. Mapping the whole
+         * MCC to CMCC handed Unicom and Telecom subscribers China
+         * Mobile's profile -- another operator's timers, conference URI
+         * and TCP criterion, with nothing in the trace to say so. */
+        for (String mnc : new String[]{"00", "02", "04", "07", "08"}) {
+            check("cn-460-" + mnc + "-is-china-mobile",
+                    "CMCC.CN".equals(JoanCarrierProfile.carrierKey("460", mnc)));
+        }
+        for (String mnc : new String[]{"01", "06", "09"}) {
+            check("cn-460-" + mnc + "-unicom-is-not-cmcc",
+                    JoanCarrierProfile.carrierKey("460", mnc) == null);
+        }
+        for (String mnc : new String[]{"03", "05", "11"}) {
+            check("cn-460-" + mnc + "-telecom-is-not-cmcc",
+                    JoanCarrierProfile.carrierKey("460", mnc) == null);
+        }
+        check("cn-460-unknown-mnc-falls-through",
+                JoanCarrierProfile.carrierKey("460", "99") == null);
+        /* Three-digit MNCs must resolve the same way as two-digit ones. */
+        check("cn-460-002-padded-form",
+                "CMCC.CN".equals(JoanCarrierProfile.carrierKey("460", "002")));
+        check("cn-460-001-padded-form-not-cmcc",
+                JoanCarrierProfile.carrierKey("460", "001") == null);
+        /* And the other regions must be untouched by the change. */
+        check("us-310-260-still-tmo",
+                "TMO.US.NAO".equals(JoanCarrierProfile.carrierKey("310", "260")));
+        check("kr-450-still-lgu",
+                "LGU.KR".equals(JoanCarrierProfile.carrierKey("450", "06")));
+        check("jp-440-still-dcm",
+                "DCM.JP".equals(JoanCarrierProfile.carrierKey("440", "10")));
+
         System.out.println("FRESH_PASS_CHECKS=" + checks + " FAILURES=" + failures);
         System.exit(failures == 0 ? 0 : 1);
     }

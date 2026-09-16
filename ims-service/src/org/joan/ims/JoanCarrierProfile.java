@@ -135,6 +135,19 @@ public final class JoanCarrierProfile {
     }
 
     /**
+     * China Mobile's own MNCs under MCC 460.
+     *
+     * <p>Deliberately conservative: only the allocations we are confident
+     * of. An MNC left out of this set gets the 3GPP defaults rather than
+     * another operator's profile, so being wrong by omission costs a
+     * tuned profile, while being wrong by inclusion would apply China
+     * Mobile's settings to a Unicom or Telecom subscriber.
+     */
+    private static final java.util.Set<String> CMCC_MNCS =
+            new java.util.HashSet<>(java.util.Arrays.asList(
+                    "000", "002", "004", "007", "008"));
+
+    /**
      * MCC/MNC -> profile key, from the distilled stock XML tree.
      * US carriers keyed by MCC only where stock keys them by brand;
      * these are the LG profile families, not a PLMN database.
@@ -155,7 +168,19 @@ public final class JoanCarrierProfile {
             return "TMO.US.NAO";
         }
         if ("460".equals(mcc)) {
-            return "CMCC.CN";
+            /* MCC 460 is all of China, not one operator. Mapping the whole
+             * MCC to CMCC handed China Unicom and China Telecom
+             * subscribers China Mobile's conference URI, session timers,
+             * TCP criterion and offer response code -- another operator's
+             * settings, applied with no way to tell from the outside.
+             *
+             * Only China Mobile's own MNCs get the profile; everything
+             * else under 460 falls through to the 3GPP defaults, which is
+             * what an unknown carrier has always got. LG shipped no
+             * Unicom or Telecom profile, so there is nothing better to
+             * return for them -- and the defaults are right far more
+             * often than a competitor's file. */
+            return CMCC_MNCS.contains(pad3(mnc)) ? "CMCC.CN" : null;
         }
         if ("440".equals(mcc) || "441".equals(mcc)) {
             return "DCM.JP";
