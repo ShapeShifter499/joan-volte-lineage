@@ -930,8 +930,8 @@ public final class TestJoanSip {
          * through MediaCodec, JoanAmr does the RFC 4867 framing) and PCMU
          * last as the interoperability floor. AMR-NB is the codec IR.92
          * makes mandatory, so omitting it was the defect. */
-        check(inv.contains("m=audio 40000 RTP/AVP 96 97 0\r\n"),
-                "offer lists AMR-WB, AMR-NB, then PCMU");
+        check(inv.contains("m=audio 40000 RTP/AVP 96 97 0 100 101\r\n"),
+                "offer lists AMR-WB, AMR-NB, PCMU, then the event types");
         check(inv.contains("a=rtpmap:96 AMR-WB/16000/1"),
                 "offer names AMR-WB at the dynamic payload type");
         check(inv.contains("a=rtpmap:97 AMR/8000/1"),
@@ -942,6 +942,37 @@ public final class TestJoanSip {
         /* No split: one profile drives both directions. Everything the
          * offer promises must also be accepted when a peer offers it back,
          * which is what stopped being true when the answer was hardcoded. */
+        /* The answer takes THEIR event payload type at the clock rate of
+         * the codec chosen, never our own number and never a rate that
+         * does not match the stream. */
+        String teHead = "v=0\r\no=- 1 1 IN IP6 2001:db8::9\r\ns=-\r\n"
+                + "c=IN IP6 2001:db8::9\r\nt=0 0\r\n";
+        String teOffer = teHead
+                + "m=audio 40000 RTP/AVP 104 0 96 97\r\n"
+                + "a=rtpmap:104 AMR-WB/16000/1\r\n"
+                + "a=fmtp:104 octet-align=1\r\n"
+                + "a=rtpmap:0 PCMU/8000\r\n"
+                + "a=rtpmap:96 telephone-event/8000\r\n"
+                + "a=rtpmap:97 telephone-event/16000\r\n";
+        JoanSipBuilder.Media teM = JoanSipBuilder.parseSdp(teOffer);
+        JoanSipBuilder.Codec teChosen = JoanSipBuilder.selectAnswerCodec(teM);
+        check(teChosen != null && teChosen.pt == 104,
+                "telephone-event is never chosen as the audio codec");
+        JoanSipBuilder.Codec te = JoanSipBuilder.telephoneEventFor(teM, teChosen);
+        check(te != null && te.pt == 97,
+                "the event type matching the codec's clock rate is chosen");
+        String teAns = JoanSipBuilder.sdpAnswer("2001:db8::2", 40000, teOffer);
+        check(teAns.contains("m=audio 40000 RTP/AVP 104 97\r\n")
+                        && teAns.contains("a=rtpmap:97 telephone-event/16000"),
+                "the answer carries their event type beside the codec");
+        String noTe = teHead + "m=audio 40000 RTP/AVP 0\r\n"
+                + "a=rtpmap:0 PCMU/8000\r\n";
+        check(JoanSipBuilder.telephoneEventFor(
+                        JoanSipBuilder.parseSdp(noTe),
+                        JoanSipBuilder.selectAnswerCodec(
+                                JoanSipBuilder.parseSdp(noTe))) == null,
+                "an offer with no telephone-event yields none");
+
         for (JoanSipBuilder.Capability cap : JoanSipBuilder.CAPABILITIES) {
             check(inv.contains("a=rtpmap:" + cap.offerPt + " " + cap.name + "/"
                             + cap.rate),
@@ -961,10 +992,14 @@ public final class TestJoanSip {
          * bandwidth-efficient, not "either". */
         check(inv.contains("octet-align=1"),
                 "offer requires octet-aligned AMR");
-        /* telephone-event needs an RFC 4733 event sender, not just an SDP
-         * line, so it stays out of the profile until that exists. */
-        check(!inv.contains("telephone-event"),
-                "offer does not promise telephone-event");
+        /* telephone-event now has a sender behind it, so the offer may
+         * promise it -- one per clock rate, because the event duration
+         * counts ticks of the stream carrying it. */
+        check(inv.contains("a=rtpmap:100 telephone-event/16000")
+                        && inv.contains("a=rtpmap:101 telephone-event/8000"),
+                "offer carries telephone-event at both clock rates");
+        check(inv.contains("a=fmtp:100 0-15") && inv.contains("a=fmtp:101 0-15"),
+                "offer accepts the whole DTMF event range");
 
         String amrAnswer = "SIP/2.0 200 OK\r\n\r\nv=0\r\n"
                 + "c=IN IP6 2600::9\r\n"
@@ -1189,6 +1224,35 @@ public final class TestJoanSip {
                 "a bitrate below every mode maps to none");
         check(JoanAmr.modeCount(true) == 9 && JoanAmr.modeCount(false) == 8,
                 "nine wideband modes, eight narrowband");
+
+        /* DTMF as RTP events (RFC 4733). A tone cannot ride inside a
+         * speech codec: AMR reproduces voice, and a tone through it
+         * arrives as something no IVR will recognise. */
+        check(JoanDtmf.event('7') == 7 && JoanDtmf.event('0') == 0,
+                "digits map to their own event numbers");
+        check(JoanDtmf.event('*') == 10 && JoanDtmf.event('#') == 11,
+                "star is 10 and hash is 11");
+        check(JoanDtmf.event('A') == 12 && JoanDtmf.event('d') == 15,
+                "A-D are 12-15, either case");
+        check(JoanDtmf.event('G') < 0 && JoanDtmf.event('+') < 0,
+                "a non-digit is not invented into an event");
+        byte[] ev = new byte[4];
+        check(JoanDtmf.pack(11, false, 10, 320, ev) == 4,
+                "an event payload is four bytes");
+        check(ev[0] == 11 && (ev[1] & 0x80) == 0 && (ev[1] & 0x3f) == 10,
+                "event and volume sit in the first two bytes, E clear");
+        check((ev[2] & 0xff) == 1 && (ev[3] & 0xff) == 64,
+                "duration is 16 bits, network order");
+        check(JoanDtmf.pack(11, true, 10, 320, ev) == 4 && (ev[1] & 0x80) != 0,
+                "the end packet sets the E bit");
+        check(JoanDtmf.eventOf(ev, 0, 4) == 11 && JoanDtmf.isEnd(ev, 0, 4),
+                "an event payload reads back");
+        check(JoanDtmf.pack(16, false, 10, 0, ev) < 0
+                        && JoanDtmf.pack(3, false, 64, 0, ev) < 0
+                        && JoanDtmf.pack(3, false, 10, 0x10000, ev) < 0,
+                "out-of-range event, volume or duration is refused");
+        check(JoanDtmf.pack(3, false, 10, 0, new byte[3]) < 0,
+                "a short buffer is refused, not overrun");
 
         /* RTCP receiver reports: what the far end says it is getting.
          * An RR is header(8) + one 24-byte report block; fraction lost is

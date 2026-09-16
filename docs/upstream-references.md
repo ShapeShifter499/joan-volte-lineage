@@ -233,6 +233,27 @@ are reasons NOT to advertise `a=rtcp-xr` until something here emits the
 blocks -- the same mistake as claiming mode-change-capability, AMR-NB or
 octet-align support we did not have.
 
+DTMF as RTP events follows the same two files, and four details came
+from reading them rather than from RFC 4733 alone:
+
+- **The event timestamp is frozen at the first packet.**
+  `RtpEncoderNode::ProcessAudioData()` latches `mDtmfTimestamp` on the
+  marked packet and passes that same value to `SendRtpPacket` for every
+  packet of the tone; only the duration field grows. We latch `sDtmfTs`
+  the same way and keep the audio clock advancing underneath.
+- **Audio is suppressed for the duration.** The same function will not
+  send `MEDIASUBTYPE_RTPPAYLOAD` while `mDtmfMode` is set. Our capture
+  loop drops the frame's audio when an event is in flight, for the same
+  reason: a speech codec's rendering of the tone underneath the event is
+  noise to whatever is decoding the digit.
+- **A 40 ms floor on tone length**, forced in
+  `DtmfEncoderNode::calculateDtmfDuration()` before any packet is built.
+- **The end packet is retransmitted**, as a 40 ms window in
+  `SendDTMFEvent()` -- three packets at a 20 ms frame, which is what
+  RFC 4733 s2.5.2 asks for and what we send.
+
+Their default duration (200 ms) and volume (10) are the values we use.
+
 ## LG IMS (reverse engineered)
 
 - `docs/lg-ims-fullstack-re-2026-09-05.md`,

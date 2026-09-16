@@ -143,6 +143,62 @@ final class JoanMedia {
     /** Highest AMR mode the peer permits; -1 when they set no ceiling. */
     private static volatile int sAmrMaxMode = -1;
     /** Mode asked for by CMR or ANBR, applied by the capture thread. */
+    /* ---- RFC 4733 telephone-event (DTMF) ------------------------------
+     *
+     * Digits cannot be played into the microphone path: AMR is a speech
+     * codec and a DTMF tone put through it does not survive as one, which
+     * is why every IMS stack -- AOSP's ImsMedia included, where this is a
+     * DtmfSenderNode feeding the same RTP encoder -- sends the digit as
+     * its own payload type and pauses the audio while it does.
+     *
+     * The capture thread owns the socket and the sequence space, so the
+     * dialler's thread only queues an event here and the capture loop
+     * emits it. */
+
+    /** Negotiated telephone-event payload type; 0 when the peer offered none. */
+    private static volatile int sTePt;
+    /** Digit waiting to begin, as an RFC 4733 event number; -1 when none. */
+    private static volatile int sDtmfQueued = -1;
+    /** False asks the capture loop to end the tone in flight. */
+    private static volatile boolean sDtmfHold;
+    /** Remaining time for a fixed-length tone; 0 means "until stopDtmf". */
+    private static volatile int sDtmfLeftMs;
+
+    /* Owned by the capture thread alone. */
+    private static int sDtmfEvent = -1;
+    private static int sDtmfTs;
+    private static int sDtmfDur;
+    private static int sDtmfEnds;
+    private static boolean sDtmfMark;
+
+    /**
+     * RFC 4733 s2.5.2: repeat the final packet so a loss cannot hang the
+     * tone. AOSP spells the same thing as a 40 ms retransmit window
+     * (DTMF_DEFAULT_RETRANSMIT_DURATION), which at a 20 ms frame is these
+     * three packets.
+     */
+    private static final int DTMF_END_REPEATS = 3;
+    /** What sendDtmf() plays when the framework does not say. */
+    private static final int DTMF_TONE_MS = 200;
+    /**
+     * Shortest tone worth sending.
+     *
+     * <p>AOSP forces this floor in calculateDtmfDuration() before it
+     * builds a single packet: a tone briefer than this is not reliably
+     * detected at the far end, so honouring a shorter request would look
+     * like a digit was sent when nothing usable was.
+     */
+    private static final int DTMF_MIN_MS = 40;
+    /**
+     * A held tone is released after this long whatever the dialler does.
+     *
+     * <p>The duration field is 16 bits of timestamp units -- about four
+     * seconds at 16 kHz -- and a key held past that would wrap into a
+     * shorter tone. Ending it is both correct on the wire and a backstop
+     * against a missed stopDtmf() leaving the audio muted for the call.
+     */
+    private static final int DTMF_MAX_MS = 4000;
+
     private static volatile int sPendingMode = -1;
     private static volatile int sAppliedMode = -1;
 
@@ -181,11 +237,117 @@ final class JoanMedia {
 
     private JoanMedia() {}
 
+    /**
+     * Begin a tone that plays until {@link #stopDtmf()}.
+     *
+     * @return false when the digit is not a DTMF digit, no telephone-event
+     *         payload type was negotiated, or no call is carrying media.
+     *         Refusing is the honest answer: there is no way to place the
+     *         tone in the stream, and encoding it as audio would reach the
+     *         far end as noise an IVR cannot decode.
+     */
+    static boolean startDtmf(char digit) {
+        return queueDtmf(digit, 0);
+    }
+
+    /** Play a tone of a fixed length, as the framework's sendDtmf asks. */
+    static boolean sendDtmf(char digit, int durationMs) {
+        return queueDtmf(digit, durationMs > 0 ? durationMs : DTMF_TONE_MS);
+    }
+
+    /** Release a held tone; the capture loop sends the end packets. */
+    static void stopDtmf() {
+        sDtmfHold = false;
+    }
+
+    private static boolean queueDtmf(char digit, int durationMs) {
+        int ev = JoanDtmf.event(digit);
+        if (ev < 0) {
+            JoanTrace.note("dtmf '" + digit + "' is not a DTMF digit");
+            return false;
+        }
+        if (!sRun) {
+            JoanTrace.note("dtmf '" + digit + "' with no media running");
+            return false;
+        }
+        if (sTePt <= 0) {
+            JoanTrace.note("dtmf '" + digit
+                    + "' but no telephone-event type was negotiated");
+            return false;
+        }
+        /* A held tone gets the backstop as its length, so a dialler that
+         * never calls stopDtmf() cannot mute the call for its duration. */
+        sDtmfLeftMs = durationMs <= 0 || durationMs > DTMF_MAX_MS
+                ? DTMF_MAX_MS
+                : Math.max(durationMs, DTMF_MIN_MS);
+        sDtmfQueued = ev;
+        sDtmfHold = true;
+        return true;
+    }
+
+    /**
+     * Fill {@code out} with the next telephone-event payload, or return 0
+     * when no tone is in flight and the frame should carry audio.
+     *
+     * <p>Called only from the capture thread, once per captured frame, so
+     * the tone is paced by the same clock as the audio it replaces.
+     */
+    private static int dtmfFrame(byte[] out, int samples) {
+        int queued = sDtmfQueued;
+        if (queued >= 0 && sDtmfEvent < 0) {
+            sDtmfQueued = -1;
+            sDtmfEvent = queued;
+            /* The event's timestamp is the instant the tone began and does
+             * not advance with its packets; only the duration field grows.
+             * The audio clock keeps running underneath so that speech
+             * resumes on the right tick. */
+            sDtmfTs = sTs;
+            sDtmfDur = 0;
+            sDtmfEnds = 0;
+            sDtmfMark = true;
+            JoanTrace.note("dtmf start event=" + sDtmfEvent + " pt=" + sTePt);
+        }
+        if (sDtmfEvent < 0) {
+            return 0;
+        }
+        boolean end = !sDtmfHold;
+        if (!end) {
+            int ms = samples * 1000 / (sRate > 0 ? sRate : PCMU_HZ);
+            if (sDtmfLeftMs > 0) {
+                sDtmfLeftMs -= ms;
+                if (sDtmfLeftMs <= 0) {
+                    end = true;
+                }
+            }
+            sDtmfDur += samples;
+            if (sDtmfDur >= 0xffff) {
+                /* Sixteen bits of timestamp units is the whole field. */
+                sDtmfDur = 0xffff;
+                end = true;
+            }
+            if (end) {
+                sDtmfHold = false;
+            }
+        }
+        int n = JoanDtmf.pack(sDtmfEvent, end, JoanDtmf.DEFAULT_VOLUME,
+                sDtmfDur, out);
+        if (n < 0) {
+            sDtmfEvent = -1;
+            return 0;
+        }
+        if (end && ++sDtmfEnds >= DTMF_END_REPEATS) {
+            JoanTrace.note("dtmf end event=" + sDtmfEvent
+                    + " ticks=" + sDtmfDur);
+            sDtmfEvent = -1;
+        }
+        return n;
+    }
+
     static boolean startRtp(Context ctx, Network net, InetAddress local,
                             InetAddress dest, int destPort, int rtcpPort,
                             boolean mux) {
         return startRtp(ctx, net, local, dest, destPort, rtcpPort, mux, 0,
-                null, 0, true, -1);
+                null, 0, true, -1, 0);
     }
 
     /**
@@ -200,9 +362,15 @@ final class JoanMedia {
                             InetAddress dest, int destPort, int rtcpPort,
                                boolean mux, int payloadType, Boolean amrWideband,
                             int amrBitrate, boolean amrOctetAligned,
-                            int amrMaxMode) {
+                            int amrMaxMode, int telephoneEventPt) {
         stop();
         sPt = payloadType;
+        sTePt = telephoneEventPt;
+        sDtmfQueued = -1;
+        sDtmfHold = false;
+        sDtmfLeftMs = 0;
+        sDtmfEvent = -1;
+        sDtmfEnds = 0;
         sAmrOct = amrOctetAligned;
         sAmrMaxMode = amrMaxMode;
         sPendingMode = -1;
@@ -305,7 +473,8 @@ final class JoanMedia {
                 + " pt=" + sPt + " rate=" + sRate
                 + " bitrate=" + (amrBitrate > 0 ? amrBitrate : 0)
                 + " framing=" + (sAmr == null ? "n/a"
-                        : (sAmrOct ? "octet-aligned" : "bandwidth-efficient")));
+                        : (sAmrOct ? "octet-aligned" : "bandwidth-efficient"))
+                + " te_pt=" + sTePt);
         return true;
     }
 
@@ -463,6 +632,27 @@ final class JoanMedia {
                             ulSamples, ulPeak, ulActSq, ulActSamples)
                             + " platform_agc=" + sPlatformAgc);
                     ulLogged = true;
+                }
+                int dtmfLen = sTePt > 0 ? dtmfFrame(payload, m) : 0;
+                if (dtmfLen > 0) {
+                    /* The tone replaces this frame's audio: the far end
+                     * must not hear the codec's attempt at the same tone
+                     * underneath the event. */
+                    System.arraycopy(payload, 0, rtp, RTP_HDR, dtmfLen);
+                    rtp[0] = (byte) 0x80;
+                    rtp[1] = (byte) ((sDtmfMark ? 0x80 : 0) | (sTePt & 0x7f));
+                    sDtmfMark = false;
+                    rtp[2] = (byte) (sSeq >> 8);
+                    rtp[3] = (byte) sSeq;
+                    sSeq = (sSeq + 1) & 0xffff;
+                    put32(rtp, 4, sDtmfTs);
+                    sTs += m;
+                    put32(rtp, 8, sSsrc);
+                    out.setLength(RTP_HDR + dtmfLen);
+                    sSent++;
+                    sOctets += dtmfLen;
+                    sock.send(out);
+                    continue;
                 }
                 int paylen;
                 if (amr != null) {

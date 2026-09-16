@@ -1486,6 +1486,33 @@ final class JoanSipBuilder {
         return sdpMedia(ip, rtpPort, held ? "sendonly" : "sendrecv");
     }
 
+    /** telephone-event payload types we offer, by clock rate. */
+    static final int TE_PT_WB = 100;
+    static final int TE_PT_NB = 101;
+    static final String TE_NAME = "telephone-event";
+
+    /**
+     * The peer's telephone-event payload type at the same clock rate as
+     * the chosen codec, or null.
+     *
+     * <p>The rate has to match: the event's duration field counts RTP
+     * timestamp ticks of the stream carrying it, so a 16 kHz codec needs
+     * the 16 kHz event type. Offers routinely carry both, which is why the
+     * one to use is chosen rather than assumed.
+     */
+    static Codec telephoneEventFor(Media offer, Codec chosen) {
+        Capability cap = capabilityFor(chosen);
+        if (offer == null || cap == null) {
+            return null;
+        }
+        for (Codec c : offer.codecs) {
+            if (c.is(TE_NAME, cap.rate)) {
+                return c;
+            }
+        }
+        return null;
+    }
+
     /** m=audio plus rtpmap/fmtp for every capability, in offer order. */
     private static String offerMediaLines(int rtpPort) {
         StringBuilder m = new StringBuilder("m=audio ").append(rtpPort)
@@ -1503,6 +1530,31 @@ final class JoanSipBuilder {
                 attrs.append("a=fmtp:").append(c.offerPt).append(' ')
                         .append(c.fmtp).append("\r\n");
             }
+        }
+        /* One telephone-event per clock rate we offer. DTMF cannot ride
+         * inside a speech codec -- AMR reproduces voice, and a tone put
+         * through it is not a tone any IVR will accept -- so the digits
+         * need their own payload type alongside (RFC 4733). */
+        boolean wb = false;
+        boolean nb = false;
+        for (Capability c : sProfile) {
+            if (c.rate == 16000) {
+                wb = true;
+            } else if (c.rate == 8000) {
+                nb = true;
+            }
+        }
+        if (wb) {
+            m.append(' ').append(TE_PT_WB);
+            attrs.append("a=rtpmap:").append(TE_PT_WB).append(' ')
+                    .append(TE_NAME).append("/16000\r\n")
+                    .append("a=fmtp:").append(TE_PT_WB).append(" 0-15\r\n");
+        }
+        if (nb) {
+            m.append(' ').append(TE_PT_NB);
+            attrs.append("a=rtpmap:").append(TE_PT_NB).append(' ')
+                    .append(TE_NAME).append("/8000\r\n")
+                    .append("a=fmtp:").append(TE_PT_NB).append(" 0-15\r\n");
         }
         return m.append("\r\n").append(attrs).toString();
     }
@@ -1569,14 +1621,23 @@ final class JoanSipBuilder {
                         + (ms.isEmpty() ? "" : ";" + ms) + "\r\n";
             }
         }
+        Codec te = telephoneEventFor(offer, chosen);
+        String teLines = "";
+        String teInM = "";
+        if (te != null) {
+            teInM = " " + te.pt;
+            teLines = "a=rtpmap:" + te.pt + ' ' + TE_NAME + '/' + te.rate
+                    + "\r\n" + "a=fmtp:" + te.pt + " 0-15\r\n";
+        }
         return "v=0\r\n"
                 + "o=- " + sess + " 1 IN " + fam + " " + ip + "\r\n"
                 + "s=-\r\n"
                 + "c=IN " + fam + " " + ip + "\r\n"
                 + "t=0 0\r\n"
-                + "m=audio " + rtpPort + " RTP/AVP " + pt + "\r\n"
+                + "m=audio " + rtpPort + " RTP/AVP " + pt + teInM + "\r\n"
                 + rtpmap
                 + fmtp
+                + teLines
                 + "a=ptime:20\r\n"
                 + "a=rtcp:" + (rtpPort + 1) + "\r\n"
                 + (mux ? "a=rtcp-mux\r\n" : "")

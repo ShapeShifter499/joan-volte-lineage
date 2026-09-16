@@ -48,6 +48,12 @@ public class ImsCallSessionImplBase {
     public void resume(ImsStreamMediaProfile profile) {}
 
     /* LOS 22.2 / AOSP binder surface: merge() takes NO argument. */
+    public void sendDtmf(char c, android.os.Message result) {}
+
+    public void startDtmf(char c) {}
+
+    public void stopDtmf() {}
+
     public void merge() {}
     public boolean isMultiparty() { return false; }
 

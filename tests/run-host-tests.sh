@@ -32,6 +32,7 @@ javac -d "$JAVA_OUT" \
     "$JAVA_SRC/JoanSipBuilder.java" \
     "$JAVA_SRC/JoanAmr.java" \
     "$JAVA_SRC/JoanRtcp.java" \
+    "$JAVA_SRC/JoanDtmf.java" \
     "$JAVA_TEST/org/joan/ims/TestJoanSip.java"
 java -cp "$JAVA_OUT" org.joan.ims.TestJoanSip
 

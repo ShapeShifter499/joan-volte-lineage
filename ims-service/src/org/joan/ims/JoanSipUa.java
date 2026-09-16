@@ -80,6 +80,15 @@ final class JoanSipUa {
     private static volatile boolean sMediaAmrOct;
     /** Highest mode the negotiated mode-set allows; -1 when unrestricted. */
     private static volatile int sMediaAmrMaxMode = -1;
+    /**
+     * Payload type both ends agreed for RFC 4733 telephone-event, or 0.
+     *
+     * <p>Zero is not a valid dynamic payload type, so it doubles as "the
+     * peer did not offer one" -- in which case there is no way to send a
+     * digit this call and sendDtmf must say so rather than put tones into
+     * a speech codec that will mangle them.
+     */
+    private static volatile int sMediaTePt;
     private static volatile Boolean sMediaAmrWb;
     private static volatile boolean sMediaMux;
     /** True when the live dialog is on hold (sendonly, no RTP). */
@@ -137,7 +146,7 @@ final class JoanSipUa {
          * restored AMR at the codec default bitrate, octet-aligned even
          * when the call had negotiated bandwidth-efficient, and with no
          * mode-set ceiling. Snapshot every negotiated parameter. */
-        int mediaAmrBitrate, mediaAmrMaxMode;
+        int mediaAmrBitrate, mediaAmrMaxMode, mediaTePt;
         boolean mediaAmrOct;
         Boolean mediaAmrWb;
         boolean mux;
@@ -287,6 +296,10 @@ final class JoanSipUa {
 
     static int mediaAmrMaxMode() {
         return sMediaAmrMaxMode;
+    }
+
+    static int mediaTePt() {
+        return sMediaTePt;
     }
 
     static Boolean mediaAmrWideband() {
@@ -542,12 +555,17 @@ final class JoanSipUa {
                             sMediaAmrOct = JoanSipBuilder.amrOctetAligned(answered);
                             sMediaAmrMaxMode = answered == null
                                     ? -1 : answered.maxAmrMode();
+                            JoanSipBuilder.Codec te =
+                                    JoanSipBuilder.telephoneEventFor(
+                                            media, answered);
+                            sMediaTePt = te == null ? 0 : te.pt;
                             JoanTrace.note("app invite codec="
                                     + (enc.isEmpty() ? "PCMU" : enc)
                                     + " pt=" + media.payloadType
                                     + " fmtp=\"" + (answered == null
                                             ? "" : answered.fmtp) + "\""
-                                    + " bitrate=" + sMediaAmrBitrate);
+                                    + " bitrate=" + sMediaAmrBitrate
+                                    + " te_pt=" + sMediaTePt);
                         } catch (Exception e) {
                             sMediaIp = null;
                         }
@@ -782,12 +800,18 @@ final class JoanSipUa {
             sMediaAmrBitrate = JoanSipBuilder.amrBitrate(chosen);
             sMediaAmrOct = JoanSipBuilder.amrOctetAligned(chosen);
             sMediaAmrMaxMode = chosen == null ? -1 : chosen.maxAmrMode();
+            /* The answer we just built echoed the peer's event type at the
+             * chosen codec's clock rate; send digits on that same one. */
+            JoanSipBuilder.Codec te =
+                    JoanSipBuilder.telephoneEventFor(media, chosen);
+            sMediaTePt = te == null ? 0 : te.pt;
         }
         JoanTrace.note("app ANSWER 200 codec="
                 + (chosen == null ? "PCMU" : chosen.name)
                 + " pt=" + (chosen == null ? 0 : chosen.pt)
                 + " fmtp=\"" + (chosen == null ? "" : chosen.fmtp) + "\""
-                + " bitrate=" + sMediaAmrBitrate);
+                + " bitrate=" + sMediaAmrBitrate
+                + " te_pt=" + sMediaTePt);
         return "OK";
     }
 
@@ -1475,6 +1499,7 @@ final class JoanSipUa {
         l.mediaAmrBitrate = sMediaAmrBitrate;
         l.mediaAmrOct = sMediaAmrOct;
         l.mediaAmrMaxMode = sMediaAmrMaxMode;
+        l.mediaTePt = sMediaTePt;
         l.mux = sMediaMux;
         l.held = sLiveHeld;
         return l;
@@ -1496,6 +1521,7 @@ final class JoanSipUa {
         sMediaAmrBitrate = l.mediaAmrBitrate;
         sMediaAmrOct = l.mediaAmrOct;
         sMediaAmrMaxMode = l.mediaAmrMaxMode;
+        sMediaTePt = l.mediaTePt;
         sMediaMux = l.mux;
         sLiveHeld = l.held;
     }
@@ -2698,6 +2724,7 @@ final class JoanSipUa {
         sMediaAmrBitrate = 0;
         sMediaAmrOct = false;
         sMediaAmrMaxMode = -1;
+        sMediaTePt = 0;
         sMediaAmrWb = null;
         sMediaMux = false;
         sExpiresSec = 0;

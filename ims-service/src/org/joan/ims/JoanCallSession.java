@@ -1,6 +1,7 @@
 package org.joan.ims;
 
 import android.content.Context;
+import android.os.Message;
 import android.telephony.ims.ImsCallProfile;
 import android.telephony.ims.ImsCallSessionListener;
 import android.telephony.ims.ImsReasonInfo;
@@ -568,11 +569,45 @@ public class JoanCallSession extends ImsCallSessionImplBase {
                 JoanSipUa.mediaPt(), JoanSipUa.mediaAmrWideband(),
                 JoanSipUa.mediaAmrBitrate(),
                 JoanSipUa.mediaAmrOctetAligned(),
-                JoanSipUa.mediaAmrMaxMode())) {
+                JoanSipUa.mediaAmrMaxMode(),
+                JoanSipUa.mediaTePt())) {
             return;
         }
         JoanTrace.note("media did not start; ending call");
         hangupAsync();
+    }
+
+    /**
+     * Send one DTMF digit of a fixed length.
+     *
+     * <p>The framework hands us a character and, for the Message form, a
+     * callback it expects when the tone has been queued. Both go through
+     * the RTP telephone-event path: there is no in-band option here, and
+     * writing tones into an AMR stream is the failure mode RFC 4733 exists
+     * to avoid.
+     */
+    @Override
+    public void sendDtmf(char c, Message result) {
+        boolean ok = JoanMedia.sendDtmf(c, 0);
+        JoanTrace.note("app sendDtmf '" + c + "' " + (ok ? "queued" : "refused"));
+        if (result != null) {
+            /* The framework only wants to know the request was taken; it
+             * has no way to represent "the far end heard it". Answering
+             * unconditionally keeps Telephony from waiting on a message
+             * that would never arrive when no event type was negotiated. */
+            result.sendToTarget();
+        }
+    }
+
+    @Override
+    public void startDtmf(char c) {
+        boolean ok = JoanMedia.startDtmf(c);
+        JoanTrace.note("app startDtmf '" + c + "' " + (ok ? "held" : "refused"));
+    }
+
+    @Override
+    public void stopDtmf() {
+        JoanMedia.stopDtmf();
     }
 
     /** ANBR directions, as the framework numbers them. */
