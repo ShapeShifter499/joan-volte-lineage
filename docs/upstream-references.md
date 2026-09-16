@@ -119,6 +119,40 @@ RFC 3261 10.2 asks for a single Call-ID per registrar. Now held in
 (a CSeq that restarts under a Call-ID already used would be rejected, and a
 fresh Call-ID after a restart is always safe).
 
+### 5. Codec negotiation: the offerer's order decides, both directions
+
+`enabler/media/BaseNego.cpp` dispatches on offer/answer **state**, not call
+direction -- `STATE_IDLE`/`STATE_NEGOTIATED` go to `NegotiateOffer()` (an
+offer arrived, we answer), `STATE_OFFER_SENT` to `NegotiateAnswer()` (the
+answer to ours arrived). Both reach the same
+`m_pProfileNegotiator->Negotiate(local, peer, ...)`, so one negotiator
+serves MO and MT alike.
+
+`enabler/media/audio/AudioProfileNegotiator.cpp` iterates the **peer's**
+payload list in the peer's order and matches each entry against local
+capability. That is the rule we adopted: the offerer proposes an order,
+local capability disposes, and the answer echoes the offerer's payload
+number rather than our own.
+
+Two places we deliberately differ, both because our AMR path has never
+executed on a real call:
+
+- **octet-align.** AOSP in strict mode imposes the *local* value and always
+  emits it when it is 1 (`NegotiateAmrFmtp`), with
+  `bAmrPayloadFormatRelaxedMatching` as a carrier knob to keep the peer's
+  instead. We skip an AMR entry whose offer lacks `octet-align=1` and
+  continue down the list, because asserting our requirement relies on the
+  peer changing framing to suit us.
+- **mode-set** and the `mode-change-*` parameters: AOSP negotiates them, we
+  ignore them.
+
+Structural gap still open on our side: AOSP builds its *offer* from carrier
+configuration (`AudioProfileGenerator` with `AudioConfiguration`,
+`CodecAmrConfig`, `CodecEvsConfig`), so it offers AMR-NB, EVS, mode-set and
+ptime per carrier. Ours is a fixed string offering only AMR-WB and PCMU --
+no AMR-NB, which IR.92 mandates. That is a plausible reason T-Mobile skips
+our AMR-WB and answers G.711, which in turn is why AMR has never run here.
+
 ### What they do NOT do, corrected
 
 An earlier pass of this file listed four "divergences where AOSP is more
