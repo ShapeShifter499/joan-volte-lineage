@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$PWD
-MERGE=$ROOT/scripts/merge-agc-effect.sh
+MERGE=$ROOT/upstream/merge-agc-effect.sh
 FIX=$ROOT/tests/audio/fixtures/orig-audio-effects.xml
 OUT=$ROOT/native/build/agc-host
 mkdir -p "$OUT"
@@ -68,28 +68,31 @@ if sh "$MERGE" "$OUT/bad.xml" > /dev/null 2>&1; then
 fi
 pass "a config without the expected sections is refused, not mangled"
 
-# The installer must treat vendor as optional. This is a static check on
-# update-binary because the failure it guards against cannot be
-# reproduced offline: mount_part ends every failure with error(), which
-# calls exit 1, and an exit is not catchable by "|| true". Guarding the
-# vendor mount that way aborted the entire install on a device whose
-# /vendor is full -- before a single file was copied.
+# The zip must not touch /vendor at all. The AGC step used to live in
+# the installer; it could never work, because /vendor on this device has
+# 335 free blocks and refuses writes, and carrying it meant a mount, a
+# write probe and a failure path that existed only to be skipped. Worse,
+# an early version guarded that mount with "|| true", which cannot catch
+# the exit 1 inside the installer's own error(), and aborted an entire
+# flash before a single file was copied.
+#
+# The patch now belongs to a ROM build, and upstream/README.md documents
+# how to apply it. These checks keep it out of the zip.
 UB=$ROOT/scripts/update-binary
 [ -f "$UB" ] || fail "missing $UB"
 
-grep -qE '^[[:space:]]*mount_part[[:space:]]+vendor' "$UB"     && fail "vendor must not go through mount_part: its error() exits the install"
-pass "the vendor mount does not use the function that exits on failure"
+grep -qiE "vendmnt|vendor_rw|merge-agc" "$UB" \
+    && fail "the installer references vendor or the AGC merge again"
+pass "the installer does not touch /vendor"
 
-grep -q 'VENDOR_RW' "$UB" || fail "no VENDOR_RW probe in the installer"
-grep -qE '\[ "\$VENDOR_RW" = "1" \].*merge-agc-effect' "$UB"     || fail "the AGC merge is not gated on the vendor write probe"
-pass "the AGC merge only runs when vendor proved writable"
+grep -q "merge-agc-effect" "$ROOT/scripts/pack-zip.sh" \
+    && fail "the AGC merge script is being packed into the zip again"
+pass "the AGC merge script is not shipped in the zip"
 
-# A mounted partition is not a writable one; the probe must read back.
-grep -q 'joan_write_test' "$UB" || fail "no write-readback probe"
-pass "vendor writability is proven by readback, not by mount succeeding"
-
-# And a skip must be visible, so platform_agc=false is not a mystery later.
-grep -q 'skipping the AGC effect' "$UB"     || fail "a skipped AGC step must say so in the installer output"
-pass "a skipped AGC step is announced rather than passed over"
+[ -f "$ROOT/upstream/merge-agc-effect.sh" ] \
+    || fail "the AGC merge script should live in upstream/ for ROM builders"
+grep -q "audio_effects.xml" "$ROOT/upstream/README.md" \
+    || fail "upstream/README.md must document the AGC patch"
+pass "the patch and its documentation live in upstream/"
 
 echo "AGC effect merge tests passed"

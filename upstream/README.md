@@ -124,6 +124,41 @@ that means emergency calls may have nowhere to go.
 
 ## Uplink gain: patch audio_effects.xml in the device tree
 
+> ### This is the main thing a ROM build gets that the zip cannot
+>
+> **The flashable zip does not do this and never will.** It was tried
+> and removed on 2026-09-16: `/vendor` on this device has 335 free
+> blocks and refuses a 7.5 KB write, so the installer carried a mount,
+> a write probe and a failure path that existed only to be skipped.
+> `scripts/merge-agc-effect.sh` moved here, to `upstream/`, because a
+> ROM build is the only place it can run.
+>
+> **If you are building a ROM for joan, apply this.** It is two lines and
+> it is measurable. Verified on the bench, same handset and same PSTN far
+> end, two calls each way before and after, with the far end confirming
+> the difference by ear:
+>
+> | | without | with |
+> |---|---|---|
+> | uplink speech | -39.2 dBFS | **-32.7 / -31.9 dBFS** |
+> | uplink peak | -20.8 dBFS | **-10.4 / -11.0 dBFS** |
+> | downlink speech | -23.2 dBFS | -23.4 / -21.7 dBFS (unchanged) |
+>
+> About +7 dB of speech and +10 dB of peak. The uplink still sits some
+> 9 dB below the downlink, so this improves the problem without closing
+> it -- do not expect it to be the last word on level.
+>
+> `upstream/merge-agc-effect.sh` applies the patch to an existing
+> `audio_effects.xml` idempotently, preserving every library and effect
+> the ROM already declares. Run it against the file in your device tree
+> and commit the result, or apply the two lines by hand.
+>
+> Confirm it landed with `platform_agc=true` in the joan trace. A trace
+> reading `platform_agc=false` means the declaration is absent and the
+> uplink is running unconditioned.
+
+
+
 **This app does no gain control at all.** That is deliberate -- no IMS
 implementation does it in the application; on a normal handset the ADSP
 voice topology conditions the uplink from ACDB calibration, and for the
