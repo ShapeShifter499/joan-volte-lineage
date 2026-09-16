@@ -61,6 +61,104 @@ final class JoanAmrCodec {
     }
 
     /** Null if the platform cannot provide the codec pair. */
+    /**
+     * Encoding names this device can both encode and decode, for
+     * {@link JoanSipBuilder#restrictProfile}. Both directions are required:
+     * an encoder alone would let us offer a codec we cannot receive.
+     */
+    static java.util.Set<String> availableAmr() {
+        java.util.Set<String> names = new java.util.HashSet<>();
+        try {
+            android.media.MediaCodecList list = new android.media.MediaCodecList(
+                    android.media.MediaCodecList.REGULAR_CODECS);
+            boolean wbEnc = false, wbDec = false, nbEnc = false, nbDec = false;
+            for (android.media.MediaCodecInfo info : list.getCodecInfos()) {
+                for (String type : info.getSupportedTypes()) {
+                    if (MIME_WB.equalsIgnoreCase(type)) {
+                        if (info.isEncoder()) {
+                            wbEnc = true;
+                        } else {
+                            wbDec = true;
+                        }
+                    } else if (MIME_NB.equalsIgnoreCase(type)) {
+                        if (info.isEncoder()) {
+                            nbEnc = true;
+                        } else {
+                            nbDec = true;
+                        }
+                    }
+                }
+            }
+            if (wbEnc && wbDec && selfTest(true)) {
+                names.add("AMR-WB");
+            }
+            if (nbEnc && nbDec && selfTest(false)) {
+                names.add("AMR");
+            }
+        } catch (Throwable t) {
+            JoanTrace.note("codec probe failed: " + t.getClass().getSimpleName());
+        }
+        return names;
+    }
+
+    /**
+     * Open the codec and round-trip one frame before we advertise it.
+     *
+     * <p>A listing in MediaCodecList is not a promise that the codec works:
+     * AOSP can offer whatever carrier config names because an OEM has
+     * qualified the device against it, and we have no such guarantee on an
+     * arbitrary LineageOS build. Encoding and decoding a frame is the only
+     * evidence available in its place, and it costs a few hundred
+     * milliseconds once per boot.
+     *
+     * <p>Deliberately not a silence frame: a codec that returns a fixed
+     * empty payload would pass that and fail on speech. This is a tone,
+     * and the check is that the encoder produced a non-empty payload and
+     * the decoder gave back a full frame of PCM.
+     */
+    static boolean selfTest(boolean wideband) {
+        JoanAmrCodec c = null;
+        try {
+            c = open(wideband);
+            if (c == null) {
+                return false;
+            }
+            int n = c.samplesPerFrame();
+            short[] pcm = new short[n];
+            for (int i = 0; i < n; i++) {
+                pcm[i] = (short) (8000 * Math.sin(2 * Math.PI * 440 * i
+                        / (double) c.sampleRate()));
+            }
+            byte[] packed = new byte[n * 2];
+            int len = c.encode(pcm, n, packed);
+            if (len <= 0) {
+                JoanTrace.note("amr self-test: encoder produced nothing wb="
+                        + wideband);
+                return false;
+            }
+            short[] back = new short[n];
+            int got = c.decode(packed, len, back);
+            if (got != n) {
+                JoanTrace.note("amr self-test: decoded " + got + " of " + n
+                        + " wb=" + wideband);
+                return false;
+            }
+            return true;
+        } catch (Throwable t) {
+            JoanTrace.note("amr self-test failed wb=" + wideband + ": "
+                    + t.getClass().getSimpleName());
+            return false;
+        } finally {
+            if (c != null) {
+                try {
+                    c.close();
+                } catch (Throwable ignored) {
+                    // going away regardless
+                }
+            }
+        }
+    }
+
     static JoanAmrCodec open(boolean wideband) {
         String mime = wideband ? MIME_WB : MIME_NB;
         MediaCodec enc = null;

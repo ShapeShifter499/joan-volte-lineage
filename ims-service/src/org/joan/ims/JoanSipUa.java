@@ -463,10 +463,12 @@ final class JoanSipUa {
                  * is noise in both directions and reports no error. ACK
                  * first so the dialog is well formed, then hang it up. */
                 String enc = media == null ? "" : media.codecName;
-                boolean amrWb = "AMR-WB".equalsIgnoreCase(enc);
-                boolean amrNb = "AMR".equalsIgnoreCase(enc);
+                JoanSipBuilder.Codec answered =
+                        media == null ? null : media.codec(media.payloadType);
+                JoanSipBuilder.Capability answeredCap =
+                        JoanSipBuilder.capabilityFor(answered);
                 if (media != null && media.payloadType != 0
-                        && !amrWb && !amrNb) {
+                        && answeredCap == null) {
                     JoanTrace.note("app invite answered pt="
                             + media.payloadType + " (" + enc
                             + "); not implemented");
@@ -511,8 +513,7 @@ final class JoanSipUa {
                             sMediaRtcpPort = media.rtcpPort;
                             sMediaMux = media.mux;
                             sMediaPt = media.payloadType;
-                            sMediaAmrWb = amrWb ? Boolean.TRUE
-                                    : (amrNb ? Boolean.FALSE : null);
+                            sMediaAmrWb = JoanSipBuilder.amrWideband(answered);
                             JoanTrace.note("app invite codec="
                                     + (enc.isEmpty() ? "PCMU" : enc)
                                     + " pt=" + media.payloadType);
@@ -745,10 +746,8 @@ final class JoanSipUa {
              * call ran as PCMU whatever was negotiated. It now carries the
              * selection, the same way the outbound path carries what the
              * answer chose. */
-            boolean amrWb = chosen != null && chosen.is("AMR-WB", 16000);
-            boolean amrNb = chosen != null && chosen.is("AMR", 8000);
             sMediaPt = chosen == null ? 0 : chosen.pt;
-            sMediaAmrWb = amrWb ? Boolean.TRUE : (amrNb ? Boolean.FALSE : null);
+            sMediaAmrWb = JoanSipBuilder.amrWideband(chosen);
         }
         JoanTrace.note("app ANSWER 200 codec="
                 + (chosen == null ? "PCMU" : chosen.name)

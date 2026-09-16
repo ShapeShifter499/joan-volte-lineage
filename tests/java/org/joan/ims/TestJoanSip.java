@@ -864,22 +864,46 @@ public final class TestJoanSip {
                 "ims.example", "2600::5", 5000, 5001, "123456789012345");
         String inv = JoanSipBuilder.buildInvite(id, new JoanSipBuilder.Dialog(),
                 "tel:+15555550111", null, null, 40000, "3GPP-E-UTRAN-FDD");
-        /* Offer exactly what is implemented: AMR-WB (JoanAmrCodec plus
-         * JoanAmr's RFC 4867 framing) and PCMU, wideband first. */
-        check(inv.contains("m=audio 40000 RTP/AVP 96 0\r\n"),
-                "offer lists AMR-WB then PCMU");
+        /* The offer is rendered from CAPABILITIES, so it promises exactly
+         * what is implemented: AMR-WB and AMR-NB (JoanAmrCodec does both
+         * through MediaCodec, JoanAmr does the RFC 4867 framing) and PCMU
+         * last as the interoperability floor. AMR-NB is the codec IR.92
+         * makes mandatory, so omitting it was the defect. */
+        check(inv.contains("m=audio 40000 RTP/AVP 96 97 0\r\n"),
+                "offer lists AMR-WB, AMR-NB, then PCMU");
         check(inv.contains("a=rtpmap:96 AMR-WB/16000/1"),
                 "offer names AMR-WB at the dynamic payload type");
+        check(inv.contains("a=rtpmap:97 AMR/8000/1"),
+                "offer names AMR-NB at the dynamic payload type");
         check(inv.contains("a=rtpmap:0 PCMU/8000"),
                 "offer keeps PCMU as fallback");
+
+        /* No split: one profile drives both directions. Everything the
+         * offer promises must also be accepted when a peer offers it back,
+         * which is what stopped being true when the answer was hardcoded. */
+        for (JoanSipBuilder.Capability cap : JoanSipBuilder.CAPABILITIES) {
+            check(inv.contains("a=rtpmap:" + cap.offerPt + " " + cap.name + "/"
+                            + cap.rate),
+                    "offer renders capability " + cap.name);
+            String back = "v=0\r\nc=IN IP6 2600::9\r\nt=0 0\r\n"
+                    + "m=audio 21000 RTP/AVP " + cap.offerPt + "\r\n"
+                    + "a=rtpmap:" + cap.offerPt + " " + cap.name + "/"
+                    + cap.rate + "\r\n"
+                    + (cap.needsOctetAlign
+                            ? "a=fmtp:" + cap.offerPt + " octet-align=1\r\n" : "");
+            check(JoanSipBuilder.selectAnswerCodec(
+                            JoanSipBuilder.parseSdp(back)) != null,
+                    "an offer of " + cap.name + " is accepted, not just offered");
+        }
         /* Bandwidth-efficient packing is not implemented, so it must not
          * be negotiated by leaving octet-align out -- its absence means
          * bandwidth-efficient, not "either". */
         check(inv.contains("octet-align=1"),
                 "offer requires octet-aligned AMR");
-        for (String codec : new String[] { "AMR/8000", "telephone-event" }) {
-            check(!inv.contains(codec), "offer does not promise " + codec);
-        }
+        /* telephone-event needs an RFC 4733 event sender, not just an SDP
+         * line, so it stays out of the profile until that exists. */
+        check(!inv.contains("telephone-event"),
+                "offer does not promise telephone-event");
 
         String amrAnswer = "SIP/2.0 200 OK\r\n\r\nv=0\r\n"
                 + "c=IN IP6 2600::9\r\n"

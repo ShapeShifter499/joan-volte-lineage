@@ -16,6 +16,12 @@ public class JoanApp extends Application {
         super.onCreate();
         JoanTrace.init(getApplicationContext());
         JoanTrace.note("Application onCreate; starting driver");
+        /* What we offer has to be what this ROM can run, not what the
+         * source implements: a ROM update can drop or add a platform
+         * codec without this app changing at all. */
+        java.util.Set<String> amr = JoanAmrCodec.availableAmr();
+        JoanSipBuilder.restrictProfile(amr);
+        JoanTrace.note("codec profile: " + JoanSipBuilder.profileSummary());
         JoanDriver.start(getApplicationContext());
     }
 }

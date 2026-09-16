@@ -1234,24 +1234,145 @@ final class JoanSipBuilder {
     }
 
     /**
-     * The first payload type in the OFFERER's order that we can actually
-     * carry: AMR-WB, then AMR-NB, then PCMU. Returns null when none is
-     * usable, which is the only honest reason to decline the call.
+     * One codec this stack can actually carry.
+     *
+     * <p>{@link #CAPABILITIES} is the single source of truth for that, and
+     * both directions read it: {@link #sdpMedia} renders it as our offer,
+     * and {@link #selectAnswerCodec} filters an incoming offer against it.
+     * They used to be separate -- a hardcoded offer string and a hardcoded
+     * PCMU answer -- and drifted, which is how answered calls ended up
+     * ignoring the negotiation entirely. AOSP keeps one local profile and
+     * feeds it to both sides for the same reason (AudioProfileGenerator
+     * builds it, AudioProfileNegotiator matches against it).
+     */
+    static final class Capability {
+        final String name;
+        final int rate;
+        /** Payload type we use when OFFERING; an answer echoes theirs. */
+        final int offerPt;
+        final String fmtp;
+        /** AMR without octet-aligned framing is not implemented. */
+        final boolean needsOctetAlign;
+
+        Capability(String name, int rate, int offerPt, String fmtp,
+                   boolean needsOctetAlign) {
+            this.name = name;
+            this.rate = rate;
+            this.offerPt = offerPt;
+            this.fmtp = fmtp;
+            this.needsOctetAlign = needsOctetAlign;
+        }
+
+        /** TRUE for AMR-WB, FALSE for AMR-NB, null for anything else. */
+        Boolean amrWideband() {
+            if ("AMR-WB".equalsIgnoreCase(name)) {
+                return Boolean.TRUE;
+            }
+            return "AMR".equalsIgnoreCase(name) ? Boolean.FALSE : null;
+        }
+    }
+
+    /**
+     * What we can carry, in our own preference order -- which is the order
+     * we offer. An offerer's order wins when we answer.
+     *
+     * <p>AMR-NB is the codec IR.92 makes mandatory for VoLTE (it is entry 1
+     * in AOSP's own codec enum); AMR-WB is the wideband tier above it.
+     * G.711 is not in the VoLTE profile at all and is kept last as the
+     * interoperability floor.
+     */
+    static final java.util.List<Capability> CAPABILITIES =
+            java.util.Collections.unmodifiableList(java.util.Arrays.asList(
+                    new Capability("AMR-WB", 16000, 96,
+                            "octet-align=1;mode-change-capability=2", true),
+                    new Capability("AMR", 8000, 97,
+                            "octet-align=1;mode-change-capability=2", true),
+                    new Capability("PCMU", 8000, 0, "", false)));
+
+    /**
+     * The capabilities actually usable on THIS build, which is what both
+     * the offer and the answer read. {@link #CAPABILITIES} is what the code
+     * implements; this is what the ROM can really run.
+     *
+     * <p>AMR goes through MediaCodec, so its availability is a property of
+     * the ROM, not of this app. Offering a codec the device cannot open is
+     * worse than not offering it: the carrier selects it, the encoder fails
+     * to open, the media layer falls back to PCMU, and the peer carries on
+     * sending AMR -- a connected call with no audio and nothing in the log
+     * to explain it. A ROM that drops or adds a codec is handled by
+     * re-probing rather than by editing this file.
+     */
+    private static volatile java.util.List<Capability> sProfile = CAPABILITIES;
+
+    static java.util.List<Capability> profile() {
+        return sProfile;
+    }
+
+    /**
+     * Narrow the profile to the encoding names the device can encode AND
+     * decode. PCMU is always kept: it is implemented in this process
+     * (JoanMedia's u-law tables), needs no platform codec, and dropping
+     * every capability would leave a UA that can neither call nor answer.
+     */
+    static void restrictProfile(java.util.Collection<String> availableNames) {
+        java.util.List<Capability> keep = new java.util.ArrayList<>();
+        for (Capability c : CAPABILITIES) {
+            if (c.amrWideband() == null || availableNames.contains(c.name)) {
+                keep.add(c);
+            }
+        }
+        sProfile = java.util.Collections.unmodifiableList(keep);
+    }
+
+    /** Codec names in the active profile, for the trace. */
+    static String profileSummary() {
+        StringBuilder b = new StringBuilder();
+        for (Capability c : sProfile) {
+            if (b.length() > 0) {
+                b.append(',');
+            }
+            b.append(c.name);
+        }
+        return b.toString();
+    }
+
+    /** The capability matching a codec's encoding name and rate, or null. */
+    static Capability capabilityFor(Codec c) {
+        if (c == null) {
+            return null;
+        }
+        for (Capability cap : sProfile) {
+            if (c.is(cap.name, cap.rate)) {
+                return cap;
+            }
+        }
+        return null;
+    }
+
+    /** Wideband flag for the media layer, from the one profile. */
+    static Boolean amrWideband(Codec c) {
+        Capability cap = capabilityFor(c);
+        return cap == null ? null : cap.amrWideband();
+    }
+
+    /**
+     * The first payload type in the OFFERER's order that we can carry.
+     * Returns null when none is usable, which is the only honest reason to
+     * decline the call.
      */
     static Codec selectAnswerCodec(Media offer) {
         if (offer == null) {
             return null;
         }
         for (Codec c : offer.codecs) {
-            if (c.is("AMR-WB", 16000) || c.is("AMR", 8000)) {
-                if (c.amrOctetAligned()) {
-                    return c;
-                }
+            Capability cap = capabilityFor(c);
+            if (cap == null) {
                 continue;
             }
-            if (c.pt == 0 && c.is("PCMU", 8000)) {
-                return c;
+            if (cap.needsOctetAlign && !c.amrOctetAligned()) {
+                continue;
             }
+            return c;
         }
         return null;
     }
@@ -1265,6 +1386,27 @@ final class JoanSipBuilder {
         return sdpMedia(ip, rtpPort, held ? "sendonly" : "sendrecv");
     }
 
+    /** m=audio plus rtpmap/fmtp for every capability, in offer order. */
+    private static String offerMediaLines(int rtpPort) {
+        StringBuilder m = new StringBuilder("m=audio ").append(rtpPort)
+                .append(" RTP/AVP");
+        StringBuilder attrs = new StringBuilder();
+        for (Capability c : sProfile) {
+            m.append(' ').append(c.offerPt);
+            attrs.append("a=rtpmap:").append(c.offerPt).append(' ')
+                    .append(c.name).append('/').append(c.rate);
+            if (c.amrWideband() != null) {
+                attrs.append("/1");
+            }
+            attrs.append("\r\n");
+            if (!c.fmtp.isEmpty()) {
+                attrs.append("a=fmtp:").append(c.offerPt).append(' ')
+                        .append(c.fmtp).append("\r\n");
+            }
+        }
+        return m.append("\r\n").append(attrs).toString();
+    }
+
     private static String sdpMedia(String ip, int rtpPort, String direction) {
         boolean v6 = ip != null && ip.indexOf(':') >= 0;
         String fam = v6 ? "IP6" : "IP4";
@@ -1274,19 +1416,12 @@ final class JoanSipBuilder {
                 + "s=-\r\n"
                 + "c=IN " + fam + " " + ip + "\r\n"
                 + "t=0 0\r\n"
-                /* AMR-WB first, PCMU as fallback. Both are implemented:
-                 * JoanAmrCodec encodes and decodes AMR through MediaCodec
-                 * and JoanAmr does the RFC 4867 framing. octet-align=1 is
-                 * required -- the bandwidth-efficient packing is not
-                 * implemented and must not be negotiated by omission.
-                 *
-                 * AMR-WB is what IR.92 profiles for wideband voice, and
-                 * G.711 is not in that profile at all: a network that
-                 * refuses PCMU has nothing else to choose without this. */
-                + "m=audio " + rtpPort + " RTP/AVP 96 0\r\n"
-                + "a=rtpmap:96 AMR-WB/16000/1\r\n"
-                + "a=fmtp:96 octet-align=1;mode-change-capability=2\r\n"
-                + "a=rtpmap:0 PCMU/8000\r\n"
+                /* Rendered from CAPABILITIES so the offer cannot disagree
+                 * with what we will accept in an answer. octet-align=1 is
+                 * stated, never left implicit: its absence means
+                 * bandwidth-efficient (RFC 4867 3.6), which is not
+                 * implemented. */
+                + offerMediaLines(rtpPort)
                 + "a=ptime:20\r\n"
                 + "a=maxptime:240\r\n"
                 + "a=rtcp:" + (rtpPort + 1) + "\r\n"
@@ -1313,18 +1448,18 @@ final class JoanSipBuilder {
         String fam = v6 ? "IP6" : "IP4";
         long sess = System.currentTimeMillis() / 1000;
         boolean mux = offer == null || offer.mux;
-        int pt = chosen == null ? 0 : chosen.pt;
+        Capability cap = capabilityFor(chosen);
+        int pt = cap == null ? 0 : chosen.pt;
         String rtpmap;
         String fmtp = "";
-        if (chosen != null && chosen.is("AMR-WB", 16000)) {
-            rtpmap = "a=rtpmap:" + pt + " AMR-WB/16000/1\r\n";
-            fmtp = "a=fmtp:" + pt + " octet-align=1\r\n";
-        } else if (chosen != null && chosen.is("AMR", 8000)) {
-            rtpmap = "a=rtpmap:" + pt + " AMR/8000/1\r\n";
-            fmtp = "a=fmtp:" + pt + " octet-align=1\r\n";
-        } else {
-            pt = 0;
+        if (cap == null) {
             rtpmap = "a=rtpmap:0 PCMU/8000\r\n";
+        } else {
+            rtpmap = "a=rtpmap:" + pt + ' ' + cap.name + '/' + cap.rate
+                    + (cap.amrWideband() != null ? "/1" : "") + "\r\n";
+            if (cap.needsOctetAlign) {
+                fmtp = "a=fmtp:" + pt + " octet-align=1\r\n";
+            }
         }
         return "v=0\r\n"
                 + "o=- " + sess + " 1 IN " + fam + " " + ip + "\r\n"
