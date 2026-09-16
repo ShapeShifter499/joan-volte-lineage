@@ -25,6 +25,7 @@ public final class TestJoanSip {
         testSdpDirection();
         testSessionBandwidth();
         testRegInfo();
+        testJitterBuffer();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -1448,6 +1449,127 @@ public final class TestJoanSip {
                 "an unset RS/RR is left off rather than sent as zero");
 
         JoanSipBuilder.setSessionBandwidth(0, 0, 0);
+    }
+
+    private static void testJitterBuffer() {
+        byte[] p = { 1, 2, 3, 4 };
+
+        /* In order, no loss: everything comes back in order once the
+         * buffer has filled to its depth. */
+        JoanJitter j = new JoanJitter();
+        j.setClockRate(16000);
+        int delivered = 0;
+        for (int i = 0; i < 40; i++) {
+            j.offer(1000 + i, i * 320L, i * 320L, p, i * 20L);
+            if (j.poll() != null) {
+                delivered++;
+            }
+        }
+        check(delivered > 30 && delivered <= 40,
+                "an in-order stream is delivered, less the initial fill");
+        check(j.reordered() == 0 && j.dropped() == 0,
+                "an in-order stream reorders and drops nothing");
+        check(j.cumulativeLost() == 0, "and loses nothing");
+
+        /* Out of order: the whole point. Straight-through playback would
+         * emit these in arrival order; the buffer must not. */
+        JoanJitter r = new JoanJitter();
+        r.setClockRate(16000);
+        byte[] a = { 10 };
+        byte[] b = { 11 };
+        byte[] c = { 12 };
+        for (int i = 0; i < 6; i++) {
+            r.offer(500 + i, i * 320L, i * 320L, new byte[]{ (byte) i },
+                    i * 20L);
+        }
+        /* 8 and 7 arrive swapped. */
+        r.offer(508, 8 * 320L, 8 * 320L, c, 160L);
+        r.offer(507, 7 * 320L, 7 * 320L, b, 170L);
+        r.offer(506, 6 * 320L, 6 * 320L, a, 175L);
+        check(r.reordered() > 0, "an out-of-order arrival is noticed");
+        java.util.List<Byte> got = new java.util.ArrayList<>();
+        for (int i = 0; i < 12; i++) {
+            byte[] out = r.poll();
+            if (out != null) {
+                got.add(out[0]);
+            }
+        }
+        boolean ordered = true;
+        for (int i = 1; i < got.size(); i++) {
+            if (got.get(i) < got.get(i - 1)) {
+                ordered = false;
+            }
+        }
+        check(ordered, "packets come out in sequence order, not arrival order");
+
+        /* A packet so late that its slot has already played must be
+         * dropped, not emitted out of order. */
+        JoanJitter late = new JoanJitter();
+        late.setClockRate(16000);
+        for (int i = 0; i < 20; i++) {
+            late.offer(200 + i, i * 320L, i * 320L, p, i * 20L);
+            late.poll();
+        }
+        int droppedBefore = late.dropped();
+        check(!late.offer(200, 0, 0, p, 400L),
+                "a packet whose slot already played is refused");
+        check(late.dropped() == droppedBefore + 1,
+                "and counted as late rather than silently ignored");
+
+        /* Loss shows up in the RFC 3550 statistics. */
+        JoanJitter loss = new JoanJitter();
+        loss.setClockRate(16000);
+        for (int i = 0; i < 10; i++) {
+            if (i == 4 || i == 5) {
+                continue; /* two packets never arrive */
+            }
+            loss.offer(700 + i, i * 320L, i * 320L, p, i * 20L);
+        }
+        check(loss.cumulativeLost() == 2,
+                "two missing packets are counted as two lost");
+        check(loss.received() == 8, "and the received count excludes them");
+        int frac = loss.fractionLostAndReset();
+        check(frac > 0, "the report-block fraction is non-zero after loss");
+        check(loss.fractionLostAndReset() == 0,
+                "and resets, so each report covers its own interval");
+
+        /* Jitter: a steady stream has none, a varying one does. */
+        JoanJitter steady = new JoanJitter();
+        steady.setClockRate(16000);
+        for (int i = 0; i < 30; i++) {
+            steady.offer(1 + i, i * 320L, i * 320L, p, i * 20L);
+        }
+        check(steady.jitter() == 0, "a perfectly paced stream has no jitter");
+        JoanJitter jumpy = new JoanJitter();
+        jumpy.setClockRate(16000);
+        for (int i = 0; i < 30; i++) {
+            long arrive = i * 320L + ((i % 2 == 0) ? 0 : 480L);
+            jumpy.offer(1 + i, i * 320L, arrive, p, i * 20L);
+        }
+        check(jumpy.jitter() > 0, "an uneven stream shows jitter");
+
+        /* Depth adapts, and is bounded at both ends. */
+        JoanJitter adapt = new JoanJitter();
+        adapt.setClockRate(16000);
+        int start = adapt.depth();
+        for (int i = 0; i < 60; i++) {
+            long arrive = i * 320L + (i % 3 == 0 ? 1600L : 0L);
+            adapt.offer(1 + i, i * 320L, arrive, p, i * 20L);
+        }
+        check(adapt.depth() >= start,
+                "a stream that keeps arriving late grows the buffer");
+        check(adapt.depth() <= JoanJitter.MAX_DEPTH,
+                "and never past the ceiling");
+        check(JoanJitter.MIN_DEPTH >= 2,
+                "the floor keeps at least one packet of slack");
+
+        /* The buffer holds until it has filled, rather than starting on
+         * the first packet and running dry. */
+        JoanJitter fill = new JoanJitter();
+        fill.setClockRate(16000);
+        fill.offer(9000, 0, 0, p, 0L);
+        check(fill.poll() == null,
+                "one packet is not enough to start playing");
     }
 
     private static void testRegInfo() {
