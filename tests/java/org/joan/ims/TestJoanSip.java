@@ -1643,6 +1643,37 @@ public final class TestJoanSip {
         check(sid.depth() >= JoanJitter.MIN_DEPTH,
                 "and never shrinks past the floor");
 
+        /* The queue must not be able to grow without bound. Offering one
+         * packet and playing one per arrival can never work off frames
+         * accumulated during the fill, so without a ceiling the backlog
+         * is permanent: measured on the bench as nine frames held
+         * against a target of two, about 180 ms the call never gets
+         * back. */
+        JoanJitter back = new JoanJitter();
+        back.setClockRate(16000);
+        for (int i = 0; i < 200; i++) {
+            back.offer(21000 + i, i * 320L, i * 320L, p, i * 20L);
+            if (i % 3 != 0) {
+                back.poll(i * 20L);   /* play less often than we receive */
+            }
+        }
+        check(back.queued() <= back.depth() + JoanJitter.SLACK,
+                "a backlog is bounded by the depth plus slack");
+        check(back.queued() < 20,
+                "and does not grow without limit when polled too seldom");
+
+        /* But an ordinary stream must not be trimmed. One or two frames
+         * over the target is normal -- an arrival can land just before
+         * its slot -- and cutting that would tear a healthy stream. */
+        JoanJitter calm = new JoanJitter();
+        calm.setClockRate(16000);
+        for (int i = 0; i < 60; i++) {
+            calm.offer(22000 + i, i * 320L, i * 320L, p, i * 20L);
+            calm.poll(i * 20L);
+        }
+        check(calm.dropped() == 0,
+                "a well-behaved stream loses nothing to the ceiling");
+
         /* observe() must account exactly as offer() does, so the report
          * blocks are right whether or not playback is buffering yet. */
         JoanJitter o1 = new JoanJitter();

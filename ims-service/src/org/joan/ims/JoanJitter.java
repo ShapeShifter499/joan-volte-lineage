@@ -44,6 +44,18 @@ final class JoanJitter {
     /** Rounding margin, milliseconds. */
     static final int ROUNDUP_MARGIN_MS = 10;
 
+    /**
+     * Frames the queue may hold above the target before any are given up.
+     *
+     * <p>Sitting one or two frames over is ordinary: an arrival can
+     * always land just before its slot is played, and trimming that away
+     * would tear a hole in a stream with nothing wrong with it. What has
+     * to be caught is a backlog that cannot drain -- measured on the
+     * bench as nine frames held against a target of two, which is about
+     * 180 ms of latency the call never gets back.
+     */
+    static final int SLACK = 3;
+
     /** Buffer depth bounds, in packets. */
     static final int MIN_DEPTH = 2;
     static final int MAX_DEPTH = 50;
@@ -318,6 +330,25 @@ final class JoanJitter {
             }
             waiting = false;
         }
+        /* Bound the held audio to the depth. Without this the buffer
+         * only ever grows: the frames accumulated during the fill are
+         * never worked off, because after it the loop plays exactly one
+         * frame per arrival and can never catch up. Every shrink made it
+         * worse, dropping the target while keeping the audio. Measured
+         * on the bench as queued=9 at depth=2 -- about 180 ms of
+         * permanent, undrainable latency.
+         *
+         * AOSP does the same thing by advancing mCurrPlayingTS, which
+         * discards a frame; discarding the oldest is the same decision
+         * said plainly. The oldest is the right one to lose: it is the
+         * most stale, and the alternative is carrying the delay for the
+         * rest of the call. */
+        while (queue.size() > depth + SLACK) {
+            queue.remove(queue.firstKey());
+            expected = queue.isEmpty() ? expected : queue.firstKey();
+            dropped++;
+            noteDrop(nowMs);
+        }
         java.util.Map.Entry<Long, byte[]> first = queue.firstEntry();
         if (first == null) {
             /* Ran dry. Keep the playout clock moving so the stream does
@@ -395,6 +426,13 @@ final class JoanJitter {
     private void shrinkOnSilence() {
         if (sawSid && depth > MIN_DEPTH) {
             depth--;
+            /* Give the frame back as well as the target. Lowering the
+             * depth alone leaves the audio queued and the latency
+             * exactly where it was. */
+            if (!queue.isEmpty()) {
+                queue.remove(queue.firstKey());
+                dropped++;
+            }
         }
     }
 
