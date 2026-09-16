@@ -358,9 +358,12 @@ short version: the AP-side path is the default, the API links statically
 into an app, and `openSession()` takes the RTP and RTCP sockets from the
 caller -- so our IPsec-bound sockets are not an obstacle. What blocks it
 is `sharedUserId="android.uid.phone"` plus `certificate: "platform"`,
-which the flashable zip cannot satisfy on a release-keys ROM. It is a
-device-tree feature, not a zip feature. The jitter buffer we lack
-entirely is the part worth porting in the meantime.
+which the flashable zip cannot satisfy on a release-keys ROM -- so the
+zip cannot SHIP the service. It can still USE one a ROM provides:
+`USE_IMSMEDIA` is `signature|privileged`, and we are already a
+privileged app with an allowlist. The jitter buffer we lack entirely is
+the part worth porting first, because it is the only thing that helps a
+zip install on a stock ROM.
 
 ## LG IMS (reverse engineered)
 

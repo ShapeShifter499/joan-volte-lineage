@@ -44,9 +44,12 @@ Four things that would have been reasonable blockers, and are not:
   This was the risk I expected to end the spike, and it is the opposite:
   the design assumes somebody else owns the socket.
 
-## What actually blocks it
+## What actually blocks it -- and what it does not
 
-**The flashable zip cannot deliver it.** `service/AndroidManifest.xml`
+**The flashable zip cannot SHIP it. It can still USE it.** Those are
+different, and the first draft of this document conflated them.
+
+### Shipping: blocked `service/AndroidManifest.xml`
 declares `android:sharedUserId="android.uid.phone"`, and
 `service/Android.bp` has `certificate: "platform"`. Joining the phone
 UID requires the same signing certificate as `com.android.phone`. The
@@ -57,6 +60,34 @@ signature does not match, so the service would not start.
 
 This is not the `audio_effects.xml` problem again. That was a full
 partition; this is a signing boundary, and no amount of space fixes it.
+
+### Using: not blocked
+
+The service is guarded by
+
+    <permission android:name="com.android.telephony.permission.USE_IMSMEDIA"
+        android:protectionLevel="signature|privileged"/>
+
+and `|privileged` is the operative half. A privileged app in
+`/system/priv-app` with a privapp-permissions allowlist entry holds that
+permission without matching the signature. `org.joan.ims` is already
+that app, and already takes `MODIFY_PHONE_STATE` and
+`READ_PRIVILEGED_PHONE_STATE` by exactly that route.
+
+`ImsMediaFramework` is a static `android_library`, so the API links into
+our APK. So a zip-installed app can bind and drive an ImsMediaService
+that the **ROM** provides, giving three working combinations from one
+codebase:
+
+| install | ImsMedia present | media path |
+|---|---|---|
+| zip on stock LineageOS 22 | no | ours |
+| zip on a LineageOS built with `imsmedia.mk` | yes | ImsMedia |
+| ROM build inheriting both | yes | ImsMedia |
+
+The cost is real but it is maintenance, not delivery: two media
+implementations to keep working, and a test matrix where "it works"
+means both.
 
 ## The three paths
 
@@ -79,14 +110,25 @@ partition; this is a signing boundary, and no amount of space fixes it.
 
 ## Recommendation
 
-Path 1 for the whole module, as part of the device-tree work rather than
-the zip. Path 3 for the jitter buffer in the meantime, because the zip
-is what testers actually run and the buffer is the single largest gap
-between our media path and a real one.
+**These are not alternatives, and the order matters.**
 
-Path 2 is available and licensed, but it trades a bounded piece of work
-for an unbounded maintenance commitment, and nothing observed so far
-needs the rest of the module.
+**Port the jitter buffer first (path 3).** Zip-on-stock-LineageOS is
+what testers run today and is the one combination in the table above
+that gets no ImsMedia at all. An adaptive buffer in `JoanMedia` helps
+every one of them now, and none of it is wasted if ImsMedia support
+lands later -- it simply becomes the fallback path's implementation.
+
+**Add ImsMedia detection later (path 1), if a device tree carrying
+`imsmedia.mk` actually exists to test against.** Writing that support
+now would mean writing code we cannot run: nothing on the bench provides
+the service, so every branch of it would be untested. That is the same
+mistake as claiming a codec we had not probed.
+
+**Path 2 -- vendoring `libimsmedia` into our own app -- remains
+available and licensed, and is the one to reach for only if the ROM
+route turns out not to be real.** It trades a bounded piece of work for
+an unbounded maintenance commitment: a fork of a large C++ codebase plus
+an NDK build this repo does not currently have.
 
 ## Not a licensing question
 
