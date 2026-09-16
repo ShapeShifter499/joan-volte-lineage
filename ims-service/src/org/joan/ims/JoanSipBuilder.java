@@ -1676,6 +1676,91 @@ final class JoanSipBuilder {
         return msg;
     }
 
+    /* ------------------------------------------------------------------
+     * Session timers (RFC 4028). Held here rather than threaded through
+     * every buildInvite() call site for the same reason the codec profile
+     * is: there is one answer per registration, it comes from carrier
+     * config, and a second copy of it is a second thing to get wrong.
+     * ------------------------------------------------------------------ */
+
+    private static volatile int sSeSec;
+    private static volatile int sMinSeSec;
+    private static volatile int sSeRefresher = JoanSessionTimer.REFRESHER_UAC;
+
+    /**
+     * Set the session-timer offer, or clear it with {@code expiresSec <= 0}.
+     *
+     * <p>Clearing matters: a carrier whose config says session timers are
+     * unsupported must see no Session-Expires at all. Offering one anyway
+     * and then refreshing on a schedule the peer never agreed to is how a
+     * working call gets torn down mid-sentence.
+     */
+    static void setSessionTimer(int expiresSec, int minSeSec, int refresher) {
+        sSeSec = expiresSec > 0 ? expiresSec : 0;
+        sMinSeSec = minSeSec;
+        sSeRefresher = refresher;
+    }
+
+    static int sessionExpiresSec() {
+        return sSeSec;
+    }
+
+    static int sessionMinSeSec() {
+        return sMinSeSec;
+    }
+
+    static int sessionRefresher() {
+        return sSeRefresher;
+    }
+
+    /** The three headers an initial INVITE carries, or "" when off. */
+    static String sessionTimerOfferHeaders() {
+        if (sSeSec <= 0) {
+            return "";
+        }
+        return "Supported: timer\r\n"
+                + "Session-Expires: "
+                + JoanSessionTimer.expiresHeader(sSeSec, sSeRefresher)
+                + "\r\n"
+                + "Min-SE: " + JoanSessionTimer.minSe(sMinSeSec) + "\r\n";
+    }
+
+    /**
+     * The headers a refresh carries: the interval both ends settled on,
+     * not the one we originally asked for.
+     */
+    static String sessionTimerRefreshHeaders(int agreedSec, int refresher) {
+        if (agreedSec <= 0) {
+            return "";
+        }
+        return "Supported: timer\r\n"
+                + "Session-Expires: "
+                + JoanSessionTimer.expiresHeader(agreedSec, refresher)
+                + "\r\n"
+                + "Min-SE: " + JoanSessionTimer.minSe(sMinSeSec) + "\r\n";
+    }
+
+    /**
+     * The headers a 2xx to an INVITE carries when the peer asked for a
+     * timed session, or "" when it did not.
+     *
+     * <p>RFC 4028 s8.2: a 2xx naming the UAC as refresher also carries
+     * Require: timer, which is how the caller learns it owes the
+     * refreshes rather than assuming we will send them.
+     */
+    static String sessionTimerAnswerHeaders(int agreedSec, int refresher) {
+        if (agreedSec <= 0) {
+            return "";
+        }
+        String h = "Session-Expires: "
+                + JoanSessionTimer.expiresHeader(agreedSec, refresher)
+                + "\r\n";
+        if (JoanSessionTimer.requireTimerInAnswer(refresher)) {
+            h = h + "Require: timer\r\n";
+        }
+        return h;
+    }
+
     static String buildInvite(Id id, Dialog dlg, String dest, String route,
                               String secVerify, int rtpPort, String pani) {
         return buildInvite(id, dlg, dest, route, secVerify, rtpPort, pani,
@@ -1743,6 +1828,7 @@ final class JoanSipBuilder {
             a.append("Security-Verify: ").append(secVerify).append("\r\n");
         }
         a.append("Accept-Contact: *;+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\"\r\n");
+        a.append(sessionTimerOfferHeaders());
         a.append("Content-Type: application/sdp\r\n");
         a.append("Content-Length: ").append(sdp.length()).append("\r\n\r\n");
         a.append(sdp);
@@ -1772,6 +1858,33 @@ final class JoanSipBuilder {
         }
         return inDialog("ACK", id, dlg, target, route, secVerify,
                 toHdr, fromHdr, inviteCseq, null, null, inviteBranch);
+    }
+
+    /**
+     * In-dialog UPDATE, RFC 3311, used here to refresh a session.
+     *
+     * <p>No SDP: a session refresh only has to prove the dialog is alive.
+     * Re-offering media every interval re-runs codec negotiation on a call
+     * that is already working, and any peer that answers that badly breaks
+     * something that was fine.
+     */
+    static String buildUpdate(Id id, Dialog dlg, String target, String route,
+                              String secVerify, String toHdr, String fromHdr,
+                              int cseq, String extra) {
+        return inDialog("UPDATE", id, dlg, target, route, secVerify,
+                toHdr, fromHdr, cseq, extra);
+    }
+
+    /** Refresh method the carrier asked for; see JoanSessionTimer. */
+    private static volatile int sSeMethod =
+            JoanSessionTimer.METHOD_UPDATE_PREFERRED;
+
+    static void setSessionRefreshMethod(int method) {
+        sSeMethod = method;
+    }
+
+    static int sessionRefreshMethod() {
+        return sSeMethod;
     }
 
     static String buildBye(Id id, Dialog dlg, String target, String route,

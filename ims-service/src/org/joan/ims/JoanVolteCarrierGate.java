@@ -113,6 +113,11 @@ final class JoanVolteCarrierGate {
                     if (!SubscriptionManager.isValidSubscriptionId(sub)) {
                         return;
                     }
+                    /* The session-timer values were read from this same
+                     * bundle. A rebuild can change them, and a cached copy
+                     * would keep a call refreshing on an interval the
+                     * carrier no longer asks for. */
+                    JoanImsVoiceConfig.invalidate();
                     try {
                         TelephonyManager tm0 = app.getSystemService(
                                 TelephonyManager.class);

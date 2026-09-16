@@ -21,6 +21,7 @@ public final class TestJoanSip {
         testSecAgreeOnInvite();
         testAmrPayload();
         testOfferSummary();
+        testSessionTimer();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -1323,6 +1324,202 @@ public final class TestJoanSip {
                 "offer summary carries no SPIs or ports");
         check("none".equals(JoanSecAgree.offerSummary(null, null)),
                 "no offer reads as none");
+    }
+
+    private static void testSessionTimer() {
+        /* Parsing, against what a network actually sends. */
+        check(JoanSessionTimer.parseExpires("1800;refresher=uac") == 1800,
+                "session-expires reads the seconds before the parameters");
+        check(JoanSessionTimer.parseExpires(" 600 ") == 600,
+                "session-expires tolerates surrounding space");
+        check(JoanSessionTimer.parseExpires("abc") < 0
+                        && JoanSessionTimer.parseExpires(null) < 0
+                        && JoanSessionTimer.parseExpires("18x0") < 0,
+                "a non-numeric session-expires is refused, not guessed");
+        check(JoanSessionTimer.parseExpires("99999999") == 86400,
+                "an absurd interval is capped rather than overflowed");
+        check(JoanSessionTimer.parseRefresher("1800;refresher=uac")
+                        == JoanSessionTimer.REFRESHER_UAC,
+                "refresher=uac is read");
+        check(JoanSessionTimer.parseRefresher("1800;REFRESHER=UAS")
+                        == JoanSessionTimer.REFRESHER_UAS,
+                "refresher is case-insensitive");
+        check(JoanSessionTimer.parseRefresher("1800")
+                        == JoanSessionTimer.REFRESHER_UNKNOWN,
+                "no refresher parameter reads as unknown");
+        check(JoanSessionTimer.parseRefresher("1800;refresher=bogus")
+                        == JoanSessionTimer.REFRESHER_UNKNOWN,
+                "an unrecognised refresher is not taken for either side");
+
+        /* Option tags have to match as tokens, not as substrings. */
+        check(JoanSessionTimer.peerSupportsTimer("timer", null),
+                "Supported: timer is enough");
+        check(JoanSessionTimer.peerSupportsTimer(null, "timer"),
+                "Require: timer is enough");
+        check(JoanSessionTimer.peerSupportsTimer("100rel, timer, precondition",
+                        null),
+                "timer is found in a list");
+        check(!JoanSessionTimer.peerSupportsTimer("timers", null)
+                        && !JoanSessionTimer.peerSupportsTimer("no-timer", null),
+                "a longer token that merely contains timer does not count");
+        check(!JoanSessionTimer.peerSupportsTimer(null, null),
+                "a peer that says nothing gets no session timer");
+
+        check(JoanSessionTimer.allowsUpdate("INVITE, ACK, UPDATE, BYE"),
+                "UPDATE is found in Allow");
+        check(!JoanSessionTimer.allowsUpdate("INVITE, ACK, BYE"),
+                "a peer without UPDATE is not sent one");
+        check(JoanSessionTimer.refreshWithUpdate(
+                        JoanSessionTimer.METHOD_UPDATE_PREFERRED,
+                        "INVITE, ACK, UPDATE, BYE"),
+                "UPDATE preferred and allowed means UPDATE");
+        check(!JoanSessionTimer.refreshWithUpdate(
+                        JoanSessionTimer.METHOD_UPDATE_PREFERRED,
+                        "INVITE, ACK, BYE"),
+                "UPDATE preferred but not allowed falls back to re-INVITE");
+        check(!JoanSessionTimer.refreshWithUpdate(
+                        JoanSessionTimer.METHOD_INVITE,
+                        "INVITE, ACK, UPDATE, BYE"),
+                "a carrier asking for INVITE gets INVITE");
+
+        /* Negotiation. */
+        check(JoanSessionTimer.minSe(30) == JoanSessionTimer.MIN_SE_FLOOR,
+                "Min-SE never goes below the RFC 4028 floor");
+        check(JoanSessionTimer.minSe(120) == 120,
+                "a carrier Min-SE above the floor is kept");
+        check(JoanSessionTimer.offerExpires(60, 90) == 90,
+                "an offer below our own Min-SE is raised to it");
+        check(JoanSessionTimer.offerExpires(0, 90)
+                        == JoanSessionTimer.DEFAULT_EXPIRES_SEC,
+                "an unset interval uses the AOSP default");
+        check(JoanSessionTimer.rejectBelowMinSe(60, 90) == 90,
+                "an INVITE below our Min-SE is answered 422 with our value");
+        check(JoanSessionTimer.rejectBelowMinSe(1800, 90) == 0,
+                "an acceptable interval is not rejected");
+        check(JoanSessionTimer.rejectBelowMinSe(0, 90) == 0,
+                "an INVITE with no timer is not rejected for one");
+        check(JoanSessionTimer.retryExpiresAfter422(120, 3600) == 120,
+                "a 422 is retried at the peer's Min-SE");
+        check(JoanSessionTimer.retryExpiresAfter422(30, 3600) < 0,
+                "a 422 demanding less than the floor is not retried");
+        check(JoanSessionTimer.retryExpiresAfter422(7200, 3600) < 0,
+                "a 422 demanding more than we will hold is not retried");
+
+        check(JoanSessionTimer.uasRefresher(JoanSessionTimer.REFRESHER_UAC,
+                        JoanSessionTimer.REFRESHER_UAS)
+                        == JoanSessionTimer.REFRESHER_UAC,
+                "the peer's stated preference wins over ours");
+        check(JoanSessionTimer.uasRefresher(JoanSessionTimer.REFRESHER_UNKNOWN,
+                        JoanSessionTimer.REFRESHER_UAC)
+                        == JoanSessionTimer.REFRESHER_UAC,
+                "with no preference the carrier config decides");
+        check(JoanSessionTimer.uasRefresher(JoanSessionTimer.REFRESHER_UNKNOWN,
+                        JoanSessionTimer.REFRESHER_UNKNOWN)
+                        == JoanSessionTimer.REFRESHER_UAS,
+                "with nothing stated we refresh rather than nobody");
+        check(JoanSessionTimer.requireTimerInAnswer(
+                        JoanSessionTimer.REFRESHER_UAC),
+                "naming the UAC as refresher requires timer of it");
+        check(!JoanSessionTimer.requireTimerInAnswer(
+                        JoanSessionTimer.REFRESHER_UAS),
+                "taking the work ourselves demands nothing of the peer");
+
+        check(JoanSessionTimer.weRefresh(JoanSessionTimer.REFRESHER_UAC, true)
+                        && !JoanSessionTimer.weRefresh(
+                                JoanSessionTimer.REFRESHER_UAC, false),
+                "refresher=uac means the caller refreshes");
+        check(!JoanSessionTimer.weRefresh(JoanSessionTimer.REFRESHER_UAS, true)
+                        && JoanSessionTimer.weRefresh(
+                                JoanSessionTimer.REFRESHER_UAS, false),
+                "refresher=uas means the callee refreshes");
+        check(JoanSessionTimer.weRefresh(
+                        JoanSessionTimer.REFRESHER_UNKNOWN, true),
+                "an unnamed refresher is taken by us, not assumed of them");
+
+        check("1800;refresher=uac".equals(JoanSessionTimer.expiresHeader(
+                        1800, JoanSessionTimer.REFRESHER_UAC)),
+                "the header names the refresher");
+        check("1800".equals(JoanSessionTimer.expiresHeader(
+                        1800, JoanSessionTimer.REFRESHER_UNKNOWN)),
+                "an unknown refresher is left off the header");
+
+        /* Timing, RFC 4028 s10. */
+        check(JoanSessionTimer.refreshDueMs(1800, true) == 900000L,
+                "the refresher acts at half the interval");
+        check(JoanSessionTimer.refreshDueMs(1800, false) == 1768000L,
+                "a long interval lets the other side act 32s before expiry");
+        check(JoanSessionTimer.refreshDueMs(90, false) == 67000L,
+                "a short interval uses three quarters instead");
+        check(JoanSessionTimer.refreshDueMs(0, true) < 0,
+                "an untimed session has no refresh due");
+        check(JoanSessionTimer.refreshDueMs(1, true) == 1000L,
+                "the refresh never lands at zero");
+        check(JoanSessionTimer.expiryDueMs(1800) == 1800000L
+                        && JoanSessionTimer.expiryDueMs(0) < 0,
+                "expiry is the whole interval, or nothing");
+        check(JoanSessionTimer.refreshDueMs(1800, true)
+                        < JoanSessionTimer.expiryDueMs(1800),
+                "there is room for a second attempt before expiry");
+        check(JoanSessionTimer.due(1000L, 1000L)
+                        && !JoanSessionTimer.due(1000L, 999L)
+                        && !JoanSessionTimer.due(-1L, 99999L),
+                "a deadline of -1 is never due");
+
+        /* What actually goes on the wire. */
+        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                "310260123456789@ims.mnc260.mcc310.3gppnetwork.org",
+                "sip:+15550000@ims.mnc260.mcc310.3gppnetwork.org",
+                "ims.mnc260.mcc310.3gppnetwork.org",
+                "2001:db8::1", 5060, 5060, null);
+        JoanSipBuilder.setSessionTimer(0, 90, JoanSessionTimer.REFRESHER_UAC);
+        String off = JoanSipBuilder.buildInvite(id,
+                new JoanSipBuilder.Dialog(), "sip:peer@host", "", null,
+                40000, null);
+        check(off.indexOf("Session-Expires") < 0
+                        && off.indexOf("Min-SE") < 0
+                        && off.indexOf("Supported: timer") < 0,
+                "a carrier with timers off gets no Session-Expires at all");
+
+        JoanSipBuilder.setSessionTimer(1800, 90,
+                JoanSessionTimer.REFRESHER_UAC);
+        String on = JoanSipBuilder.buildInvite(id,
+                new JoanSipBuilder.Dialog(), "sip:peer@host", "", null,
+                40000, null);
+        check(on.indexOf("Supported: timer\r\n") > 0,
+                "the INVITE advertises the timer option tag");
+        check(on.indexOf("Session-Expires: 1800;refresher=uac\r\n") > 0,
+                "the INVITE offers the interval and names the refresher");
+        check(on.indexOf("Min-SE: 90\r\n") > 0,
+                "the INVITE carries Min-SE");
+        check(on.indexOf("Session-Expires") < on.indexOf("Content-Length"),
+                "the timer headers land before the body");
+
+        JoanSipBuilder.setSessionTimer(1800, 30,
+                JoanSessionTimer.REFRESHER_UAC);
+        String floored = JoanSipBuilder.buildInvite(id,
+                new JoanSipBuilder.Dialog(), "sip:peer@host", "", null,
+                40000, null);
+        check(floored.indexOf("Min-SE: 90\r\n") > 0,
+                "a carrier Min-SE below the floor is raised on the wire");
+
+        check("Session-Expires: 1800;refresher=uac\r\nRequire: timer\r\n"
+                        .equals(JoanSipBuilder.sessionTimerAnswerHeaders(
+                                1800, JoanSessionTimer.REFRESHER_UAC)),
+                "a 2xx naming the caller as refresher requires timer");
+        check("Session-Expires: 1800;refresher=uas\r\n"
+                        .equals(JoanSipBuilder.sessionTimerAnswerHeaders(
+                                1800, JoanSessionTimer.REFRESHER_UAS)),
+                "a 2xx taking the work itself requires nothing");
+        check("".equals(JoanSipBuilder.sessionTimerAnswerHeaders(
+                        0, JoanSessionTimer.REFRESHER_UAS)),
+                "an untimed answer carries no Session-Expires");
+        check(JoanSipBuilder.sessionTimerRefreshHeaders(600,
+                        JoanSessionTimer.REFRESHER_UAC)
+                        .indexOf("Session-Expires: 600;refresher=uac") >= 0,
+                "a refresh carries the agreed interval, not the offered one");
+
+        /* Leave the builder as the rest of the suite expects it. */
+        JoanSipBuilder.setSessionTimer(0, 90, JoanSessionTimer.REFRESHER_UAC);
     }
 
     private static void testImei() {

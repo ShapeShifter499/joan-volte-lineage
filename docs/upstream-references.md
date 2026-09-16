@@ -295,6 +295,22 @@ What reading them settled:
   is in the native stack, so AOSP gives us the detection pattern and not
   the recovery.
 
+### Session timers, as implemented here
+
+The five keys ImsStack reads are the ones we read, with AOSP's own
+defaults as fallbacks (CarrierConfigManager's ImsVoice block): timers
+supported, 1800 s, Min-SE 90 s, refresher=uac, UPDATE preferred. Picking
+our own numbers would have meant a carrier asking for a 600-second
+session getting 1800, and a refresh arriving after its core had already
+dropped the dialog.
+
+Two behaviours also come from reading that code rather than from
+RFC 4028 alone: the refresh method is a carrier preference that still
+has to yield to the peer's Allow (a peer sent an UPDATE it rejected
+turns every refresh into a 405), and the values are re-read on
+ACTION_CARRIER_CONFIG_CHANGED because com.android.phone can restart
+under a running call.
+
 ## LG IMS (reverse engineered)
 
 - `docs/lg-ims-fullstack-re-2026-09-05.md`,

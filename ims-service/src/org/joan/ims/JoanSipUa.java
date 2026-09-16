@@ -199,6 +199,351 @@ final class JoanSipUa {
     /** True when the live dialog is already held (sendonly). answer() uses
      * this to avoid a second hold re-INVITE when the framework already
      * held the call during switchWaitingOrHoldingAndActive. */
+    /* ------------------------------------------------------------------
+     * Session timers, RFC 4028. The policy is in JoanSessionTimer; this
+     * is the state it drives and the one thread that watches the clock.
+     *
+     * Without this a dialog has no keepalive: if the far end disappears
+     * without a BYE -- core restarted, proxy dropped the dialog, radio
+     * gone for good -- nothing says so, and the call stays on screen with
+     * no session behind it and no way to place another.
+     * ------------------------------------------------------------------ */
+
+    /** Interval both ends settled on, in seconds; 0 = untimed session. */
+    private static volatile int sSeAgreedSec;
+    /** Which side owes the refreshes. */
+    private static volatile int sSeRefresher = JoanSessionTimer.REFRESHER_UNKNOWN;
+    /** True when this side sent the INVITE. */
+    private static volatile boolean sSeWeAreUac;
+    /** The peer's Allow, so a refresh uses a method it accepts. */
+    private static volatile String sSePeerAllow;
+    /** Epoch ms at which to send our refresh; 0 = nothing scheduled. */
+    private static volatile long sSeRefreshAt;
+    /** Epoch ms at which the session is over if nothing refreshed it. */
+    private static volatile long sSeExpiresAt;
+    private static volatile Thread sSeThread;
+    /** Call-ID the armed timer belongs to, so a stale tick cannot fire. */
+    private static volatile String sSeCallId;
+
+    static int sessionExpiresAgreed() {
+        return sSeAgreedSec;
+    }
+
+    /**
+     * Arm the timers from a message that carried the negotiated interval.
+     *
+     * @param msg       the 2xx we received (UAC) or the INVITE we answered
+     *                  (UAS)
+     * @param weAreUac  true when we sent the INVITE
+     * @param peerAllow the peer's Allow header, or null
+     */
+    private static void sessionTimerArm(String msg, boolean weAreUac,
+                                        String peerAllow, String callId) {
+        int sec = JoanSessionTimer.parseExpires(
+                JoanSipBuilder.header(msg, "Session-Expires"));
+        if (sec <= 0) {
+            /* The peer did not agree to a timed session. Refreshing one it
+             * never agreed to is worse than not having the safety net. */
+            sessionTimerStop("peer did not time the session");
+            return;
+        }
+        int refresher = JoanSessionTimer.parseRefresher(
+                JoanSipBuilder.header(msg, "Session-Expires"));
+        if (refresher == JoanSessionTimer.REFRESHER_UNKNOWN) {
+            refresher = weAreUac ? JoanSessionTimer.REFRESHER_UAC
+                    : JoanSessionTimer.REFRESHER_UAS;
+        }
+        sSeAgreedSec = sec;
+        sSeRefresher = refresher;
+        sSeWeAreUac = weAreUac;
+        sSePeerAllow = peerAllow;
+        sSeCallId = callId;
+        sessionTimerRearm("negotiated");
+        sessionTimerStartThread();
+    }
+
+    /** Push both deadlines out; called whenever a refresh succeeds. */
+    private static void sessionTimerRearm(String why) {
+        int sec = sSeAgreedSec;
+        if (sec <= 0) {
+            return;
+        }
+        boolean we = JoanSessionTimer.weRefresh(sSeRefresher, sSeWeAreUac);
+        long now = System.currentTimeMillis();
+        sSeRefreshAt = now + JoanSessionTimer.refreshDueMs(sec, we);
+        sSeExpiresAt = now + JoanSessionTimer.expiryDueMs(sec);
+        JoanTrace.note("session timer " + why + " interval=" + sec
+                + "s refresher=" + (we ? "us" : "peer")
+                + " refresh_in=" + (JoanSessionTimer.refreshDueMs(sec, we) / 1000)
+                + "s");
+    }
+
+    private static void sessionTimerStop(String why) {
+        if (sSeAgreedSec != 0 || sSeRefreshAt != 0) {
+            JoanTrace.note("session timer off: " + why);
+        }
+        sSeAgreedSec = 0;
+        sSeRefresher = JoanSessionTimer.REFRESHER_UNKNOWN;
+        sSeRefreshAt = 0;
+        sSeExpiresAt = 0;
+        sSeCallId = null;
+        sSePeerAllow = null;
+    }
+
+    private static void sessionTimerStartThread() {
+        Thread t = sSeThread;
+        if (t != null && t.isAlive()) {
+            return;
+        }
+        t = new Thread(JoanSipUa::sessionTimerLoop, "joan-sip-setimer");
+        t.setDaemon(true);
+        sSeThread = t;
+        t.start();
+    }
+
+    /**
+     * One second of granularity is plenty for intervals measured in
+     * minutes, and polling keeps the deadline logic in one place rather
+     * than spread over every path that could reschedule it.
+     */
+    private static void sessionTimerLoop() {
+        while (sReg) {
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                return;
+            }
+            int sec = sSeAgreedSec;
+            String cid = sSeCallId;
+            if (sec <= 0 || cid == null) {
+                continue;
+            }
+            if (!sCall || !dialogAlive(cid)) {
+                sessionTimerStop("call ended");
+                continue;
+            }
+            long now = System.currentTimeMillis();
+            if (JoanSessionTimer.due(sSeExpiresAt, now)) {
+                /* RFC 4028 s7: the session is over. Not a timeout to retry
+                 * through -- there is nothing on the other end to retry
+                 * at. Ending the call is what makes the failure visible
+                 * instead of leaving a dead call on screen. */
+                JoanTrace.note("session timer expired after " + sec
+                        + "s with no refresh; ending call");
+                sessionTimerStop("expired");
+                /* Off-thread: hangup() sends a BYE and takes LOCK, and
+                 * this loop must stay free to notice the next tick.
+                 * JoanCallSession's watcher sees the call go inactive and
+                 * tells the framework, the same path a remote BYE takes. */
+                final String dead = cid;
+                new Thread(() -> hangup(dead), "joan-sip-se-bye").start();
+                continue;
+            }
+            if (JoanSessionTimer.due(sSeRefreshAt, now)) {
+                /* Clear the deadline first: the refresh can take seconds,
+                 * and a second tick meanwhile would send it twice. */
+                sSeRefreshAt = 0;
+                sessionTimerRefresh(cid);
+            }
+        }
+    }
+
+    /**
+     * Refresh the session with an in-dialog UPDATE.
+     *
+     * @return "OK" on a 2xx, or an error string. A 422 is surfaced with
+     *         its Min-SE so the caller can raise the interval rather than
+     *         retrying the value the peer just refused.
+     */
+    private static String sendSessionUpdate(String callId) {
+        JoanSipBuilder.Id id;
+        JoanSipBuilder.Dialog dlg;
+        String target, route, toHdr, fromHdr;
+        int cseq;
+        synchronized (LOCK) {
+            if (sId == null || sDlg == null || !sCall) {
+                return "ERR no dialog";
+            }
+            if (callId != null && sDlg.callId != null
+                    && !callId.equals(sDlg.callId)) {
+                return "ERR leg not found";
+            }
+            id = idSnapshot();
+            dlg = sDlg;
+            target = sTarget != null && !sTarget.isEmpty() ? sTarget : sDest;
+            route = sRoute;
+            toHdr = sToHdr;
+            fromHdr = sFromHdr;
+            cseq = ++sDlg.cseq;
+        }
+        if (target == null || target.isEmpty()) {
+            return "ERR no target";
+        }
+        String extra = JoanSipBuilder.sessionTimerRefreshHeaders(
+                sSeAgreedSec, sSeRefresher)
+                + "Allow: " + JoanSipBuilder.ALLOW + "\r\n";
+        String msg = JoanSipBuilder.buildUpdate(id, dlg, target, route,
+                sSecVerify, toHdr, fromHdr, cseq, extra);
+        if (msg == null) {
+            return "ERR update build";
+        }
+        NonInviteWait w = new NonInviteWait(dlg.callId, cseq, "UPDATE",
+                dlg.branch, null, JoanSipBuilder.tagOf(fromHdr),
+                JoanSipBuilder.tagOf(toHdr));
+        sNonInviteWaits.put(w.callId + "#UPDATE#" + w.cseq, w);
+        try {
+            sendReply(msg.getBytes(StandardCharsets.US_ASCII));
+        } catch (Exception e) {
+            sNonInviteWaits.remove(w.callId + "#UPDATE#" + w.cseq, w);
+            return "ERR update send";
+        }
+        try {
+            String rx = waitNonInviteFinal(w, 32000);
+            if (rx == null) {
+                return "ERR update timeout";
+            }
+            JoanSipBuilder.Reply p = JoanSipBuilder.parseReply(rx);
+            if (p == null) {
+                return "ERR update reply";
+            }
+            if (p.status >= 200 && p.status < 300) {
+                /* The peer may lower the interval in its answer; take the
+                 * value it actually agreed to, not the one we asked for. */
+                int agreed = JoanSessionTimer.parseExpires(
+                        JoanSipBuilder.header(rx, "Session-Expires"));
+                if (agreed > 0 && agreed != sSeAgreedSec) {
+                    JoanTrace.note("session timer peer lowered interval "
+                            + sSeAgreedSec + "s -> " + agreed + "s");
+                    sSeAgreedSec = agreed;
+                }
+                return "OK";
+            }
+            if (p.status == 422) {
+                int peerMin = JoanSessionTimer.parseMinSe(
+                        JoanSipBuilder.header(rx, "Min-SE"));
+                int retry = JoanSessionTimer.retryExpiresAfter422(
+                        peerMin, SE_MAX_SEC);
+                JoanTrace.note("session timer 422 min_se=" + peerMin
+                        + " retry=" + retry);
+                if (retry > 0) {
+                    sSeAgreedSec = retry;
+                    return "ERR update 422 retry";
+                }
+                return "ERR update 422";
+            }
+            return "ERR update " + p.status;
+        } finally {
+            sNonInviteWaits.remove(w.callId + "#UPDATE#" + w.cseq, w);
+        }
+    }
+
+    /** Longest session interval we will agree to hold. */
+    private static final int SE_MAX_SEC = 7200;
+
+    /**
+     * Handle a refresh the peer sent us, and produce the Session-Expires
+     * to echo in our 200.
+     *
+     * <p>Only the expiry deadline moves. The refresher does not change on
+     * a refresh: RFC 4028 keeps the role from the initial negotiation, and
+     * treating every inbound refresh as a handover would have both sides
+     * stop refreshing the moment they disagreed about whose turn it was.
+     */
+    private static String sessionTimerOnInboundRefresh(String req,
+                                                       String what) {
+        int sec = JoanSessionTimer.parseExpires(
+                JoanSipBuilder.header(req, "Session-Expires"));
+        if (sec <= 0) {
+            /* Not a session refresh, just an in-dialog request. */
+            return "";
+        }
+        int tooSmall = JoanSessionTimer.rejectBelowMinSe(
+                sec, JoanSipBuilder.sessionMinSeSec());
+        if (tooSmall > 0) {
+            /* Answering 200 to an interval below our Min-SE would commit
+             * us to a session we said we would not hold. The peer is told
+             * the value we accept, in a header it already understands. */
+            JoanTrace.note("session timer inbound " + what + " interval "
+                    + sec + "s below min_se " + tooSmall + "s");
+            return "Min-SE: " + tooSmall + "\r\n";
+        }
+        if (sec > SE_MAX_SEC) {
+            sec = SE_MAX_SEC;
+        }
+        int refresher = sSeRefresher != JoanSessionTimer.REFRESHER_UNKNOWN
+                ? sSeRefresher
+                : JoanSessionTimer.parseRefresher(
+                        JoanSipBuilder.header(req, "Session-Expires"));
+        sSeAgreedSec = sec;
+        sSeRefresher = refresher;
+        if (sSeCallId == null) {
+            sSeCallId = JoanSipBuilder.header(req, "Call-ID");
+        }
+        sessionTimerRearm("refreshed by peer " + what);
+        sessionTimerStartThread();
+        return JoanSipBuilder.sessionTimerAnswerHeaders(sec, refresher);
+    }
+
+    /**
+     * Whether a re-INVITE leaves the media we already negotiated intact.
+     *
+     * <p>A refresh normally re-offers the same thing, and answering 200 to
+     * one that does is safe. An offer that no longer carries the payload
+     * type this call is running is a real media change, and pretending to
+     * accept it would leave both ends sending codecs the other cannot
+     * decode -- a call that stays up and goes silent, which is worse than
+     * an honest 488.
+     */
+    private static boolean reInviteKeepsNegotiatedMedia(String rx) {
+        JoanSipBuilder.Media o = JoanSipBuilder.parseSdp(rx);
+        if (o == null) {
+            return true; // no offer at all: nothing to disagree about
+        }
+        int pt = sMediaPt;
+        for (JoanSipBuilder.Codec c : o.codecs) {
+            if (c.pt == pt) {
+                return true;
+            }
+        }
+        JoanTrace.note("app inbound re-INVITE drops negotiated pt=" + pt
+                + "; not treating it as a session refresh");
+        return false;
+    }
+
+    private static void sessionTimerRefresh(String callId) {
+        boolean useUpdate = JoanSessionTimer.refreshWithUpdate(
+                JoanSipBuilder.sessionRefreshMethod(), sSePeerAllow);
+        JoanTrace.note("session timer refresh via "
+                + (useUpdate ? "UPDATE" : "re-INVITE")
+                + " cid=" + callId);
+        String r = useUpdate ? sendSessionUpdate(callId)
+                : reInviteLive(liveHeld(), callId);
+        if ("ERR update 422 retry".equals(r)) {
+            /* sSeAgreedSec was raised to the peer's Min-SE; one immediate
+             * retry at the value it demanded, then treat it as a failure
+             * rather than looping against a peer that keeps refusing. */
+            r = sendSessionUpdate(callId);
+        }
+        if (r != null && r.startsWith("OK")) {
+            sessionTimerRearm("refreshed");
+            return;
+        }
+        JoanTrace.note("session timer refresh failed: " + r);
+        if (useUpdate) {
+            /* A peer that advertised UPDATE and then refused it still has
+             * to be refreshed somehow; fall back once rather than letting
+             * the session run out on a method argument. */
+            String r2 = reInviteLive(liveHeld(), callId);
+            if (r2 != null && r2.startsWith("OK")) {
+                sessionTimerRearm("refreshed by re-INVITE fallback");
+                return;
+            }
+            JoanTrace.note("session timer re-INVITE fallback failed: " + r2);
+        }
+        /* Leave sSeExpiresAt alone. If the peer is simply slow, an inbound
+         * refresh still rearms us; if it is gone, expiry ends the call. */
+    }
+
     static boolean liveHeld() {
         return sCall && sLiveHeld;
     }
@@ -433,6 +778,10 @@ final class JoanSipUa {
                 sId.viaPort, sId.contactPort, sId.imei);
         JoanSipBuilder.Dialog dlg = new JoanSipBuilder.Dialog();
         boolean secAgree = true;
+        /* One 422 retry only. A core that answers the value it just
+         * demanded with another 422 is not going to agree to anything,
+         * and retrying forever would hold the dial screen open. */
+        boolean seRetried = false;
         String msg = JoanSipBuilder.buildInvite(id, dlg, dest, sServiceRoute,
                 sSecVerify, RTP_PORT, sPani, secAgree);
         if (msg == null) {
@@ -571,6 +920,9 @@ final class JoanSipUa {
                         }
                     }
                 }
+                sessionTimerArm(rx, true,
+                        JoanSipBuilder.header(rx, "Allow"),
+                        dlg == null ? null : dlg.callId);
                 JoanTrace.note("app invite 200 media="
                         + (sMediaIp != null ? "yes" : "no")
                         + " mux=" + sMediaMux);
@@ -608,6 +960,59 @@ final class JoanSipUa {
                 try {
                     send(sSockC, sPcscf, sPcscfPortS,
                             retry.getBytes(StandardCharsets.US_ASCII));
+                } catch (Exception e) {
+                    clearInviteWait(wait);
+                    return "ERR invite send";
+                }
+                deadline = System.currentTimeMillis() + 30000;
+                continue;
+            }
+            if (p.status == 422 && !seRetried) {
+                /* Session Interval Too Small, RFC 4028 s6. The core will
+                 * not hold a session as short as we asked for and names
+                 * the shortest it will. Retrying at that value is the
+                 * whole point of the response; failing the call instead
+                 * would mean a carrier with a Min-SE above our
+                 * Session-Expires could never place a call at all. */
+                int peerMin = JoanSessionTimer.parseMinSe(
+                        JoanSipBuilder.header(rx, "Min-SE"));
+                int raised = JoanSessionTimer.retryExpiresAfter422(
+                        peerMin, SE_MAX_SEC);
+                JoanTrace.note("app invite 422 min_se=" + peerMin
+                        + " retry_at=" + raised);
+                String finalTo = nullToEmpty(JoanSipBuilder.header(rx, "To"));
+                String finalFrom = nullToEmpty(JoanSipBuilder.header(rx, "From"));
+                String contact = JoanSipBuilder.header(rx, "Contact");
+                String finalTarget = contact == null ? dest
+                        : JoanSipBuilder.contactUri(contact);
+                String rr = JoanSipBuilder.header(rx, "Record-Route");
+                String finalRoute = rr == null || rr.isEmpty()
+                        ? sServiceRoute : rr;
+                sendAckNon2xx(id, dlg, finalTarget, finalRoute, finalTo,
+                        finalFrom, wait.cseq, dlg.branch);
+                clearInviteWait(wait);
+                if (raised <= 0) {
+                    return "ERR invite 422";
+                }
+                /* Only the offer changes; everything else about the
+                 * retry is the 420 path's shape -- a fresh dialog and a
+                 * fresh transaction, because the old one is finished. */
+                seRetried = true;
+                JoanSipBuilder.setSessionTimer(raised, raised,
+                        JoanSipBuilder.sessionRefresher());
+                dlg = new JoanSipBuilder.Dialog();
+                String retry422 = JoanSipBuilder.buildInvite(id, dlg, dest,
+                        sServiceRoute, sSecVerify, RTP_PORT, sPani, secAgree);
+                if (retry422 == null) {
+                    return "ERR build invite";
+                }
+                sInviteAcks.begin(dlg.callId, dlg.cseq, dlg, "", "",
+                        dest, sServiceRoute);
+                wait = new InviteWait(dlg.callId, dlg.cseq);
+                registerInviteWait(wait);
+                try {
+                    send(sSockC, sPcscf, sPcscfPortS,
+                            retry422.getBytes(StandardCharsets.US_ASCII));
                 } catch (Exception e) {
                     clearInviteWait(wait);
                     return "ERR invite send";
@@ -745,7 +1150,48 @@ final class JoanSipUa {
                     new java.security.SecureRandom().nextLong() & 0xffffffffffffL);
         }
         sOurToTag = tag;
-        String resp = buildResponse(invite, 200, "OK", id, tag, sdp);
+        /* RFC 4028 s8.2: the UAS settles the interval and says who
+         * refreshes. A peer that asked for nothing gets nothing back --
+         * putting a Session-Expires in a 2xx the caller never asked for
+         * commits it to refreshes it does not know it owes. */
+        int seAsked = JoanSessionTimer.parseExpires(
+                JoanSipBuilder.header(invite, "Session-Expires"));
+        boolean seWanted = seAsked > 0
+                && JoanSessionTimer.peerSupportsTimer(
+                        JoanSipBuilder.header(invite, "Supported"),
+                        JoanSipBuilder.header(invite, "Require"));
+        int seAgreed = 0;
+        int seRefresher = JoanSessionTimer.REFRESHER_UNKNOWN;
+        String seHeaders = "";
+        if (seWanted && JoanSipBuilder.sessionExpiresSec() > 0) {
+            int tooSmall = JoanSessionTimer.rejectBelowMinSe(
+                    seAsked, JoanSipBuilder.sessionMinSeSec());
+            if (tooSmall > 0) {
+                /* Below our Min-SE. 422 names the value we will accept,
+                 * which is the only answer that lets the caller retry
+                 * into something that works. */
+                JoanTrace.note("app ANSWER 422 session-interval-too-small"
+                        + " asked=" + seAsked + " min_se=" + tooSmall);
+                try {
+                    sendReply(buildResponse(invite, 422,
+                            "Session Interval Too Small", id, tag, null,
+                            "Min-SE: " + tooSmall + "\r\n")
+                            .getBytes(StandardCharsets.US_ASCII));
+                } catch (Exception ignored) {
+                    // the caller will time out either way
+                }
+                return "ERR session interval too small";
+            }
+            seAgreed = seAsked > SE_MAX_SEC ? SE_MAX_SEC : seAsked;
+            seRefresher = JoanSessionTimer.uasRefresher(
+                    JoanSessionTimer.parseRefresher(
+                            JoanSipBuilder.header(invite, "Session-Expires")),
+                    JoanSipBuilder.sessionRefresher());
+            seHeaders = JoanSipBuilder.sessionTimerAnswerHeaders(
+                    seAgreed, seRefresher);
+        }
+        String resp = buildResponse(invite, 200, "OK", id, tag, sdp,
+                seHeaders.isEmpty() ? null : seHeaders);
         try {
             sendReply(resp.getBytes(StandardCharsets.US_ASCII));
         } catch (Exception e) {
@@ -811,7 +1257,19 @@ final class JoanSipUa {
                 + " pt=" + (chosen == null ? 0 : chosen.pt)
                 + " fmtp=\"" + (chosen == null ? "" : chosen.fmtp) + "\""
                 + " bitrate=" + sMediaAmrBitrate
-                + " te_pt=" + sMediaTePt);
+                + " te_pt=" + sMediaTePt
+                + " session_expires=" + seAgreed);
+        if (seAgreed > 0) {
+            sSeAgreedSec = seAgreed;
+            sSeRefresher = seRefresher;
+            sSeWeAreUac = false;
+            sSePeerAllow = JoanSipBuilder.header(invite, "Allow");
+            sSeCallId = JoanSipBuilder.header(invite, "Call-ID");
+            sessionTimerRearm("negotiated as UAS");
+            sessionTimerStartThread();
+        } else {
+            sessionTimerStop("inbound call is not timed");
+        }
         return "OK";
     }
 
@@ -1044,6 +1502,12 @@ final class JoanSipUa {
     private static void retireDialogLocked(String cid) {
         if (cid == null) {
             return;
+        }
+        if (cid.equals(sSeCallId)) {
+            /* The timer belongs to this dialog. Leaving it armed would
+             * have the next tick refresh, or hang up, a call that has
+             * already gone. */
+            sessionTimerStop("dialog retired");
         }
         if (sDlg != null && cid.equals(sDlg.callId)) {
             sCall = false;
@@ -1987,6 +2451,7 @@ final class JoanSipUa {
             }
             sCall = false;
             sLiveHeld = false;
+            sessionTimerStop("remote BYE");
             JoanMedia.stop();
             synchronized (LOCK) {
                 if (sParked != null) {
@@ -2043,8 +2508,15 @@ final class JoanSipUa {
                     sdp = JoanSipBuilder.sdpAnswer(sId.localIp, RTP_PORT, o,
                             JoanSipBuilder.selectAnswerCodec(o));
                 }
+                /* This UPDATE is the peer's session refresh. Echoing the
+                 * interval back is what confirms the session for another
+                 * one; answering 200 with no Session-Expires leaves the
+                 * peer's own timer running out and the call dropped from
+                 * the far side for a reason nothing here would explain. */
+                String seOut = sessionTimerOnInboundRefresh(rx, "UPDATE");
                 try {
-                    sendReply(buildResponse(rx, 200, "OK", sId, tag, sdp)
+                    sendReply(buildResponse(rx, 200, "OK", sId, tag, sdp,
+                            seOut.isEmpty() ? null : seOut)
                             .getBytes(StandardCharsets.US_ASCII));
                 } catch (Exception ignored) {
                     // ignore
@@ -2204,6 +2676,35 @@ final class JoanSipUa {
                     // ignore
                 }
                 JoanTrace.note("app inbound re-INVITE glare; 491");
+                return;
+            }
+            /* A re-INVITE carrying Session-Expires is the peer's session
+             * refresh, not a media change. RFC 4028 lets either method
+             * carry it, and a carrier configured for
+             * SESSION_REFRESH_METHOD_INVITE will only ever use this one.
+             * Declining it 488 answers the refresh with a failure, and
+             * the peer then tears the call down when its own timer runs
+             * out -- a long call dying for a protocol reason, which is
+             * the exact failure session timers exist to prevent. */
+            String refreshSe = JoanSipBuilder.header(rx, "Session-Expires");
+            if (refreshSe != null
+                    && JoanSessionTimer.parseExpires(refreshSe) > 0
+                    && reInviteKeepsNegotiatedMedia(rx)) {
+                String seOut = sessionTimerOnInboundRefresh(rx, "re-INVITE");
+                String sdpOut = null;
+                JoanSipBuilder.Media o = JoanSipBuilder.parseSdp(rx);
+                if (o != null) {
+                    sdpOut = JoanSipBuilder.sdpAnswer(sId.localIp, RTP_PORT,
+                            o, JoanSipBuilder.selectAnswerCodec(o));
+                }
+                try {
+                    sendReply(buildResponse(rx, 200, "OK", sId, sOurToTag,
+                            sdpOut, seOut.isEmpty() ? null : seOut)
+                            .getBytes(StandardCharsets.US_ASCII));
+                    JoanTrace.note("app inbound re-INVITE session refresh; 200");
+                } catch (Exception ignored) {
+                    // the peer retransmits; nothing to do here
+                }
                 return;
             }
             /* In-dialog re-INVITE with a new offer: not implemented. Say so
@@ -2699,6 +3200,7 @@ final class JoanSipUa {
         }
         sCall = false;
         sLiveHeld = false;
+        sessionTimerStop("binding released");
         sParked = null;
         sInviteWaits.clear();
         for (InviteFlight f : sInviteFlights.values()) f.result.complete("ERR binding released");

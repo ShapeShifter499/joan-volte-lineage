@@ -33,6 +33,7 @@ javac -d "$JAVA_OUT" \
     "$JAVA_SRC/JoanAmr.java" \
     "$JAVA_SRC/JoanRtcp.java" \
     "$JAVA_SRC/JoanDtmf.java" \
+    "$JAVA_SRC/JoanSessionTimer.java" \
     "$JAVA_TEST/org/joan/ims/TestJoanSip.java"
 java -cp "$JAVA_OUT" org.joan.ims.TestJoanSip
 
@@ -42,5 +43,7 @@ GATE_OUT="$ROOT/native/build/java-gate-host"
 mkdir -p "$GATE_OUT"
 javac -cp "$SDK_JAR" -d "$GATE_OUT" \
     "$JAVA_SRC/JoanVolteCarrierGate.java" \
+    "$JAVA_SRC/JoanImsVoiceConfig.java" \
+    "$JAVA_SRC/JoanSessionTimer.java" \
     "$JAVA_TEST/org/joan/ims/TestJoanVolteCarrierGate.java"
 exec java -cp "$GATE_OUT:$SDK_JAR" org.joan.ims.TestJoanVolteCarrierGate

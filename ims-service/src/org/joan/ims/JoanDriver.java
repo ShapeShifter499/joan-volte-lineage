@@ -347,6 +347,7 @@ final class JoanDriver {
                     + ")");
         }
         JoanVolteCarrierGate.applyIfNeeded(app, sub, tm);
+        applySessionTimerConfig(app, sub);
         JoanImsDiagnostics.start(app, sub);
 
         Integer preferredMode = preferredNetworkMode(app, sub);
@@ -515,6 +516,36 @@ final class JoanDriver {
             return tm.getSimState();
         } catch (Throwable t) {
             return TelephonyManager.SIM_STATE_UNKNOWN;
+        }
+    }
+
+    /** Last session-timer summary, so the trace says it once per change. */
+    private static volatile String sSeSummary;
+
+    /**
+     * Push the carrier's session-timer settings into the SIP builder.
+     *
+     * <p>Done on every driver pass rather than once: carrier config
+     * arrives after the SIM settles and is rebuilt whenever
+     * com.android.phone restarts, so a value read at boot is not
+     * necessarily the one in force when a call is placed.
+     */
+    private static void applySessionTimerConfig(Context app, int sub) {
+        JoanImsVoiceConfig c = JoanImsVoiceConfig.forSub(app, sub);
+        if (c.timerSupported) {
+            JoanSipBuilder.setSessionTimer(c.sessionExpiresSec, c.minSeSec,
+                    c.refresherType);
+        } else {
+            /* The carrier says no. Offering a Session-Expires anyway and
+             * then refreshing on a schedule nothing agreed to is how a
+             * working call gets torn down. */
+            JoanSipBuilder.setSessionTimer(0, c.minSeSec, c.refresherType);
+        }
+        JoanSipBuilder.setSessionRefreshMethod(c.refreshMethod);
+        String sum = c.summary();
+        if (!sum.equals(sSeSummary)) {
+            sSeSummary = sum;
+            JoanTrace.note("session timer config " + sum);
         }
     }
 
