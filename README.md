@@ -31,17 +31,61 @@ loopback control socket.
 > and earpiece follow Dialer. Caller ID is the asserted number; Dialer
 > can still overlay a matching contact.
 
-## Current tester build: v0.4.0-alpha20
+## Current tester build: v0.4.0-alpha25
 
-`v0.4.0-alpha20` (versionCode 28) is the current tester zip. It is a
-prerelease: offline suites passed; it is **not** a live-carrier qualifier
-and has not replaced the last T-Mobile bench-validated build
-(`v0.4.0-alpha12` on the development US998). Sideload
+`v0.4.0-alpha25` (versionCode 33) is the current tester zip. It is a
+prerelease: offline suites passed (474 host checks, 241 UA checks); it
+is **not** a live-carrier qualifier. Sideload
 `joan-volte-recovery.zip` from the GitHub release, reboot, then confirm
-the `build` row below reads `0.4.0-alpha20 (28)`.
+the `build` row below reads `0.4.0-alpha25 (33)`.
 
-What landed after the last public GitHub alpha (`v0.4.0-alpha16`), plus
-the 2026-09-13 NOS/Viettel pass:
+**If you are testing CMCC (46002): this build changes nothing about the
+`reg2=404`.** Everything new here is call-path work that only runs after
+registration succeeds. It is worth flashing only for the alpha21
+rejection diagnostic, which records the `Warning`, `Reason` and the two
+domains from a 404 with every subscriber identity stripped. That trace
+is the one thing that would move the 404 forward.
+
+**What to test first, in this order.** alpha25 changes the headers on
+every INVITE and the SDP on *every answer*, not just the new features,
+so a core that dislikes any of it fails the call outright rather than
+failing the new thing:
+
+1. place a call each way and confirm two-way audio;
+2. then DTMF into an IVR, hold from the far end, and a long call
+   (over 15 minutes) for the session-timer refresh;
+3. then check the uplink level in the trace.
+
+### New in alpha25
+
+- **DTMF** as RFC 4733 telephone-events, negotiated at the chosen
+  codec's clock rate, audio suppressed for the tone, digits queued so a
+  post-dial string is not clipped.
+- **Hold from the far end is accepted.** It used to be refused 488,
+  which on some cores ends the call. The answer now mirrors the offer's
+  direction instead of always claiming sendrecv.
+- **Session timers (RFC 4028)** from carrier config, with 422 retry and
+  refresh by UPDATE or re-INVITE.
+- **b=AS / b=RS / b=RR** in the SDP, so the network sizes the dedicated
+  bearer from what we asked for rather than its own default.
+- **The AGC effect is declared.** joan ships libaudiopreprocessing.so
+  but never declared it, so the uplink ran unconditioned -- measured
+  about 16 dB below the downlink. Watch for `platform_agc=true` in the
+  trace.
+- **Registration event package (RFC 3680)**, so a network-initiated
+  deregistration is noticed at once instead of at the next refresh.
+- **Local IP change** during a call migrates the media and re-INVITEs
+  rather than leaving a silent call up.
+- **SRVCC** is answered, so a call leaving LTE can hand to CS.
+- 3xx redirects followed once; 503 `Retry-After` recorded; inbound PRACK
+  answered; `INFO` removed from `Allow`, where it was advertised with no
+  handler behind it.
+
+Known-unexercised: every item above is host-tested only. None has been
+run against a live carrier.
+
+What landed in earlier alphas (`v0.4.0-alpha16` onward), plus the
+2026-09-13 NOS/Viettel pass:
 
 - **Self-contained traces.** Startup writes `trace init build=…`. Truncation
   reprints the last IMS network/data/attempt snapshot so a later excerpt
