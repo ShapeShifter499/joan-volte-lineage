@@ -79,6 +79,25 @@ public final class TestJoanFreshPass extends TestJoanUa {
         check("AKA-malformed-DB-not-raw-keys", parseUicc(bad) == null);
         bad = success(16); bad[0] = (byte) 0xdc;
         check("AKA-sync-failure-not-success", parseUicc(bad) == null);
+        // A sync failure must be told apart from a broken parse, and its
+        // AUTS recovered verbatim: it is what the resync REGISTER carries.
+        byte[] auts = new byte[14];
+        for (int i = 0; i < auts.length; i++) auts[i] = (byte) (0xA0 + i);
+        byte[] dc = new byte[2 + auts.length];
+        dc[0] = (byte) 0xDC; dc[1] = (byte) auts.length;
+        System.arraycopy(auts, 0, dc, 2, auts.length);
+        check("AKA-sync-failure-detected", JoanAka.isSyncFailure(dc));
+        check("AKA-sync-failure-auts-recovered",
+                java.util.Arrays.equals(auts, JoanAka.autsBytes(dc)));
+        check("AKA-success-is-not-sync-failure",
+                !JoanAka.isSyncFailure(success(8)));
+        // A truncated sync failure must yield no AUTS rather than a short
+        // or out-of-bounds one: the resync REGISTER would assert garbage.
+        byte[] shortDc = new byte[]{(byte) 0xDC, (byte) 14, 1, 2, 3};
+        check("AKA-sync-failure-truncated-auts-rejected",
+                JoanAka.autsBytes(shortDc) == null);
+        check("AKA-sync-failure-zero-len-auts-rejected",
+                JoanAka.autsBytes(new byte[]{(byte) 0xDC, 0}) == null);
         check("AKA-untagged-random-not-keys", parseUicc(new byte[48]) == null);
         check("AKA-good-APDU-status", apdu(hex(success(4)) + "9000") != null);
         check("AKA-failed-APDU-status", apdu(hex(success(4)) + "6982") == null);

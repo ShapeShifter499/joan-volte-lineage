@@ -51,6 +51,24 @@ final class JoanSipBuilder {
         final String cnonce;
         String branch;
 
+        /**
+         * Continue an existing REGISTER series: same Call-ID and From-tag,
+         * fresh protected ports, cnonce and branch. RFC 3261 10.2 wants
+         * one Call-ID for every registration a UA sends to a registrar,
+         * and AOSP's ImsStack keeps it across failures too ("Do not check
+         * the status code to support re-use of Call-ID and CSeq number
+         * when the registration is failed", Registration.cpp).
+         */
+        Txn(Params mine, SecureRandom rng, String callId, String fromTag) {
+            this.mine = mine;
+            this.callId = callId;
+            this.fromTag = fromTag;
+            byte[] cn = new byte[4];
+            rng.nextBytes(cn);
+            this.cnonce = JoanSipCrypto.hex(cn);
+            this.branch = freshBranch(rng);
+        }
+
         Txn(Params mine, SecureRandom rng) {
             this.mine = mine;
             this.callId = String.format(
@@ -104,18 +122,37 @@ final class JoanSipBuilder {
         final String secServer;
         final String realm; /* WWW-Authenticate realm; may differ from home */
         final String qop;
+        /**
+         * Base64 AUTS, set only on the resynchronisation REGISTER that
+         * answers a card SYNCHRONISATION FAILURE (RFC 3310 3.2). When it
+         * is set there is no RES, so the digest is computed over an empty
+         * password and the network replies with a fresh challenge.
+         */
+        final String auts;
 
         Challenge(String nonceB64, String algorithm, String secServer,
-                  String realm, String qop) {
+                  String realm, String qop, String auts) {
             this.nonceB64 = nonceB64;
             this.algorithm = algorithm;
             this.secServer = secServer;
             this.realm = realm;
             this.qop = qop;
+            this.auts = auts;
+        }
+
+        Challenge(String nonceB64, String algorithm, String secServer,
+                  String realm, String qop) {
+            this(nonceB64, algorithm, secServer, realm, qop, null);
+        }
+
+        /** The same challenge, re-aimed as an AUTS resynchronisation. */
+        Challenge resync(String autsB64) {
+            return new Challenge(nonceB64, algorithm, null, realm, qop,
+                    autsB64);
         }
 
         Challenge(String nonceB64, String algorithm, String secServer) {
-            this(nonceB64, algorithm, secServer, null, "auth");
+            this(nonceB64, algorithm, secServer, null, "auth", null);
         }
     }
 
@@ -396,9 +433,16 @@ final class JoanSipBuilder {
                     ? ch.realm : id.realm;
             String qop = (ch.qop != null && !ch.qop.isEmpty())
                     ? ch.qop : "auth";
+            boolean resync = ch.auts != null && !ch.auts.isEmpty();
+            /* RFC 3310 3.2: "when the AUTS is present, the included
+             * response parameter is calculated using an empty password
+             * (password of ""), instead of a RES". For AKAv1-MD5 the
+             * password IS the RES, so an empty RES is that empty password.
+             * AOSP states the same rule in ImsStack SipAuHelper.cpp. */
+            byte[] digestRes = resync ? new byte[0] : res;
             String respHex = JoanSipCrypto.akaDigestResponseHex(
                     id.impi, digestRealm, "REGISTER", requestUri,
-                    ch.nonceB64, res, qop, "00000001", txn.cnonce,
+                    ch.nonceB64, digestRes, qop, "00000001", txn.cnonce,
                     ch.algorithm, ck, ik);
             authLine = "Digest username=\"" + id.impi + "\", realm=\""
                     + digestRealm + "\", nonce=\"" + ch.nonceB64
@@ -406,6 +450,10 @@ final class JoanSipBuilder {
                     + respHex + "\", algorithm=" + ch.algorithm
                     + ", qop=" + qop + ", nc=00000001, cnonce=\""
                     + txn.cnonce + "\"";
+            if (resync) {
+                /* Quoted base64, matching ImsStack's STR_AUTS parameter. */
+                authLine += ", auts=\"" + ch.auts + "\"";
+            }
             // Stock parity (alpha12): libims.lge.so NEVER emits an
             // `integrity-protected` parameter (verified: zero occurrences
             // of the token in the 18.7 MB US998/V300L/H930DS engines;

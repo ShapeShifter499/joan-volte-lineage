@@ -295,10 +295,12 @@ final class JoanAppRegister {
                 sb.append("pcscf_tried=").append(tried).append(' ');
                 return sb.append(one).toString();
             }
+            /* "FAIL: aka" covers every AKA outcome (parse, lengths, sync
+             * failure): none of them get better against a second P-CSCF,
+             * and retrying burns another authentication vector, which is
+             * what pushes the card's SQN further out of step. */
             if (one.indexOf("FAIL: aka") >= 0
                     || one.indexOf("FAIL: no IpSecManager") >= 0
-                    || one.indexOf("FAIL: aka parse") >= 0
-                    || one.indexOf("FAIL: aka lengths") >= 0
                     || one.indexOf("FAIL: superseded") >= 0) {
                 sb.append("pcscf_tried=").append(tried).append(' ');
                 return sb.append(one).toString();
@@ -317,18 +319,70 @@ final class JoanAppRegister {
      *         setup/send errors and no-matching-final deadlines. Only a
      *         successful REGISTER 200 carries {@code OK}.
      */
+    /**
+     * The REGISTER series for one private identity: a stable Call-ID and
+     * From-tag, and a CSeq that only ever rises.
+     *
+     * <p>Every attempt used to mint a fresh Call-ID and restart CSeq at 1,
+     * so a registrar saw each retry -- and each of the two P-CSCF
+     * candidates inside one attempt -- as an unrelated registration rather
+     * than another try at the same one. RFC 3261 10.2 asks for one Call-ID
+     * per registrar, and AOSP's ImsStack deliberately keeps both across
+     * failures: "Do not check the status code to support re-use of Call-ID
+     * and CSeq number when the registration is failed"
+     * (engine/registration/Registration.cpp, tag android-17.0.0_r1).
+     *
+     * <p>Held in memory only. A registrar rejects a REGISTER whose CSeq
+     * did not advance, so the series must never restart under a Call-ID it
+     * has already used -- surviving a process restart would risk exactly
+     * that, and a fresh Call-ID after one is always safe.
+     *
+     * <p>Protected ports, cnonce and Via branch stay per-attempt: new
+     * security associations need new ports and SPIs.
+     */
+    static final class RegSeries {
+        private String impi;
+        private String callId;
+        private String fromTag;
+        private int cseq;
+
+        synchronized JoanSipBuilder.Txn newAttempt(
+                String forImpi, JoanSipBuilder.Params mine, SecureRandom rng) {
+            if (callId == null || forImpi == null || !forImpi.equals(impi)) {
+                JoanSipBuilder.Txn seed = new JoanSipBuilder.Txn(mine, rng);
+                impi = forImpi;
+                callId = seed.callId;
+                fromTag = seed.fromTag;
+                cseq = 0;
+                return seed;
+            }
+            return new JoanSipBuilder.Txn(mine, rng, callId, fromTag);
+        }
+
+        /** The CSeq for the next REGISTER transaction in this series. */
+        synchronized int nextCseq() {
+            return ++cseq;
+        }
+    }
+
+    static final RegSeries REG_SERIES = new RegSeries();
+
     private static String tryPcscf(Context ctx, Net n, Id id, String pani,
                                    InetAddress pcscf, int reg1TimeoutMs,
                                    long epoch) {
         SecureRandom rng = new SecureRandom();
         JoanSipBuilder.Params mine = JoanSipBuilder.Params.random(rng);
-        JoanSipBuilder.Txn txn = new JoanSipBuilder.Txn(mine, rng);
+        JoanSipBuilder.Txn txn = REG_SERIES.newAttempt(id.impi, mine, rng);
+        /* One CSeq per REGISTER transaction, not per build: REG1 is built
+         * twice (a UDP variant and a TCP variant) and both are the same
+         * transaction, so they must carry the same number. */
+        int reg1Cseq = REG_SERIES.nextCseq();
         JoanSipBuilder.Id sipId = new JoanSipBuilder.Id(
                 id.impi, id.impu, id.realm, n.localHost,
                 JoanSipBuilder.REG1_PORT, JoanSipBuilder.REG1_PORT, id.imei);
         StringBuilder sb = new StringBuilder();
         String reg1Udp = JoanSipBuilder
-                .buildRegister(sipId, txn, 1, null, null, null, null, pani,
+                .buildRegister(sipId, txn, reg1Cseq, null, null, null, null, pani,
                         false);
         byte[] reg1Bytes = reg1Udp.getBytes(StandardCharsets.US_ASCII);
         String reg1Str = reg1Udp;
@@ -343,13 +397,31 @@ final class JoanAppRegister {
         boolean tcpReg1 = JoanSipBuilder.preferTcp(id.realm, reg1Udp.length(),
                 n.mtu, ipv6);
         Reg1Result first;
+        /* The identity the reply is matched against must be the message
+         * that actually went out: buildRegister() re-rolls txn.branch on
+         * every call, so the TCP variant carries a different Via branch
+         * than reg1Udp and matching the reply against reg1Udp would fail
+         * for every TCP REG1 (REG2 already tracks this as r2Identity). */
+        String reg1Identity = reg1Str;
+        /* Which transport actually produced the challenge. An AUTS resync
+         * REGISTER is another unprotected REGISTER, so it reuses the one
+         * already known to work rather than re-running the TCP-then-UDP
+         * fallback and eating a second connect timeout. */
+        boolean reg1OnTcp = false;
         if (tcpReg1) {
-            String reg1Tcp = JoanSipBuilder.buildRegister(sipId, txn, 1, null,
+            String reg1Tcp = JoanSipBuilder.buildRegister(sipId, txn, reg1Cseq,
+                    null,
                     null, null, null, pani, true);
+            reg1Identity = reg1Tcp;
+            reg1OnTcp = true;
             first = exchangeReg1Tcp(n, pcscf, reg1Tcp, reg1TimeoutMs);
             if (first.reply == null
                     && JoanRegTransport.fallbackUnprotectedTcp(first.phase)) {
                 sb.append(first.diagnostic);
+                /* Fallback re-sends the original reg1Udp bytes (branch as
+                 * built), not the TCP variant. */
+                reg1Identity = reg1Str;
+                reg1OnTcp = false;
                 first = exchangeReg1(
                         () -> boundUdp(n.network, n.local,
                                 JoanSipBuilder.REG1_PORT),
@@ -383,57 +455,129 @@ final class JoanAppRegister {
             return sb + "FAIL: 401 missing challenge/sec-server";
         }
 
-        String nonce = JoanSipBuilder.extractNonce(p1.wwwAuth);
-        String algo = JoanSipBuilder.extractAlgorithm(p1.wwwAuth);
-        String realm = JoanSipBuilder.extractRealm(p1.wwwAuth);
-        String qop = JoanSipBuilder.extractQop(p1.wwwAuth);
-        if (nonce == null || nonce.isEmpty()) {
-            return sb + "FAIL: 401 no nonce";
-        }
-        sb.append("aka=").append(algo).append(' ');
+        String nonce;
+        String algo;
+        String realm;
+        String qop;
+        JoanSecAgree pcscfSec;
+        String[] parts;
+        boolean resyncSpent = false;
 
-        JoanSecAgree pcscfSec = JoanSecAgree.select(p1.secServer);
-        if (pcscfSec == null) {
-            return sb + "FAIL: no supported Security-Server mechanism";
-        }
-        sb.append("ealg=").append(pcscfSec.ealg)
-        /* The identity the reply is matched against must be the message
-         * that actually went out: buildRegister() re-rolls txn.branch on
-         * every call, so the TCP variant carries a different Via branch
-         * than reg1Udp and matching the reply against reg1Udp would fail
-         * for every TCP REG1 (REG2 already tracks this as r2Identity). */
-        String reg1Identity = reg1Str;
-        /* Which transport actually produced the challenge. An AUTS resync
-         * REGISTER is another unprotected REGISTER, so it reuses the one
-         * already known to work rather than re-running the TCP-then-UDP
-         * fallback and eating a second connect timeout. */
-        boolean reg1OnTcp = false;
-                .append(" alg=").append(pcscfSec.alg)
-                .append(" offered=")
-                .append(JoanSecAgree.offerSummary(p1.secServer, pcscfSec))
-                .append(' ');
-            reg1Identity = reg1Tcp;
-            reg1OnTcp = true;
-        if (superseded(epoch)) {
-            return sb + "FAIL: superseded by network/state change";
-        }
+        for (;;) {
+            nonce = JoanSipBuilder.extractNonce(p1.wwwAuth);
+            algo = JoanSipBuilder.extractAlgorithm(p1.wwwAuth);
+            realm = JoanSipBuilder.extractRealm(p1.wwwAuth);
+            qop = JoanSipBuilder.extractQop(p1.wwwAuth);
+            if (nonce == null || nonce.isEmpty()) {
+                return sb + "FAIL: 401 no nonce";
+            }
+            sb.append("aka=").append(algo).append(' ');
 
-                /* Fallback re-sends the original reg1Udp bytes (branch as
-                 * built), not the TCP variant. */
-                reg1Identity = reg1Str;
-                reg1OnTcp = false;
+            pcscfSec = JoanSecAgree.select(p1.secServer);
+            if (pcscfSec == null) {
+                return sb + "FAIL: no supported Security-Server mechanism";
+            }
+            sb.append("ealg=").append(pcscfSec.ealg)
+                    .append(" alg=").append(pcscfSec.alg)
+                    .append(" offered=")
+                    .append(JoanSecAgree.offerSummary(p1.secServer, pcscfSec))
+                    .append(' ');
+            if (superseded(epoch)) {
+                return sb + "FAIL: superseded by network/state change";
+            }
+
         String authHex;
-        try {
-            authHex = JoanAka.runIccAuth(ctx, nonce);
-        } catch (Exception e) {
-            return sb + "FAIL: aka " + brief(e);
-        }
-        if (authHex == null) {
-            return sb + "FAIL: aka unavailable";
-        }
-        String[] parts = JoanAka.parseAuthResponse(authHex);
-        if (parts == null) {
-            return sb + "FAIL: aka parse";
+        /* Time the AKA call itself. A sync failure is a real AUTHENTICATE
+         * on the card and should cost about what a success costs, while a
+         * telephony-side error returns without reaching the UICC -- and
+         * those two want opposite fixes (AUTS resync vs. retry). The trace
+         * note inside runIccAuth() is written AFTER the call returns, so
+         * the existing log cannot be read for this: the gap from that note
+         * to the register line is IPsec setup plus the REG2 round trip,
+         * not card time. No baseline is asserted here; this is the
+         * measurement that establishes one. */
+            long akaStart = System.currentTimeMillis();
+            try {
+                authHex = JoanAka.runIccAuth(ctx, nonce);
+            } catch (Exception e) {
+                return sb + "FAIL: aka " + brief(e) + " aka_ms="
+                        + (System.currentTimeMillis() - akaStart);
+            }
+            long akaMs = System.currentTimeMillis() - akaStart;
+            if (authHex == null) {
+                return sb + "FAIL: aka unavailable aka_ms=" + akaMs;
+            }
+            parts = JoanAka.parseAuthResponse(authHex);
+            if (parts != null) {
+                break;
+            }
+            if (!JoanAka.isSyncFailure(authHex)) {
+                return sb + "FAIL: aka parse len=" + authHex.length()
+                        + " aka_ms=" + akaMs;
+            }
+            /* SYNCHRONISATION FAILURE: the card computed AUTS because its
+             * SQN is behind the HSS. Nothing retries out of this -- the
+             * HSS keeps issuing vectors from the same stale batch -- so
+             * the only exit is one REGISTER carrying auts= (RFC 3310 3.2),
+             * which makes the HSS resynchronise and challenge us afresh.
+             * One attempt only: a second sync failure on the resynced
+             * challenge means something other than SQN drift. */
+            sb.append("aka_sync=1 auts_len=")
+                    .append(JoanAka.autsLength(authHex))
+                    .append(" aka_ms=").append(akaMs).append(' ');
+            if (resyncSpent) {
+                return sb + "FAIL: aka sync failure after resync";
+            }
+            resyncSpent = true;
+            String autsB64 = JoanAka.autsBase64(authHex);
+            if (autsB64 == null) {
+                return sb + "FAIL: aka sync failure (AUTS unreadable)";
+            }
+            if (superseded(epoch)) {
+                return sb + "FAIL: superseded by network/state change";
+            }
+            String resyncMsg = JoanSipBuilder.buildRegister(
+                    sipId, txn, REG_SERIES.nextCseq(),
+                    new JoanSipBuilder.Challenge(nonce, algo, null, realm, qop)
+                            .resync(autsB64),
+                    new byte[0], null, null, pani, reg1OnTcp);
+            Reg1Result again;
+            if (reg1OnTcp) {
+                again = exchangeReg1Tcp(n, pcscf, resyncMsg, reg1TimeoutMs);
+            } else {
+                byte[] resyncBytes =
+                        resyncMsg.getBytes(StandardCharsets.US_ASCII);
+                again = exchangeReg1(
+                        () -> boundUdp(n.network, n.local,
+                                JoanSipBuilder.REG1_PORT),
+                        pcscf, resyncBytes, reg1TimeoutMs, resyncMsg);
+            }
+            sb.append("resync_").append(again.diagnostic);
+            if (again.reply == null) {
+                return sb + "FAIL: resync no reply";
+            }
+            JoanSipBuilder.Reply pr = JoanSipBuilder.parseReply(again.reply);
+            if (pr == null) {
+                return sb + "FAIL: resync parse";
+            }
+            if (!JoanRegTransport.finalMatches(resyncMsg, again.reply)) {
+                return sb + "FAIL: resync mismatch";
+            }
+            sb.append("resync=").append(pr.status).append(' ');
+            if (pr.status != 401) {
+                return sb + "FAIL: resync unexpected";
+            }
+            if (pr.wwwAuth == null || pr.secServer == null) {
+                return sb + "FAIL: resync 401 missing challenge/sec-server";
+            }
+            if (JoanSipBuilder.extractNonce(pr.wwwAuth) == null
+                    || nonce.equals(JoanSipBuilder.extractNonce(pr.wwwAuth))) {
+                /* A resynced challenge must carry a NEW nonce. The same one
+                 * back means the HSS did not act on the AUTS, and running
+                 * the card against it again just burns another vector. */
+                return sb + "FAIL: resync nonce unchanged";
+            }
+            p1 = pr;
         }
         byte[] res = JoanSipCrypto.hexBytes(parts[0]);
         byte[] ck = JoanSipCrypto.hexBytes(parts[1]);
@@ -462,6 +606,8 @@ final class JoanAppRegister {
 
         JoanSipBuilder.Challenge ch = new JoanSipBuilder.Challenge(
                 nonce, algo, p1.secServer, realm, qop);
+        /* Likewise one number for REG2, shared by its UDP and TCP forms. */
+        int reg2Cseq = REG_SERIES.nextCseq();
 
         IpSecManager ipsec = ctx.getSystemService(IpSecManager.class);
         if (ipsec == null) {
@@ -542,7 +688,8 @@ final class JoanAppRegister {
                  * REG2 is built first as the UDP variant (also the
                  * fallback bytes); its length plus path MTU drive
                  * the criterion. TMUS still never leaves UDP. */
-                String reg2Udp = JoanSipBuilder.buildRegister(sip2, txn, 2,
+                String reg2Udp = JoanSipBuilder.buildRegister(sip2, txn,
+                        reg2Cseq,
                         ch, res, ck, ik, pani, false);
                 byte[] reg2Bytes = reg2Udp.getBytes(StandardCharsets.US_ASCII);
                 boolean ipv6Reg2 = n.local instanceof Inet6Address;
@@ -571,7 +718,7 @@ final class JoanAppRegister {
                      * for INVITE after a 200 ("TCP client is
                      * re-used"). */
                     String reg2Tcp = JoanSipBuilder.buildRegister(sip2,
-                            txn, 2, ch, res, ck, ik, pani, true);
+                            txn, reg2Cseq, ch, res, ck, ik, pani, true);
                     byte[] tcpBytes =
                             reg2Tcp.getBytes(StandardCharsets.US_ASCII);
                     r2Identity = reg2Tcp;
@@ -642,6 +789,15 @@ final class JoanAppRegister {
                 return sb + "FAIL: superseded by network/state change";
             }
             sb.append("reg2=").append(p2.status);
+            if (p2.status >= 300) {
+                /* A rejected protected REGISTER: say WHICH identity the
+                 * core refused. Warning/Reason carry the core's own text
+                 * (3GPP cores put the rejecting entity in Warning), and
+                 * To/Request-URI show the identity and home domain we
+                 * actually asserted -- the pair needed to tell a wrong
+                 * home realm apart from a rejected registration. */
+                sb.append(rejectDetail(p2, r2, r2Identity));
+            }
             if (p2.status >= 200 && p2.status < 300) {
                 sb.append(" OK");
                 JoanSipUa.adopt(ctx, n.network, n.local, pcscf, pcscfSec.portS,
@@ -916,6 +1072,69 @@ final class JoanAppRegister {
             return new Reg1Result(null, base + "reg1_result=setup"
                     + " FAIL: reg1 setup error=" + e.getClass().getSimpleName());
         }
+    }
+
+    /**
+     * Compact reason trail for a non-2xx protected REGISTER. Header values
+     * only -- the IMPI/IMSI never reaches the log, so the To user part is
+     * reduced to its domain (the part a wrong-realm bug shows up in).
+     */
+    static String rejectDetail(JoanSipBuilder.Reply reply, String raw,
+                               String request) {
+        StringBuilder d = new StringBuilder(96);
+        appendHdr(d, "warn", JoanSipBuilder.header(raw, "Warning"));
+        appendHdr(d, "reason", JoanSipBuilder.header(raw, "Reason"));
+        appendHdr(d, "to_domain", domainOf(JoanSipBuilder.header(raw, "To")));
+        appendHdr(d, "req_domain", domainOf(requestLine(request)));
+        return d.toString();
+    }
+
+    private static void appendHdr(StringBuilder d, String key, String value) {
+        if (value == null || value.isEmpty()) {
+            return;
+        }
+        String v = value.trim();
+        if (v.length() > 120) {
+            v = v.substring(0, 120);
+        }
+        d.append(' ').append(key).append("=\"").append(v).append('"');
+    }
+
+    /** First line of a request, or null. */
+    private static String requestLine(String msg) {
+        if (msg == null) {
+            return null;
+        }
+        int e = msg.indexOf("\r\n");
+        return e < 0 ? msg : msg.substring(0, e);
+    }
+
+    /**
+     * The domain of the first SIP URI in a header value. Everything left of
+     * the "@" is an identity and is deliberately dropped.
+     */
+    static String domainOf(String value) {
+        if (value == null) {
+            return null;
+        }
+        int s = value.indexOf("sip:");
+        if (s < 0) {
+            return null;
+        }
+        s += 4;
+        int at = value.indexOf('@', s);
+        if (at >= 0) {
+            s = at + 1;
+        }
+        int e = s;
+        while (e < value.length()) {
+            char c = value.charAt(e);
+            if (c == '>' || c == ';' || c == ',' || c == ' ' || c == '\r') {
+                break;
+            }
+            e++;
+        }
+        return e > s ? value.substring(s, e) : null;
     }
 
     private static DatagramSocket boundUdp(Network network, InetAddress local,

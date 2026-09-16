@@ -266,6 +266,68 @@ public final class TestJoanSip {
                 "protected REGISTER carries a Digest Authorization");
         check(!prot.contains("integrity-protected"),
                 "stock parity: REGISTER never carries integrity-protected");
+        check(!prot.contains("auts="),
+                "an ordinary REGISTER carries no auts");
+
+        /* A request built for the UDP socket but written to the accepted
+         * TCP connection must say TCP in its top Via; a response must not
+         * be touched, because it echoes the request's Via (RFC 3261
+         * 8.2.6.2). */
+        String byeUdp = "BYE sip:peer@x SIP/2.0\r\nVia: SIP/2.0/UDP "
+                + "[2001:db8::2]:15000;branch=z9hG4bKb1\r\n"
+                + "Content-Length: 0\r\n\r\n";
+        check(JoanSipBuilder.retargetRequestViaToTcp(byeUdp)
+                        .contains("Via: SIP/2.0/TCP [2001:db8::2]:15000"),
+                "a request written over TCP claims TCP in its Via");
+        String rsp = "SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP "
+                + "[2001:db8::3]:5060;branch=z9hG4bKpeer\r\n"
+                + "Content-Length: 0\r\n\r\n";
+        check(rsp.equals(JoanSipBuilder.retargetRequestViaToTcp(rsp)),
+                "a response keeps the Via it is echoing");
+        String twoVia = "ACK sip:peer@x SIP/2.0\r\nVia: SIP/2.0/UDP a;"
+                + "branch=z9hG4bK1\r\nVia: SIP/2.0/UDP b;branch=z9hG4bK2\r\n"
+                + "Content-Length: 0\r\n\r\n";
+        String retargeted = JoanSipBuilder.retargetRequestViaToTcp(twoVia);
+        check(retargeted.indexOf("SIP/2.0/TCP") >= 0
+                        && retargeted.indexOf("SIP/2.0/UDP")
+                        > retargeted.indexOf("SIP/2.0/TCP"),
+                "only the top Via is re-aimed");
+        check(JoanSipBuilder.retargetRequestViaToTcp(byeUdp.replace(
+                        "Via: SIP/2.0/UDP [2001:db8::2]:15000;branch=z9hG4bKb1",
+                        "Max-Forwards: 70")).indexOf("SIP/2.0/TCP") < 0,
+                "a request with no Via is left alone");
+
+        /* AUTS resynchronisation REGISTER (RFC 3310 3.2). It answers a card
+         * SYNCHRONISATION FAILURE, so it is an UNPROTECTED REGISTER: it
+         * offers Security-Client and must NOT claim Security-Verify, and
+         * its response is computed over an empty password, not a RES. */
+        JoanSipBuilder.Challenge resyncCh = new JoanSipBuilder.Challenge(
+                "dGVzdG5vbmNlMTIzNA==", "AKAv1-MD5", null,
+                "ims.mnc000.mcc460.3gppnetwork.org", "auth")
+                .resync("YXV0cy1ieXRlcw==");
+        String resync = JoanSipBuilder.buildRegister(id, txn, 2, resyncCh,
+                new byte[0], null, null, "3GPP-E-UTRAN-TDD", false);
+        check(resync.contains("auts=\"YXV0cy1ieXRlcw==\""),
+                "resync REGISTER carries quoted base64 auts");
+        check(resync.contains("Security-Client:"),
+                "resync REGISTER still offers Security-Client");
+        check(!resync.contains("Security-Verify:"),
+                "resync REGISTER claims no Security-Verify");
+        check(JoanSipBuilder.cseqForMethod(resync, "REGISTER") == 2,
+                "resync REGISTER is its own transaction");
+        String expected = JoanSipCrypto.akaDigestResponseHex(
+                id.impi, "ims.mnc000.mcc460.3gppnetwork.org", "REGISTER",
+                "sip:" + id.realm, "dGVzdG5vbmNlMTIzNA==", new byte[0],
+                "auth", "00000001", txn.cnonce, "AKAv1-MD5", null, null);
+        check(resync.contains("response=\"" + expected + "\""),
+                "resync response uses an empty password, not a RES");
+        String withRes = JoanSipBuilder.buildRegister(id, txn, 2,
+                new JoanSipBuilder.Challenge("dGVzdG5vbmNlMTIzNA==",
+                        "AKAv1-MD5", null,
+                        "ims.mnc000.mcc460.3gppnetwork.org", "auth"),
+                res, null, null, "3GPP-E-UTRAN-TDD", false);
+        check(!withRes.contains("response=\"" + expected + "\""),
+                "an empty-password response differs from the RES response");
     }
 
     /** Stock global profile: unknown carriers keep a LIVE 4096 criterion. */

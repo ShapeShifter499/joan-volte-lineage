@@ -350,6 +350,93 @@ final class JoanAka {
      * We accept both shapes: base64 UICC response of
      * [DB tag][len][tag E1/CX][...] as well as simple hex triple.
      */
+    /**
+     * True when the card answered the AKA challenge with a SYNCHRONISATION
+     * FAILURE (TS 31.102 7.1.2.1: tag 0xDC, then AUTS) rather than success
+     * (0xDB). This is not a malformed response and not a wrong key -- it
+     * means the card's SQN is out of step with the HSS, which is what
+     * repeated half-finished registrations cause. Recovering needs a
+     * REGISTER carrying auts= (RFC 3310 3.2), which JoanAppRegister now
+     * sends. Telling the two apart is what makes that possible: "resync
+     * needed" and "parser is broken" demand opposite responses, and a
+     * retry never escapes the first one.
+     *
+     * <p>Shape confirmed against AOSP's IMS stack, which splits the same
+     * two tags at the same offset: {@code OsUsimDigestAka::OnResponse()}
+     * reads 0xDB as RES/CK/IK and 0xDC as AUTS
+     * (native/libimsstack/platform/os/android/device/OsUsim.cpp). When the
+     * resync REGISTER is wired, its two rules are in that tree too: the
+     * auts parameter is quoted base64 ({@code SipAuHelper.cpp} STR_AUTS)
+     * and "when the AUTS is present, the included response parameter is
+     * calculated using an empty password, instead of a RES". Both at tag
+     * android-17.0.0_r1, referenced only -- no AOSP code is used here.
+     */
+    static boolean isSyncFailure(String resp) {
+        return isSyncFailure(authBytes(resp));
+    }
+
+    /**
+     * Byte-level form, so the tag/length reasoning is provable on the host:
+     * the String forms run through {@code android.util.Base64}, whose
+     * android.jar body throws "Stub!" off-device.
+     */
+    static boolean isSyncFailure(byte[] raw) {
+        return raw != null && raw.length >= 2 && (raw[0] & 0xff) == 0xDC;
+    }
+
+    /** AUTS octets from a sync failure, or null. */
+    static byte[] autsBytes(byte[] raw) {
+        if (!isSyncFailure(raw)) {
+            return null;
+        }
+        int len = raw[1] & 0xff;
+        if (len <= 0 || 2 + len > raw.length) {
+            return null;
+        }
+        byte[] auts = new byte[len];
+        System.arraycopy(raw, 2, auts, 0, len);
+        return auts;
+    }
+
+    /**
+     * The card's answer as bytes, base64 first and hex as a fallback, or
+     * null. {@link #hexBytes} throws on anything that is not hex, and this
+     * runs on whatever the telephony API handed back -- so the fallback is
+     * guarded. An unreadable response is "not a sync failure", never an
+     * exception thrown out of the registration flow.
+     */
+    private static byte[] authBytes(String resp) {
+        if (resp == null || resp.isEmpty()) {
+            return null;
+        }
+        byte[] raw = b64(resp);
+        if (raw != null && raw.length >= 2) {
+            return raw;
+        }
+        try {
+            return hexBytes(resp);
+        } catch (RuntimeException e) {
+            return raw;
+        }
+    }
+
+    /**
+     * Base64 AUTS from a synchronisation failure, or null. This is the
+     * value the resynchronisation REGISTER carries in auts=; it is not key
+     * material (it is the card telling the HSS its own SQN) but it is
+     * still subscriber state, so it is never traced.
+     */
+    static String autsBase64(String resp) {
+        byte[] auts = autsBytes(authBytes(resp));
+        return auts == null ? null : b64e(auts);
+    }
+
+    /** AUTS length in octets for a sync failure, or -1. */
+    static int autsLength(String resp) {
+        byte[] auts = autsBytes(authBytes(resp));
+        return auts == null ? -1 : auts.length;
+    }
+
     static String[] parseAuthResponse(String resp) {
         if (resp == null || resp.isEmpty()) {
             return null;

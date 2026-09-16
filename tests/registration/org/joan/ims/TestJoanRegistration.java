@@ -143,6 +143,48 @@ public class TestJoanRegistration {
         check("z9hG4bKreg".equals(JoanAppRegister.JoanRegTransport.viaBranch(
                         "SIP/2.0/UDP 192.0.2.2:40010;branch=z9hG4bKreg;rport")),
                 "via-branch-parsed");
+        /* One REGISTER series per identity: Call-ID and From-tag survive
+         * across attempts, CSeq only rises, and a new identity starts over.
+         * A registrar rejects a REGISTER whose CSeq did not advance, so the
+         * monotonic check is the load-bearing one. */
+        java.security.SecureRandom rng = new java.security.SecureRandom();
+        JoanSipBuilder.Params ports = JoanSipBuilder.Params.random(rng);
+        JoanAppRegister.RegSeries series = new JoanAppRegister.RegSeries();
+        JoanSipBuilder.Txn a = series.newAttempt("impi@example.invalid", ports, rng);
+        int c1 = series.nextCseq();
+        JoanSipBuilder.Txn b = series.newAttempt("impi@example.invalid", ports, rng);
+        int c2 = series.nextCseq();
+        check(a.callId.equals(b.callId), "retry keeps the registration Call-ID");
+        check(a.fromTag.equals(b.fromTag), "retry keeps the From-tag");
+        check(c2 > c1, "CSeq rises across attempts");
+        check(!a.branch.equals(b.branch), "each attempt is its own transaction");
+        check(!a.cnonce.equals(b.cnonce), "each attempt gets a fresh cnonce");
+        int prev = c2;
+        for (int i = 0; i < 5; i++) {
+            series.newAttempt("impi@example.invalid", ports, rng);
+            int c = series.nextCseq();
+            check(c > prev, "CSeq still rising at attempt " + (i + 3));
+            prev = c;
+        }
+        JoanSipBuilder.Txn other = series.newAttempt("other@example.invalid", ports, rng);
+        check(!other.callId.equals(a.callId),
+                "a different identity starts a new series");
+        check(series.nextCseq() == 1, "a new series restarts CSeq");
+
+        /* A reject trail names the domain, never the identity: a derived
+         * IMPU carries the IMSI in its user part. */
+        check("ims.mnc002.mcc460.3gppnetwork.org".equals(JoanAppRegister.domainOf(
+                        "<sip:460021234567890@ims.mnc002.mcc460.3gppnetwork.org>")),
+                "reject-detail-keeps-domain");
+        check(!String.valueOf(JoanAppRegister.domainOf(
+                        "<sip:460021234567890@ims.mnc002.mcc460.3gppnetwork.org>"))
+                        .contains("460021234567890"),
+                "reject-detail-drops-identity");
+        check("ims.mnc004.mcc452.3gppnetwork.org".equals(JoanAppRegister.domainOf(
+                        "REGISTER sip:ims.mnc004.mcc452.3gppnetwork.org SIP/2.0")),
+                "reject-detail-reads-request-uri-domain");
+        check(JoanAppRegister.domainOf("tel:+84900000000") == null,
+                "reject-detail-ignores-non-sip");
         check("2".equals(JoanAppRegister.JoanRegTransport.cseqNumber(" 2 REGISTER "))
                         && "REGISTER".equals(JoanAppRegister.JoanRegTransport.cseqMethod(" 2 REGISTER ")),
                 "cseq-parts-parsed");
