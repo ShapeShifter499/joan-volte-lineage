@@ -156,6 +156,23 @@ that means emergency calls may have nowhere to go.
 > Confirm it landed with `platform_agc=true` in the joan trace. A trace
 > reading `platform_agc=false` means the declaration is absent and the
 > uplink is running unconditioned.
+>
+> ### Keeping it on a development handset
+>
+> `upstream/apply-agc-live.sh [serial]` applies the same patch to a
+> running device over `adb remount`, and is idempotent -- run it again
+> and it says "already declared". **This is for a bench, not for
+> testers.** It writes through the scratch overlay, which is a debug
+> facility: a LineageOS nightly, an OTA or a factory reset all wipe it,
+> and the only symptom is quieter calls with `platform_agc=false` as the
+> sole clue. Re-run it after any ROM update. Flashing the zip does not
+> disturb it, because the zip does not touch `/vendor`.
+>
+> One thing it guards against, learned the hard way: the copy on the raw
+> `/vendor` partition is **0 bytes** on this ROM, and the working file
+> has always come from the overlay. Do not "repair" the partition copy --
+> it cannot be written (335 free blocks, ENOSPC even for an in-place
+> rewrite) and it is not what the system reads.
 
 
 
