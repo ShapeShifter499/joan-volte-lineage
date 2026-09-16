@@ -26,12 +26,20 @@ final class JoanImsVoiceConfig {
     final int minSeSec;
     final int refresherType;
     final int refreshMethod;
+    /** RFC 3556 session bandwidths: b=AS in kbps, b=RS/b=RR in bps. */
+    final int asKbps;
+    final int rsBps;
+    final int rrBps;
     /** Where the values came from, for the trace. */
     final String source;
 
     private JoanImsVoiceConfig(boolean timerSupported, int sessionExpiresSec,
                                int minSeSec, int refresherType,
-                               int refreshMethod, String source) {
+                               int refreshMethod, int asKbps, int rsBps,
+                               int rrBps, String source) {
+        this.asKbps = asKbps;
+        this.rsBps = rsBps;
+        this.rrBps = rrBps;
         this.timerSupported = timerSupported;
         this.sessionExpiresSec = sessionExpiresSec;
         this.minSeSec = minSeSec;
@@ -40,12 +48,18 @@ final class JoanImsVoiceConfig {
         this.source = source;
     }
 
+    /* AOSP's own defaults for the RFC 3556 bandwidths. */
+    static final int DEFAULT_AS_KBPS = 41;
+    static final int DEFAULT_RS_BPS = 600;
+    static final int DEFAULT_RR_BPS = 2000;
+
     static JoanImsVoiceConfig defaults(String why) {
         return new JoanImsVoiceConfig(true,
                 JoanSessionTimer.DEFAULT_EXPIRES_SEC,
                 JoanSessionTimer.DEFAULT_MIN_SE_SEC,
                 JoanSessionTimer.REFRESHER_UAC,
                 JoanSessionTimer.METHOD_UPDATE_PREFERRED,
+                DEFAULT_AS_KBPS, DEFAULT_RS_BPS, DEFAULT_RR_BPS,
                 why);
     }
 
@@ -112,10 +126,19 @@ final class JoanImsVoiceConfig {
                         .KEY_SESSION_EXPIRES_TIMER_SEC_INT)
                 || cfg.containsKey(CarrierConfigManager.ImsVoice
                         .KEY_SESSION_TIMER_SUPPORTED_BOOL);
+        int as = cfg.getInt(
+                CarrierConfigManager.ImsVoice.KEY_AUDIO_AS_BANDWIDTH_KBPS_INT,
+                d.asKbps);
+        int rs = cfg.getInt(
+                CarrierConfigManager.ImsVoice.KEY_AUDIO_RS_BANDWIDTH_BPS_INT,
+                d.rsBps);
+        int rr = cfg.getInt(
+                CarrierConfigManager.ImsVoice.KEY_AUDIO_RR_BANDWIDTH_BPS_INT,
+                d.rrBps);
         return new JoanImsVoiceConfig(supported,
                 JoanSessionTimer.offerExpires(expires, minSe),
                 JoanSessionTimer.minSe(minSe),
-                refresher, method,
+                refresher, method, as, rs, rr,
                 anySet ? "carrier-config" : "carrier-config-unset");
     }
 
@@ -129,6 +152,7 @@ final class JoanImsVoiceConfig {
                 + " method=" + (refreshMethod
                         == JoanSessionTimer.METHOD_UPDATE_PREFERRED
                         ? "update" : "invite")
+                + " as=" + asKbps + "kbps rs=" + rsBps + " rr=" + rrBps
                 + " src=" + source;
     }
 }

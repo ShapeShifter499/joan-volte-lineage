@@ -23,6 +23,7 @@ public final class TestJoanSip {
         testOfferSummary();
         testSessionTimer();
         testSdpDirection();
+        testSessionBandwidth();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -1390,6 +1391,55 @@ public final class TestJoanSip {
                 JoanSipBuilder.selectAnswerCodec(norm));
         check(ans2.indexOf("a=sendrecv\r\n") > 0,
                 "an ordinary offer is still answered sendrecv");
+    }
+
+    private static void testSessionBandwidth() {
+        JoanSipBuilder.setSessionBandwidth(0, 0, 0);
+        check("".equals(JoanSipBuilder.bandwidthLines()),
+                "nothing configured emits no b= lines at all");
+
+        JoanSipBuilder.setSessionBandwidth(41, 600, 2000);
+        String b = JoanSipBuilder.bandwidthLines();
+        check("b=AS:41\r\nb=RS:600\r\nb=RR:2000\r\n".equals(b),
+                "the three RFC 3556 lines are emitted in order");
+
+        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                "310260123456789@ims.mnc260.mcc310.3gppnetwork.org",
+                "sip:+15550000@ims.mnc260.mcc310.3gppnetwork.org",
+                "ims.mnc260.mcc310.3gppnetwork.org",
+                "2001:db8::1", 5060, 5060, null);
+        String inv = JoanSipBuilder.buildInvite(id,
+                new JoanSipBuilder.Dialog(), "sip:peer@host", "", null,
+                40000, null);
+        int cPos = inv.indexOf("c=IN IP6");
+        int bPos = inv.indexOf("b=AS:41");
+        int mPos = inv.indexOf("m=audio");
+        int aPos = inv.indexOf("a=rtpmap");
+        check(bPos > 0, "the offer carries b=AS");
+        /* RFC 4566 fixes the order: b= after c=/m=, before any a=.
+         * Cores do reject an SDP that puts them elsewhere. */
+        check(cPos < bPos && mPos < bPos && bPos < aPos,
+                "b= lines sit after m= and before the a= lines");
+
+        String head = "v=0\r\no=- 1 1 IN IP6 2001:db8::9\r\ns=-\r\n"
+                + "c=IN IP6 2001:db8::9\r\nt=0 0\r\n"
+                + "m=audio 40000 RTP/AVP 96\r\n"
+                + "a=rtpmap:96 AMR-WB/16000/1\r\n"
+                + "a=fmtp:96 octet-align=1\r\n";
+        JoanSipBuilder.Media o = JoanSipBuilder.parseSdp(head);
+        String ans = JoanSipBuilder.sdpAnswer("2001:db8::1", 40000, o,
+                JoanSipBuilder.selectAnswerCodec(o));
+        check(ans.indexOf("b=AS:41\r\n") > 0
+                        && ans.indexOf("m=audio") < ans.indexOf("b=AS:41")
+                        && ans.indexOf("b=AS:41") < ans.indexOf("a=rtpmap"),
+                "the answer carries them too, in the same position");
+
+        /* A carrier that configures only some of them gets only those. */
+        JoanSipBuilder.setSessionBandwidth(41, 0, 0);
+        check("b=AS:41\r\n".equals(JoanSipBuilder.bandwidthLines()),
+                "an unset RS/RR is left off rather than sent as zero");
+
+        JoanSipBuilder.setSessionBandwidth(0, 0, 0);
     }
 
     private static void testSessionTimer() {

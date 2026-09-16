@@ -1488,6 +1488,47 @@ final class JoanSipBuilder {
         return sdpMedia(ip, rtpPort, "sendrecv");
     }
 
+    /* ------------------------------------------------------------------
+     * RFC 3556 session bandwidth. b=AS sizes the dedicated bearer the
+     * network sets up for the call; b=RS and b=RR bound the RTCP the two
+     * ends may send. Offering no bandwidth at all leaves the core to size
+     * the bearer from its own defaults, which is how a VoLTE call ends up
+     * on a bearer too small for the codec that was negotiated.
+     *
+     * Values are carrier configuration -- ImsStack reads the same three
+     * keys -- so they are set here rather than written into the builder.
+     * ------------------------------------------------------------------ */
+
+    private static volatile int sAsKbps;
+    private static volatile int sRsBps;
+    private static volatile int sRrBps;
+
+    static void setSessionBandwidth(int asKbps, int rsBps, int rrBps) {
+        sAsKbps = asKbps;
+        sRsBps = rsBps;
+        sRrBps = rrBps;
+    }
+
+    /**
+     * The b= lines for one media section, or "" when nothing is set.
+     *
+     * <p>Ordering is not cosmetic: RFC 4566 requires b= after c= and
+     * before any a=, and cores do reject an SDP that puts them elsewhere.
+     */
+    static String bandwidthLines() {
+        StringBuilder b = new StringBuilder(32);
+        if (sAsKbps > 0) {
+            b.append("b=AS:").append(sAsKbps).append("\r\n");
+        }
+        if (sRsBps > 0) {
+            b.append("b=RS:").append(sRsBps).append("\r\n");
+        }
+        if (sRrBps > 0) {
+            b.append("b=RR:").append(sRrBps).append("\r\n");
+        }
+        return b.toString();
+    }
+
     static final String DIR_SENDRECV = "sendrecv";
     static final String DIR_SENDONLY = "sendonly";
     static final String DIR_RECVONLY = "recvonly";
@@ -1558,11 +1599,21 @@ final class JoanSipBuilder {
         return null;
     }
 
-    /** m=audio plus rtpmap/fmtp for every capability, in offer order. */
+    /**
+     * m=audio, then the bandwidth block, then rtpmap/fmtp for every
+     * capability in offer order.
+     *
+     * <p>The b= lines have to sit between m= and the attributes: RFC 4566
+     * fixes the order of an SDP media section, and a core that parses
+     * strictly rejects an SDP that puts them after a=. They are built
+     * here rather than appended by the caller for exactly that reason --
+     * appending is how they ended up in the wrong place.
+     */
     private static String offerMediaLines(int rtpPort) {
         StringBuilder m = new StringBuilder("m=audio ").append(rtpPort)
                 .append(" RTP/AVP");
         StringBuilder attrs = new StringBuilder();
+        attrs.append(bandwidthLines());
         for (Capability c : sProfile) {
             m.append(' ').append(c.offerPt);
             attrs.append("a=rtpmap:").append(c.offerPt).append(' ')
@@ -1680,6 +1731,7 @@ final class JoanSipBuilder {
                 + "c=IN " + fam + " " + ip + "\r\n"
                 + "t=0 0\r\n"
                 + "m=audio " + rtpPort + " RTP/AVP " + pt + teInM + "\r\n"
+                + bandwidthLines()
                 + rtpmap
                 + fmtp
                 + teLines

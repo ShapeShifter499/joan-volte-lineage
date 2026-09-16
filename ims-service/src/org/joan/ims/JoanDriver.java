@@ -558,6 +558,7 @@ final class JoanDriver {
             JoanSipBuilder.setSessionTimer(0, c.minSeSec, c.refresherType);
         }
         JoanSipBuilder.setSessionRefreshMethod(c.refreshMethod);
+        JoanSipBuilder.setSessionBandwidth(c.asKbps, c.rsBps, c.rrBps);
         String sum = c.summary();
         if (!sum.equals(sSeSummary)) {
             sSeSummary = sum;
