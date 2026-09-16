@@ -250,6 +250,15 @@ public final class TestJoanSip {
                 null, null, "3GPP-E-UTRAN-TDD", false);
         check(udp.contains("Via: SIP/2.0/UDP [2001:db8::2]:15000"),
                 "explicit UDP REGISTER keeps UDP Via");
+        /* buildRegister() re-rolls txn.branch on every call, so the TCP
+         * and UDP variants are DIFFERENT transactions. Callers must match
+         * a reply against the variant they actually put on the wire;
+         * matching a TCP reply against the UDP build rejects every final
+         * as "mismatch" (CMCC REG1 regression, alpha20). */
+        check(!JoanSipBuilder.branchOf(tcp).isEmpty()
+                        && !JoanSipBuilder.branchOf(tcp)
+                        .equals(JoanSipBuilder.branchOf(udp)),
+                "each buildRegister call is its own transaction branch");
         // Stock parity (alpha12): libims never emits `integrity-protected`
         // (verified absent from libims.lge.so). Joan must match stock.
         String prot = udp;

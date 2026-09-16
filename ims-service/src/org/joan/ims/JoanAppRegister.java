@@ -372,7 +372,7 @@ final class JoanAppRegister {
         if (p1 == null) {
             return "FAIL: reg1 parse";
         }
-        if (!JoanRegTransport.finalMatches(reg1Str, r1)) {
+        if (!JoanRegTransport.finalMatches(reg1Identity, r1)) {
             return sb + "FAIL: reg1 mismatch";
         }
         sb.append("reg1=").append(p1.status).append(' ');
@@ -397,14 +397,31 @@ final class JoanAppRegister {
             return sb + "FAIL: no supported Security-Server mechanism";
         }
         sb.append("ealg=").append(pcscfSec.ealg)
+        /* The identity the reply is matched against must be the message
+         * that actually went out: buildRegister() re-rolls txn.branch on
+         * every call, so the TCP variant carries a different Via branch
+         * than reg1Udp and matching the reply against reg1Udp would fail
+         * for every TCP REG1 (REG2 already tracks this as r2Identity). */
+        String reg1Identity = reg1Str;
+        /* Which transport actually produced the challenge. An AUTS resync
+         * REGISTER is another unprotected REGISTER, so it reuses the one
+         * already known to work rather than re-running the TCP-then-UDP
+         * fallback and eating a second connect timeout. */
+        boolean reg1OnTcp = false;
                 .append(" alg=").append(pcscfSec.alg)
                 .append(" offered=")
                 .append(JoanSecAgree.offerSummary(p1.secServer, pcscfSec))
                 .append(' ');
+            reg1Identity = reg1Tcp;
+            reg1OnTcp = true;
         if (superseded(epoch)) {
             return sb + "FAIL: superseded by network/state change";
         }
 
+                /* Fallback re-sends the original reg1Udp bytes (branch as
+                 * built), not the TCP variant. */
+                reg1Identity = reg1Str;
+                reg1OnTcp = false;
         String authHex;
         try {
             authHex = JoanAka.runIccAuth(ctx, nonce);
