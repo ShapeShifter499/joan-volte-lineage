@@ -25,6 +25,10 @@ class JoanMedia {
     }
 }
 class JoanRegistration { static void setRegistered(boolean b, String s) {} }
+class JoanDriver {
+    static java.util.List<String> pokes = new java.util.ArrayList<>();
+    static void poke(String reason) { pokes.add(reason); }
+}
 class JoanMmTelFeature {
     static int incoming, ended;
     static void onIncomingCall(android.content.Context c, String u, String n, String id) { incoming++; }

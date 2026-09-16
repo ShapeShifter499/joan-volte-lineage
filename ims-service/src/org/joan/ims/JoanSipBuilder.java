@@ -1999,6 +1999,39 @@ final class JoanSipBuilder {
     }
 
     /**
+     * SUBSCRIBE to the registration event package, RFC 3680.
+     *
+     * <p>TS 24.229 s5.1.1.3 has the UE do this for its own public
+     * identity as soon as it is registered. It is the only way the
+     * network can tell us our binding is gone -- an administrative
+     * deregistration, an S-CSCF reassignment, a re-authentication demand.
+     * Without it the first symptom is a REGISTER refresh failing up to
+     * half an hour later, and until then the handset believes it is
+     * reachable when it is not.
+     *
+     * <p>The Request-URI and the To header are our own public identity,
+     * not the P-CSCF: we are asking about ourselves.
+     */
+    static String buildRegEventSubscribe(Id id, Dialog dlg, String aor,
+                                         String route, String secVerify,
+                                         int expires) {
+        if (aor == null || aor.isEmpty()) {
+            return null;
+        }
+        dlg.cseq++;
+        String contactUser = contactUser(aorOf(id.impu != null
+                && !id.impu.isEmpty() ? id.impu : id.impi));
+        String extra = "Contact: <sip:" + contactUser
+                + "@" + bracket(id.localIp) + ":" + id.contactPort + ">\r\n"
+                + "Event: reg\r\n"
+                + "Accept: application/reginfo+xml\r\n"
+                + "Expires: " + expires + "\r\n"
+                + "Allow: " + ALLOW + "\r\n";
+        return inDialog("SUBSCRIBE", id, dlg, aor, route, secVerify,
+                "<" + aor + ">", null, dlg.cseq, extra);
+    }
+
+    /**
      * Out-of-dialog SUBSCRIBE to the conference event package, exactly
      * the request stock's Conference::SubscribeConferenceState builds:
      * Event: conference, Accept: application/conference-info+xml,
@@ -2490,7 +2523,7 @@ final class JoanSipBuilder {
         return tag.substring(v, e);
     }
 
-    private static String aorOf(String publicId) {
+    static String aorOf(String publicId) {
         if (publicId.startsWith("tel:") || publicId.startsWith("sip:")) {
             return publicId;
         }

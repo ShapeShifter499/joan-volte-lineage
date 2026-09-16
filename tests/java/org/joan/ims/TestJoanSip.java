@@ -24,6 +24,7 @@ public final class TestJoanSip {
         testSessionTimer();
         testSdpDirection();
         testSessionBandwidth();
+        testRegInfo();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -1440,6 +1441,80 @@ public final class TestJoanSip {
                 "an unset RS/RR is left off rather than sent as zero");
 
         JoanSipBuilder.setSessionBandwidth(0, 0, 0);
+    }
+
+    private static void testRegInfo() {
+        String ours = "sip:joan@[2001:db8::1]:5060";
+        String active = "<?xml version=\"1.0\"?>"
+                + "<reginfo xmlns=\"urn:ietf:params:xml:ns:reginfo\""
+                + " version=\"0\" state=\"full\">"
+                + "<registration aor=\"sip:u@ims\" id=\"a7\" state=\"active\">"
+                + "<contact id=\"76\" state=\"active\" event=\"registered\">"
+                + "<uri>sip:joan@2001:db8::1:5060</uri></contact>"
+                + "</registration></reginfo>";
+        check(JoanRegInfo.parse(active, ours) == JoanRegInfo.STATE_ACTIVE,
+                "an active binding reads as active");
+
+        String deact = active.replace("state=\"active\" event=\"registered\"",
+                "state=\"terminated\" event=\"deactivated\"");
+        check(JoanRegInfo.parse(deact, ours)
+                        == JoanRegInfo.STATE_TERMINATED_REREGISTER,
+                "deactivated means register again");
+
+        String rej = active.replace("state=\"active\" event=\"registered\"",
+                "state=\"terminated\" event=\"rejected\"");
+        check(JoanRegInfo.parse(rej, ours)
+                        == JoanRegInfo.STATE_TERMINATED_FINAL,
+                "rejected means do not come back");
+        String unreg = active.replace("state=\"active\" event=\"registered\"",
+                "state=\"terminated\" event=\"unregistered\"");
+        check(JoanRegInfo.parse(unreg, ours)
+                        == JoanRegInfo.STATE_TERMINATED_FINAL,
+                "unregistered means do not come back either");
+        String expired = active.replace("state=\"active\" event=\"registered\"",
+                "state=\"terminated\" event=\"expired\"");
+        check(JoanRegInfo.parse(expired, ours)
+                        == JoanRegInfo.STATE_TERMINATED_REREGISTER,
+                "an expired binding is worth re-registering");
+
+        /* Another device on the same public identity is not news. */
+        String other = "<reginfo xmlns=\"urn:ietf:params:xml:ns:reginfo\">"
+                + "<registration aor=\"sip:u@ims\" state=\"active\">"
+                + "<contact id=\"9\" state=\"terminated\" event=\"deactivated\">"
+                + "<uri>sip:other@198.51.100.7:5060</uri></contact>"
+                + "</registration></reginfo>";
+        check(JoanRegInfo.parse(other, ours) == JoanRegInfo.STATE_UNKNOWN,
+                "another handset's deregistration is not ours");
+        check(JoanRegInfo.parse(other, null)
+                        == JoanRegInfo.STATE_TERMINATED_REREGISTER,
+                "with no uri to match on, any contact counts");
+
+        /* Junk from the network must not be read as a deregistration. */
+        check(JoanRegInfo.parse(null, ours) == JoanRegInfo.STATE_UNKNOWN
+                        && JoanRegInfo.parse("", ours) == JoanRegInfo.STATE_UNKNOWN
+                        && JoanRegInfo.parse("not xml at all", ours)
+                                == JoanRegInfo.STATE_UNKNOWN
+                        && JoanRegInfo.parse("<reginfo><contact", ours)
+                                == JoanRegInfo.STATE_UNKNOWN,
+                "a malformed body is never read as a deregistration");
+
+        check("terminated".equals(JoanRegInfo.attr(
+                        "<contact state='terminated' event='deactivated'>",
+                        "state")),
+                "single-quoted attributes are read");
+        check("deactivated".equals(JoanRegInfo.attr(
+                        "<contact state=terminated event=deactivated>",
+                        "event")),
+                "unquoted attributes are read");
+
+        check("2001:db8::1".equals(JoanRegInfo.hostOf(
+                        "<sip:joan@[2001:db8::1]:5060>;expires=600")),
+                "the host survives brackets, port, params and angle quotes");
+        check("example.invalid".equals(
+                        JoanRegInfo.hostOf("sip:u@example.invalid")),
+                "a plain host is read");
+        check(JoanRegInfo.hostOf(null) == null,
+                "no uri gives no host");
     }
 
     private static void testSessionTimer() {

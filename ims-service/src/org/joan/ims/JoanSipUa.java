@@ -553,6 +553,99 @@ final class JoanSipUa {
                 sMediaAmrBitrate, sMediaAmrOct, sMediaAmrMaxMode, sMediaTePt);
     }
 
+    /** Whether the reg-event subscription is already in place. */
+    private static volatile boolean sRegEventSubscribed;
+
+    /**
+     * Subscribe to our own registration event package, once per binding.
+     *
+     * <p>Off-thread and best-effort. A core that does not offer the
+     * package answers 489 Bad Event or 404, and that is not a reason to
+     * fail a registration that otherwise worked -- the refresh timer
+     * remains the backstop it has always been. Failing loudly here would
+     * turn a missing optional feature into a handset that will not
+     * register.
+     */
+    private static void subscribeRegEvent() {
+        if (sRegEventSubscribed || sPublicId == null || sPublicId.isEmpty()) {
+            return;
+        }
+        sRegEventSubscribed = true;
+        new Thread(() -> {
+            try {
+                JoanSipBuilder.Id id = idSnapshot();
+                JoanSipBuilder.Dialog dlg = new JoanSipBuilder.Dialog();
+                dlg.cseq = 0;
+                String msg = JoanSipBuilder.buildRegEventSubscribe(id, dlg,
+                        JoanSipBuilder.aorOf(sPublicId), sServiceRoute,
+                        sSecVerify, sExpiresSec > 0 ? sExpiresSec : 600000);
+                if (msg == null) {
+                    return;
+                }
+                NonInviteWait w = new NonInviteWait(dlg.callId, dlg.cseq,
+                        "SUBSCRIBE", dlg.branch, null, dlg.fromTag, "");
+                sNonInviteWaits.put(w.callId + "#SUBSCRIBE#" + w.cseq, w);
+                try {
+                    sendReply(msg.getBytes(StandardCharsets.US_ASCII));
+                    String rx = waitNonInviteFinal(w, 10000);
+                    JoanSipBuilder.Reply p = rx == null ? null
+                            : JoanSipBuilder.parseReply(rx);
+                    JoanTrace.note("reg-event subscribe "
+                            + (p == null ? "no reply" : String.valueOf(p.status)));
+                } finally {
+                    sNonInviteWaits.remove(w.callId + "#SUBSCRIBE#" + w.cseq, w);
+                }
+            } catch (Throwable t) {
+                JoanTrace.note("reg-event subscribe "
+                        + t.getClass().getSimpleName());
+            }
+        }, "joan-sip-regevent").start();
+    }
+
+    /** Our own contact URI, for matching ourselves in a reginfo body. */
+    private static String ourContactUri() {
+        JoanSipBuilder.Id id = sId;
+        if (id == null || id.localIp == null) {
+            return null;
+        }
+        return "sip:joan@" + JoanSipBuilder.bracket(id.localIp)
+                + ":" + id.contactPort;
+    }
+
+    /**
+     * A reg-event NOTIFY told us something about our own binding.
+     *
+     * <p>A terminated binding is acted on immediately rather than waiting
+     * for the refresh to fail: between the network dropping us and the
+     * next REGISTER the handset shows itself registered and takes no
+     * calls, which is the failure this subscription exists to shorten.
+     */
+    private static void handleRegEventNotify(String rx) {
+        String body = JoanSipBuilder.bodyOf(rx);
+        int state = JoanRegInfo.parse(body, ourContactUri());
+        if (state == JoanRegInfo.STATE_UNKNOWN
+                || state == JoanRegInfo.STATE_ACTIVE) {
+            JoanTrace.note("reg-event notify state="
+                    + (state == JoanRegInfo.STATE_ACTIVE ? "active" : "unknown"));
+            return;
+        }
+        boolean retry = state == JoanRegInfo.STATE_TERMINATED_REREGISTER;
+        JoanTrace.note("reg-event notify: binding terminated"
+                + (retry ? "; re-registering" : "; network refused us"));
+        if (sCall) {
+            /* Same restraint as an IMS bearer loss during a call: the
+             * dialog is still up and releasing the UA would take it with
+             * us. The call ending re-runs this. */
+            JoanTrace.note("reg-event: call active; deferring release");
+            return;
+        }
+        release();
+        if (retry) {
+            JoanDriver.poke(JoanAppRegister.JoanRegLifecycle
+                    .POKE_IMS_AVAILABLE);
+        }
+    }
+
     private static void sessionTimerRefresh(String callId) {
         boolean useUpdate = JoanSessionTimer.refreshWithUpdate(
                 JoanSipBuilder.sessionRefreshMethod(), sSePeerAllow);
@@ -782,6 +875,7 @@ final class JoanSipUa {
                     + (sTcpS != null) + " tcp_c=" + (sTcpC != null)
                     + " granted=" + sExpiresSec + "s refresh_in="
                     + (msUntilRefresh() / 1000) + "s");
+            subscribeRegEvent();
         } else {
             JoanTrace.note("app UA REGISTER 200 but no public identity");
         }
@@ -2672,6 +2766,9 @@ final class JoanSipUa {
                     JoanTrace.note("conf-info users=" + users.size());
                     JoanMmTelFeature.onConferenceUsers(users);
                 }
+            } else if (event != null && event.toLowerCase(
+                    java.util.Locale.ROOT).startsWith("reg")) {
+                handleRegEventNotify(rx);
             }
             return;
         }
@@ -3328,6 +3425,7 @@ final class JoanSipUa {
         }
         sCall = false;
         sLiveHeld = false;
+        sRegEventSubscribed = false;
         sessionTimerStop("binding released");
         sParked = null;
         sInviteWaits.clear();

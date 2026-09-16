@@ -7,7 +7,7 @@ OUT=native/build/ua-host
 mkdir -p "$OUT"
 javac -cp "$SDK" -d "$OUT" \
  "$SRC/JoanSipUa.java" "$SRC/JoanSipBuilder.java" "$SRC/JoanAmr.java" \
-    "$SRC/JoanSessionTimer.java" \
+    "$SRC/JoanSessionTimer.java" "$SRC/JoanRegInfo.java" \
  "$SRC/JoanSipCrypto.java" "$SRC/JoanSecAgree.java" \
  "$SRC/JoanAppRegister.java" "$SRC/JoanAka.java" \
  "$SRC/JoanImsDiscovery.java" \

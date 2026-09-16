@@ -1097,7 +1097,7 @@ final class JoanMedia {
      *
      * The zip enables the platform AGC instead -- and until 2026-09-16 it
      * did not, which is why this said platform_agc=false on every call.
-     * joan ships libaudiopreprocessing.so in /vendor/lib*/soundfx but
+     * joan ships libaudiopreprocessing.so under /vendor/lib/soundfx but
      * audio_effects.xml never declared it, so the effect the comment
      * relied on did not exist. scripts/merge-agc-effect.sh adds it.
      *
