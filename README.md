@@ -8,6 +8,40 @@ SIP, AKA, and IPsec run in a privileged `ImsService` (`org.joan.ims`)
 using public `IpSecManager` APIs. There is no native daemon and no
 loopback control socket.
 
+> ### Building a ROM? Do not use the zip — use the source
+>
+> **This repository is the source, not just a zip.** `upstream/` is a
+> drop-in module for a LineageOS build: copy it to
+> `vendor/lge/joan-ims`, add one line to `device/lge/joan/device.mk`,
+> and the ImsService, its RRO and its permission files are built into
+> the ROM.
+>
+> ```
+> $(call inherit-product, vendor/lge/joan-ims/joan-ims.mk)
+> ```
+>
+> The flashable zip is a **stopgap** for people who cannot compile a
+> ROM, and for testers on carriers we have no access to. It installs the
+> same app into a build we do not control. Do not flash it onto a ROM
+> that already inherits the module — that installs the app twice.
+>
+> Two things the zip *cannot* do, which a ROM build can, so they are the
+> reason to prefer the source:
+>
+> - **The AGC declaration in `audio_effects.xml`.** Measured worth about
+>   +7 dB of uplink speech level. `/vendor` and `/odm` are both full on
+>   this device and refuse the write, so the zip skips it and says so.
+>   In a device tree it is two lines and every nightly carries it.
+> - **`config_device_volte_available`.** The zip ships it as an RRO
+>   because it has no other choice; a ROM build sets it in the device
+>   tree, which is the correct mechanism.
+>
+> Start at [`upstream/README.md`](upstream/README.md), then
+> [`upstream/VOLTE-PLATFORM-SETUP.md`](upstream/VOLTE-PLATFORM-SETUP.md)
+> for the platform variables the framework checks before it will admit
+> VoLTE at all. Part 1 without part 2 registers fine and still sends
+> every outbound call over GSM.
+
 > ### Read this before you flash: use LineageOS recovery, not TWRP
 >
 > `joan` uses **dynamic partitions** — `/system` and `/product` live inside
@@ -27,9 +61,11 @@ loopback control socket.
 > LineageOS recovery instead.
 
 > **Working on LineageOS 22.2:** IMS REGISTER 200, Dialer outbound and
-> inbound PCMU calls, two-way audio, hangup from either side. Speaker
-> and earpiece follow Dialer. Caller ID is the asserted number; Dialer
-> can still overlay a matching contact.
+> inbound calls, two-way audio, hangup from either side. AMR-WB at
+> 12650 bps in both RFC 4867 framings, negotiated against a live
+> carrier; PCMU remains the floor. Speaker and earpiece follow Dialer.
+> Caller ID is the asserted number; Dialer can still overlay a matching
+> contact.
 
 ## Current tester build: v0.4.0-alpha25
 

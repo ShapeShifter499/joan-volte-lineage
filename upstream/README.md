@@ -74,7 +74,21 @@ the repo root, which is why both files refer to those paths with `../`.
 - `ImsService` / `MmTelFeature` registration, including AKA from the ISIM
   or from the USIM (TS 23.003) when the SIM has no ISIM application
 - 3GPP sec-agree and transport-mode ESP over `IpSecTransform`
-- REGISTER, INVITE/ACK/BYE, PCMU RTP, RTCP SR+SDES
+- REGISTER, INVITE/ACK/BYE, RTCP SR+SDES and receiver reports
+- AMR-WB and AMR-NB in both RFC 4867 framings, negotiated from a
+  MediaCodec probe of what the ROM actually carries, with PCMU as the
+  floor. Verified on a live carrier in one session: bandwidth-efficient
+  inbound, octet-aligned outbound, both AMR-WB at 12650 bps
+- DTMF as RFC 4733 telephone-events, negotiated at the chosen codec's
+  clock rate
+- Session timers (RFC 4028) and RFC 3556 session bandwidth, both read
+  from carrier config rather than hardcoded
+- Hold initiated by the far end, answered with a mirrored SDP direction
+- Registration event package (RFC 3680), so a network-initiated
+  deregistration is seen at once rather than at the next refresh
+- SRVCC notification, so a call leaving LTE can be handed to CS
+- Local IP change during a call: media is rebound and the dialog
+  re-INVITEd rather than left silent
 - MO and MT calls with two-way audio, demonstrated on the development
   handset
 - Device-service binding via `config_ims_mmtel_package`
@@ -92,8 +106,11 @@ the reason part 2 is written as a checklist to verify rather than a story
 to trust.
 
 See the repo root `README.md` for what is explicitly **not** carried —
-emergency calling, SMS/MMS over IMS, DTMF, VoWiFi — before relying on
-this on a daily-driver handset.
+emergency calling, SMS/MMS over IMS, video, RTT, Ut/XCAP supplementary
+services, VoWiFi — before relying on this on a daily-driver handset.
+Emergency calling is the one to read twice: it is deliberately declined
+rather than half-implemented, and on a carrier that has retired 2G/3G
+that means emergency calls may have nowhere to go.
 
 ## Do not
 
@@ -143,6 +160,36 @@ round and every uuid appears absent.
 
 Once it lands, `AutomaticGainControl.isAvailable()` returns true and the
 trace line `media record ok src=7 platform_agc=true` confirms it.
+
+**Declaring the effect is sufficient; the `<stream>` block is not
+required.** JoanMedia attaches the AGC itself, in `attachEffects()`, via
+`AutomaticGainControl.create(sessionId)` on the AudioRecord session --
+so the two lines above are the whole patch. The
+`<stream type="voice_communication">` form is the alternative for a
+platform that should apply it to every VoIP capture rather than only to
+this app; either works, and the declaration-only form touches less.
+
+Measured on the US998 bench, 2026-09-16, same handset and same PSTN far
+end, two calls before and two after:
+
+| | declaration absent | declaration present |
+|---|---|---|
+| uplink speech | -39.2 dBFS | **-32.7 / -31.9 dBFS** |
+| uplink peak | -20.8 dBFS | **-10.4 / -11.0 dBFS** |
+| downlink speech | -23.2 dBFS | -23.4 / -21.7 dBFS |
+
+About +7 dB of speech level and +10 dB of peak, with the downlink
+unchanged as it should be. The uplink is still some 9 dB below the
+downlink, so this improves the problem rather than closing it.
+
+Re-confirmed 2026-09-16 on the US998: `/vendor` reports 335 free blocks
+and refuses a write of 7.5 KB, ENOSPC, including an in-place rewrite of
+a file it already holds. The installer now probes this with a
+write-readback and skips the AGC step with a message rather than
+failing the flash -- an earlier attempt guarded the mount with
+`|| true`, which cannot catch the `exit 1` inside the installer's own
+`error()`, and aborted the entire install before a single file was
+copied.
 
 ### Why the flashable zip cannot do this
 
