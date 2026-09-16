@@ -682,7 +682,10 @@ final class JoanSipUa {
         JoanSipBuilder.Id id = new JoanSipBuilder.Id(
                 sId.impi, sPublicId, sId.realm, sId.localIp,
                 sId.viaPort, sId.contactPort, sId.imei);
-        String sdp = JoanSipBuilder.sdpAnswer(sId.localIp, RTP_PORT, invite);
+        JoanSipBuilder.Media inOffer = JoanSipBuilder.parseSdp(invite);
+        JoanSipBuilder.Codec chosen = JoanSipBuilder.selectAnswerCodec(inOffer);
+        String sdp = JoanSipBuilder.sdpAnswer(sId.localIp, RTP_PORT,
+                inOffer, chosen);
         String tag = sRingingToTag;
         if (tag == null || tag.isEmpty()) {
             tag = sOurToTag;
@@ -738,8 +741,18 @@ final class JoanSipUa {
                     sMediaIp = null;
                 }
             }
+            /* The inbound path never recorded a codec, so every answered
+             * call ran as PCMU whatever was negotiated. It now carries the
+             * selection, the same way the outbound path carries what the
+             * answer chose. */
+            boolean amrWb = chosen != null && chosen.is("AMR-WB", 16000);
+            boolean amrNb = chosen != null && chosen.is("AMR", 8000);
+            sMediaPt = chosen == null ? 0 : chosen.pt;
+            sMediaAmrWb = amrWb ? Boolean.TRUE : (amrNb ? Boolean.FALSE : null);
         }
-        JoanTrace.note("app ANSWER 200");
+        JoanTrace.note("app ANSWER 200 codec="
+                + (chosen == null ? "PCMU" : chosen.name)
+                + " pt=" + (chosen == null ? 0 : chosen.pt));
         return "OK";
     }
 
@@ -2098,11 +2111,13 @@ final class JoanSipUa {
             return;
         }
         JoanSipBuilder.Media offer = JoanSipBuilder.parseSdp(rx);
-        if (offer != null && !offer.offersPcmu) {
-            /* sdpAnswer() would answer PCMU regardless of what was
-             * offered. Better to decline than to ring the user for a call
-             * that cannot carry audio. */
-            JoanTrace.note("app inbound INVITE offers no PCMU; 488");
+        if (offer != null && JoanSipBuilder.selectAnswerCodec(offer) == null) {
+            /* Nothing in the offer we can carry. Better to decline than to
+             * ring the user for a call that cannot have audio. This used
+             * to fire whenever PCMU was absent, because the answer was
+             * PCMU regardless of the offer; it now fires only when AMR-WB,
+             * AMR and PCMU are all absent or unusable. */
+            JoanTrace.note("app inbound INVITE: no usable codec; 488");
             try {
                 sendReply(buildResponse(rx, 488, "Not Acceptable Here",
                         sId, "nocodec", null)

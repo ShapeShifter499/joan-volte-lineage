@@ -1184,6 +1184,76 @@ final class JoanSipBuilder {
         boolean offersPcmu;
         /** rtpmap encoding name for payloadType, e.g. "AMR-WB". */
         String codecName = "";
+        /**
+         * Every payload type on m=audio, in the order offered. The order is
+         * the offerer's preference, and answering respects it instead of
+         * imposing ours.
+         */
+        final java.util.List<Codec> codecs = new java.util.ArrayList<>();
+
+        Codec codec(int pt) {
+            for (Codec c : codecs) {
+                if (c.pt == pt) {
+                    return c;
+                }
+            }
+            return null;
+        }
+    }
+
+    /** One payload type from an m=audio line, with its rtpmap and fmtp. */
+    static final class Codec {
+        final int pt;
+        String name = "";
+        int rate;
+        String fmtp = "";
+
+        Codec(int pt) {
+            this.pt = pt;
+            if (pt == 0) {
+                /* PCMU is statically assigned (RFC 3551): an offer may name
+                 * it on m=audio and never emit an a=rtpmap for it. */
+                name = "PCMU";
+                rate = 8000;
+            }
+        }
+
+        boolean is(String enc, int hz) {
+            return name.equalsIgnoreCase(enc) && rate == hz;
+        }
+
+        /**
+         * AMR is only usable if the offer asked for octet-aligned framing.
+         * JoanAmr does not implement the bandwidth-efficient packing, and
+         * its absence means bandwidth-efficient (RFC 4867 3.6), so an AMR
+         * entry without it must be skipped rather than silently accepted.
+         */
+        boolean amrOctetAligned() {
+            return fmtp.replace(" ", "").contains("octet-align=1");
+        }
+    }
+
+    /**
+     * The first payload type in the OFFERER's order that we can actually
+     * carry: AMR-WB, then AMR-NB, then PCMU. Returns null when none is
+     * usable, which is the only honest reason to decline the call.
+     */
+    static Codec selectAnswerCodec(Media offer) {
+        if (offer == null) {
+            return null;
+        }
+        for (Codec c : offer.codecs) {
+            if (c.is("AMR-WB", 16000) || c.is("AMR", 8000)) {
+                if (c.amrOctetAligned()) {
+                    return c;
+                }
+                continue;
+            }
+            if (c.pt == 0 && c.is("PCMU", 8000)) {
+                return c;
+            }
+        }
+        return null;
     }
 
     static String sdpOffer(String ip, int rtpPort) {
@@ -1224,23 +1294,56 @@ final class JoanSipBuilder {
                 + "a=" + direction + "\r\n";
     }
 
-    /** PCMU-only answer, matching native sdp_answer. */
-    static String sdpAnswer(String ip, int rtpPort, String offer) {
+    /**
+     * Answer an offer with the codec {@link #selectAnswerCodec} chose.
+     *
+     * <p>The answer echoes the OFFER's payload number: AMR is dynamic, so
+     * the offerer owns that number and it is rarely the 96 we use in our
+     * own offer. Answering with our number instead is a silent no-audio
+     * bug -- the far end sends what it named, and we decode something
+     * else.
+     *
+     * <p>AOSP's ImsStack negotiates the same way, walking the peer's
+     * payload list in the peer's order (AudioProfileNegotiator.cpp), and
+     * always emits octet-align when it is 1 rather than leaving it
+     * implicit. We do not negotiate mode-set, which it does.
+     */
+    static String sdpAnswer(String ip, int rtpPort, Media offer, Codec chosen) {
         boolean v6 = ip != null && ip.indexOf(':') >= 0;
         String fam = v6 ? "IP6" : "IP4";
         long sess = System.currentTimeMillis() / 1000;
-        boolean mux = offer == null || offer.contains("a=rtcp-mux");
+        boolean mux = offer == null || offer.mux;
+        int pt = chosen == null ? 0 : chosen.pt;
+        String rtpmap;
+        String fmtp = "";
+        if (chosen != null && chosen.is("AMR-WB", 16000)) {
+            rtpmap = "a=rtpmap:" + pt + " AMR-WB/16000/1\r\n";
+            fmtp = "a=fmtp:" + pt + " octet-align=1\r\n";
+        } else if (chosen != null && chosen.is("AMR", 8000)) {
+            rtpmap = "a=rtpmap:" + pt + " AMR/8000/1\r\n";
+            fmtp = "a=fmtp:" + pt + " octet-align=1\r\n";
+        } else {
+            pt = 0;
+            rtpmap = "a=rtpmap:0 PCMU/8000\r\n";
+        }
         return "v=0\r\n"
                 + "o=- " + sess + " 1 IN " + fam + " " + ip + "\r\n"
                 + "s=-\r\n"
                 + "c=IN " + fam + " " + ip + "\r\n"
                 + "t=0 0\r\n"
-                + "m=audio " + rtpPort + " RTP/AVP 0\r\n"
-                + "a=rtpmap:0 PCMU/8000\r\n"
+                + "m=audio " + rtpPort + " RTP/AVP " + pt + "\r\n"
+                + rtpmap
+                + fmtp
                 + "a=ptime:20\r\n"
                 + "a=rtcp:" + (rtpPort + 1) + "\r\n"
                 + (mux ? "a=rtcp-mux\r\n" : "")
                 + "a=sendrecv\r\n";
+    }
+
+    /** Parse, select and answer in one step. */
+    static String sdpAnswer(String ip, int rtpPort, String offer) {
+        Media m = offer == null ? null : parseSdp(offer);
+        return sdpAnswer(ip, rtpPort, m, selectAnswerCodec(m));
     }
 
     /** Pull one SIP message off a TCP accumulator. */
@@ -1537,6 +1640,9 @@ final class JoanSipBuilder {
                     if (pt == 0) {
                         m.offersPcmu = true;
                     }
+                    if (m.codec(pt) == null) {
+                        m.codecs.add(new Codec(pt));
+                    }
                 }
             } else if (line.equalsIgnoreCase("a=rtcp-mux")) {
                 m.mux = true;
@@ -1556,6 +1662,36 @@ final class JoanSipBuilder {
                         }
                         if (pt == m.payloadType) {
                             m.codecName = enc;
+                        }
+                        Codec c = m.codec(pt);
+                        if (c != null) {
+                            c.name = enc;
+                            if (slash > 0) {
+                                String rest = r.substring(sp + 1).trim()
+                                        .substring(slash + 1);
+                                int sl2 = rest.indexOf('/');
+                                try {
+                                    c.rate = Integer.parseInt(
+                                            (sl2 < 0 ? rest : rest.substring(0, sl2))
+                                                    .trim());
+                                } catch (NumberFormatException ignored) {
+                                    c.rate = 0;
+                                }
+                            }
+                        }
+                    } catch (NumberFormatException ignored) {
+                        // not a payload type; skip the line
+                    }
+                }
+            } else if (line.startsWith("a=fmtp:")) {
+                String f = line.substring(7).trim();
+                int sp = f.indexOf(' ');
+                if (sp > 0) {
+                    try {
+                        Codec c = m.codec(
+                                Integer.parseInt(f.substring(0, sp).trim()));
+                        if (c != null) {
+                            c.fmtp = f.substring(sp + 1).trim();
                         }
                     } catch (NumberFormatException ignored) {
                         // not a payload type; skip the line

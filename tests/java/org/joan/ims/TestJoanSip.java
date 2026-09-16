@@ -269,6 +269,62 @@ public final class TestJoanSip {
         check(!prot.contains("auts="),
                 "an ordinary REGISTER carries no auts");
 
+        /* Codec negotiation: the OFFERER's order decides, and we answer
+         * with their payload number. AOSP negotiates the same way, walking
+         * the peer's payload list (AudioProfileNegotiator.cpp). */
+        String head = "v=0\r\no=- 1 1 IN IP6 2001:db8::9\r\ns=-\r\n"
+                + "c=IN IP6 2001:db8::9\r\nt=0 0\r\n";
+        String wbFirst = head
+                + "m=audio 40000 RTP/AVP 104 0\r\n"
+                + "a=rtpmap:104 AMR-WB/16000/1\r\n"
+                + "a=fmtp:104 octet-align=1; mode-set=0,1,2\r\n"
+                + "a=rtpmap:0 PCMU/8000\r\n";
+        JoanSipBuilder.Codec pick =
+                JoanSipBuilder.selectAnswerCodec(JoanSipBuilder.parseSdp(wbFirst));
+        check(pick != null && pick.pt == 104 && pick.is("AMR-WB", 16000),
+                "AMR-WB offered first is selected");
+        String ans = JoanSipBuilder.sdpAnswer("2001:db8::2", 40000, wbFirst);
+        check(ans.contains("m=audio 40000 RTP/AVP 104\r\n")
+                        && ans.contains("a=rtpmap:104 AMR-WB/16000/1"),
+                "the answer echoes the offerer's payload number");
+        check(ans.contains("a=fmtp:104 octet-align=1"),
+                "an AMR answer states octet-align explicitly");
+        check(!ans.contains("RTP/AVP 96"), "our own offer's pt is not reused");
+
+        // Offerer order wins over any preference of ours.
+        String nbFirst = head
+                + "m=audio 40000 RTP/AVP 97 104 0\r\n"
+                + "a=rtpmap:97 AMR/8000/1\r\na=fmtp:97 octet-align=1\r\n"
+                + "a=rtpmap:104 AMR-WB/16000/1\r\na=fmtp:104 octet-align=1\r\n"
+                + "a=rtpmap:0 PCMU/8000\r\n";
+        JoanSipBuilder.Codec nb =
+                JoanSipBuilder.selectAnswerCodec(JoanSipBuilder.parseSdp(nbFirst));
+        check(nb != null && nb.pt == 97 && nb.is("AMR", 8000),
+                "the offerer's order decides, not ours");
+
+        // Bandwidth-efficient AMR is not implemented: skip it, do not
+        // accept it by omission, and fall back to the next usable entry.
+        String beAmr = head
+                + "m=audio 40000 RTP/AVP 104 0\r\n"
+                + "a=rtpmap:104 AMR-WB/16000/1\r\n"
+                + "a=rtpmap:0 PCMU/8000\r\n";
+        JoanSipBuilder.Codec be =
+                JoanSipBuilder.selectAnswerCodec(JoanSipBuilder.parseSdp(beAmr));
+        check(be != null && be.pt == 0,
+                "AMR without octet-align=1 falls back to PCMU");
+        check(JoanSipBuilder.sdpAnswer("2001:db8::2", 40000, beAmr)
+                        .contains("m=audio 40000 RTP/AVP 0\r\n"),
+                "the fallback answer is PCMU");
+
+        // Nothing usable is the only honest reason to decline.
+        String none = head + "m=audio 40000 RTP/AVP 9\r\n"
+                + "a=rtpmap:9 G722/8000\r\n";
+        check(JoanSipBuilder.selectAnswerCodec(JoanSipBuilder.parseSdp(none)) == null,
+                "an offer with no codec we carry selects nothing");
+        check(JoanSipBuilder.selectAnswerCodec(JoanSipBuilder.parseSdp(
+                        head + "m=audio 40000 RTP/AVP 0\r\n")) != null,
+                "PCMU with no rtpmap is still selectable");
+
         /* A request built for the UDP socket but written to the accepted
          * TCP connection must say TCP in its top Via; a response must not
          * be touched, because it echoes the request's Via (RFC 3261
@@ -425,7 +481,7 @@ public final class TestJoanSip {
                 "m=audio 20000 RTP/AVP 0 96\r\na=rtpmap:0 PCMU/8000\r\na=rtcp-mux\r\n");
         check(ans.contains("m=audio 40000 RTP/AVP 0") && ans.contains("PCMU")
                         && !ans.contains("AMR") && ans.contains("a=rtcp-mux"),
-                "sdp answer is PCMU-only with mux");
+                "an offer naming only PCMU is answered with PCMU, mux mirrored");
         StringBuilder acc = new StringBuilder(
                 "OPTIONS sip:x SIP/2.0\r\nContent-Length: 0\r\n\r\nINVITE sip:y SIP/2.0\r\nContent-Length: 0\r\n\r\n");
         check("OPTIONS sip:x SIP/2.0\r\nContent-Length: 0\r\n\r\n"
