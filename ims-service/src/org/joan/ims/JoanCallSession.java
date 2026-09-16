@@ -502,6 +502,31 @@ public class JoanCallSession extends ImsCallSessionImplBase {
         }
     }
 
+    /**
+     * The far end held or resumed us.
+     *
+     * <p>Distinct from callSessionHeld/callSessionResumed, which report
+     * OUR hold completing. ImsPhoneCallTracker drives its own state
+     * machine from the two pairs and mixing them up desynchronises it --
+     * so a peer hold uses the Received variants, and the
+     * once-per-session guard on our own hold is left alone.
+     */
+    void onPeerHold(boolean held) {
+        ImsCallSessionListener l = listener;
+        if (l == null) {
+            return;
+        }
+        try {
+            if (held) {
+                l.callSessionHoldReceived(profile);
+            } else {
+                l.callSessionResumeReceived(profile);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "peer hold notify " + t.getClass().getSimpleName());
+        }
+    }
+
     private void notifyResumeFailed(String why) {
         ImsCallSessionListener l = listener;
         if (l == null) {

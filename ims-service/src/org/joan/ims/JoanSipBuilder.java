@@ -1190,6 +1190,13 @@ final class JoanSipBuilder {
         /** rtpmap encoding name for payloadType, e.g. "AMR-WB". */
         String codecName = "";
         /**
+         * Direction the offerer asked for: sendrecv, sendonly, recvonly or
+         * inactive. RFC 3264 s6.1 makes sendrecv the default when the
+         * attribute is absent, so that is what an offer with no direction
+         * line means -- not "unknown".
+         */
+        String direction = DIR_SENDRECV;
+        /**
          * Every payload type on m=audio, in the order offered. The order is
          * the offerer's preference, and answering respects it instead of
          * imposing ours.
@@ -1481,6 +1488,44 @@ final class JoanSipBuilder {
         return sdpMedia(ip, rtpPort, "sendrecv");
     }
 
+    static final String DIR_SENDRECV = "sendrecv";
+    static final String DIR_SENDONLY = "sendonly";
+    static final String DIR_RECVONLY = "recvonly";
+    static final String DIR_INACTIVE = "inactive";
+
+    /**
+     * The direction an answer must carry for a given offer, RFC 3264 s6.1.
+     *
+     * <p>Answering a hold with the same attribute the peer sent is the
+     * common mistake: {@code sendonly} from them means they will only
+     * send, so we must answer {@code recvonly}. Echoing {@code sendonly}
+     * back claims we will not listen either, and the media stops in both
+     * directions on a call that both ends still believe is up.
+     */
+    static String mirrorDirection(String offer) {
+        if (DIR_SENDONLY.equals(offer)) {
+            return DIR_RECVONLY;
+        }
+        if (DIR_RECVONLY.equals(offer)) {
+            return DIR_SENDONLY;
+        }
+        if (DIR_INACTIVE.equals(offer)) {
+            return DIR_INACTIVE;
+        }
+        return DIR_SENDRECV;
+    }
+
+    /** Whether an offer direction means the peer has put us on hold. */
+    static boolean isHeldByPeer(String offer) {
+        return DIR_SENDONLY.equals(offer) || DIR_INACTIVE.equals(offer);
+    }
+
+    /** Whether we should be sending RTP given the answer we sent. */
+    static boolean sendsRtp(String ourDirection) {
+        return DIR_SENDRECV.equals(ourDirection)
+                || DIR_SENDONLY.equals(ourDirection);
+    }
+
     /** Hold is a=sendonly (RFC 3264). Resume is a=sendrecv. */
     static String sdpHold(String ip, int rtpPort, boolean held) {
         return sdpMedia(ip, rtpPort, held ? "sendonly" : "sendrecv");
@@ -1641,7 +1686,15 @@ final class JoanSipBuilder {
                 + "a=ptime:20\r\n"
                 + "a=rtcp:" + (rtpPort + 1) + "\r\n"
                 + (mux ? "a=rtcp-mux\r\n" : "")
-                + "a=sendrecv\r\n";
+                /* Mirror, never echo. A peer that sent sendonly is holding
+                 * us; the answer has to be recvonly. Answering sendonly
+                 * back says we will not listen either, which silences the
+                 * call in both directions while both ends still show it
+                 * connected. This was hardcoded sendrecv, so a hold
+                 * offer was answered as though nothing had changed. */
+                + "a=" + mirrorDirection(
+                        offer == null ? DIR_SENDRECV : offer.direction)
+                + "\r\n";
     }
 
     /** Parse, select and answer in one step. */
@@ -2032,6 +2085,15 @@ final class JoanSipBuilder {
         }
         Media m = new Media();
         for (String line : body.split("\r\n")) {
+            if (line.equals("a=sendonly")) {
+                m.direction = DIR_SENDONLY;
+            } else if (line.equals("a=recvonly")) {
+                m.direction = DIR_RECVONLY;
+            } else if (line.equals("a=inactive")) {
+                m.direction = DIR_INACTIVE;
+            } else if (line.equals("a=sendrecv")) {
+                m.direction = DIR_SENDRECV;
+            }
             if (line.startsWith("c=IN IP6 ")) {
                 m.ip = line.substring(9).trim();
             } else if (line.startsWith("c=IN IP4 ")) {

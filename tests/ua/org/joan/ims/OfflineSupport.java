@@ -30,5 +30,9 @@ class JoanMmTelFeature {
     static void onIncomingCall(android.content.Context c, String u, String n, String id) { incoming++; }
     static void onDialogEnded(String id) { ended++; }
     static void onCallEndedRemotely() { ended++; }
+    static int peerHolds, peerResumes;
+    static void onPeerHoldChanged(String sipCallId, boolean held) {
+        if (held) { peerHolds++; } else { peerResumes++; }
+    }
     static void onConferenceUsers(java.util.List<String> u) {}
 }

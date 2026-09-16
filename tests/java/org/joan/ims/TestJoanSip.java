@@ -22,6 +22,7 @@ public final class TestJoanSip {
         testAmrPayload();
         testOfferSummary();
         testSessionTimer();
+        testSdpDirection();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -1324,6 +1325,71 @@ public final class TestJoanSip {
                 "offer summary carries no SPIs or ports");
         check("none".equals(JoanSecAgree.offerSummary(null, null)),
                 "no offer reads as none");
+    }
+
+    private static void testSdpDirection() {
+        String head = "v=0\r\no=- 1 1 IN IP6 2001:db8::9\r\ns=-\r\n"
+                + "c=IN IP6 2001:db8::9\r\nt=0 0\r\n"
+                + "m=audio 40000 RTP/AVP 96\r\n"
+                + "a=rtpmap:96 AMR-WB/16000/1\r\n"
+                + "a=fmtp:96 octet-align=1\r\n";
+
+        /* RFC 3264 s6.1: an offer with no direction attribute is sendrecv,
+         * not unknown. */
+        check(JoanSipBuilder.DIR_SENDRECV.equals(
+                        JoanSipBuilder.parseSdp(head).direction),
+                "an offer with no direction attribute is sendrecv");
+        check(JoanSipBuilder.DIR_SENDONLY.equals(
+                        JoanSipBuilder.parseSdp(head + "a=sendonly\r\n").direction),
+                "a=sendonly is read");
+        check(JoanSipBuilder.DIR_INACTIVE.equals(
+                        JoanSipBuilder.parseSdp(head + "a=inactive\r\n").direction),
+                "a=inactive is read");
+        check(JoanSipBuilder.DIR_RECVONLY.equals(
+                        JoanSipBuilder.parseSdp(head + "a=recvonly\r\n").direction),
+                "a=recvonly is read");
+
+        /* Mirror, not echo. */
+        check(JoanSipBuilder.DIR_RECVONLY.equals(
+                        JoanSipBuilder.mirrorDirection(JoanSipBuilder.DIR_SENDONLY)),
+                "sendonly is answered recvonly, not sendonly");
+        check(JoanSipBuilder.DIR_SENDONLY.equals(
+                        JoanSipBuilder.mirrorDirection(JoanSipBuilder.DIR_RECVONLY)),
+                "recvonly is answered sendonly");
+        check(JoanSipBuilder.DIR_INACTIVE.equals(
+                        JoanSipBuilder.mirrorDirection(JoanSipBuilder.DIR_INACTIVE)),
+                "inactive is answered inactive");
+        check(JoanSipBuilder.DIR_SENDRECV.equals(
+                        JoanSipBuilder.mirrorDirection(JoanSipBuilder.DIR_SENDRECV))
+                        && JoanSipBuilder.DIR_SENDRECV.equals(
+                                JoanSipBuilder.mirrorDirection(null)),
+                "sendrecv and an unknown direction answer sendrecv");
+
+        check(JoanSipBuilder.isHeldByPeer(JoanSipBuilder.DIR_SENDONLY)
+                        && JoanSipBuilder.isHeldByPeer(JoanSipBuilder.DIR_INACTIVE),
+                "sendonly and inactive both mean the peer holds us");
+        check(!JoanSipBuilder.isHeldByPeer(JoanSipBuilder.DIR_SENDRECV)
+                        && !JoanSipBuilder.isHeldByPeer(JoanSipBuilder.DIR_RECVONLY),
+                "sendrecv and recvonly are not a hold");
+        check(JoanSipBuilder.sendsRtp(JoanSipBuilder.DIR_SENDRECV)
+                        && JoanSipBuilder.sendsRtp(JoanSipBuilder.DIR_SENDONLY)
+                        && !JoanSipBuilder.sendsRtp(JoanSipBuilder.DIR_RECVONLY)
+                        && !JoanSipBuilder.sendsRtp(JoanSipBuilder.DIR_INACTIVE),
+                "we send RTP only when our own direction says we do");
+
+        /* And the answer actually carries it. */
+        JoanSipBuilder.Media hold = JoanSipBuilder.parseSdp(
+                head + "a=sendonly\r\n");
+        String ans = JoanSipBuilder.sdpAnswer("2001:db8::1", 40000, hold,
+                JoanSipBuilder.selectAnswerCodec(hold));
+        check(ans.indexOf("a=recvonly\r\n") > 0
+                        && ans.indexOf("a=sendrecv") < 0,
+                "the answer to a hold offer is recvonly, not sendrecv");
+        JoanSipBuilder.Media norm = JoanSipBuilder.parseSdp(head);
+        String ans2 = JoanSipBuilder.sdpAnswer("2001:db8::1", 40000, norm,
+                JoanSipBuilder.selectAnswerCodec(norm));
+        check(ans2.indexOf("a=sendrecv\r\n") > 0,
+                "an ordinary offer is still answered sendrecv");
     }
 
     private static void testSessionTimer() {

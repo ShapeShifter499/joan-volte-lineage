@@ -510,6 +510,49 @@ final class JoanSipUa {
         return false;
     }
 
+    /**
+     * The peer held or resumed us. Answer 200 with the mirrored
+     * direction, move the media, and tell the framework so the UI says
+     * "on hold" rather than showing a connected call with no audio.
+     */
+    private static void handlePeerDirectionChange(String rx,
+                                                  JoanSipBuilder.Media offer) {
+        boolean held = JoanSipBuilder.isHeldByPeer(offer.direction);
+        String ours = JoanSipBuilder.mirrorDirection(offer.direction);
+        JoanTrace.note("app inbound re-INVITE peer " + (held ? "hold" : "resume")
+                + " their=" + offer.direction + " ours=" + ours);
+        String sdp = JoanSipBuilder.sdpAnswer(sId.localIp, RTP_PORT, offer,
+                JoanSipBuilder.selectAnswerCodec(offer));
+        String seOut = sessionTimerOnInboundRefresh(rx, "re-INVITE");
+        try {
+            sendReply(buildResponse(rx, 200, "OK", sId, sOurToTag, sdp,
+                    seOut.isEmpty() ? null : seOut)
+                    .getBytes(StandardCharsets.US_ASCII));
+        } catch (Exception e) {
+            JoanTrace.note("app peer hold answer send fail");
+            return;
+        }
+        sLiveHeld = held;
+        if (held) {
+            /* Keep the socket and the dialog; only the audio stops. The
+             * peer is still entitled to send us media in the sendonly
+             * case, but there is nothing to play it into while the
+             * framework shows the call held. */
+            JoanMedia.stop();
+        } else if (sMediaIp != null) {
+            startMediaForActiveCall();
+        }
+        JoanMmTelFeature.onPeerHoldChanged(
+                JoanSipBuilder.header(rx, "Call-ID"), held);
+    }
+
+    /** Restart RTP on the currently negotiated parameters. */
+    private static boolean startMediaForActiveCall() {
+        return JoanMedia.startRtp(sApp, sNet, sLocal, sMediaIp, sMediaPort,
+                sMediaRtcpPort, sMediaMux, sMediaPt, sMediaAmrWb,
+                sMediaAmrBitrate, sMediaAmrOct, sMediaAmrMaxMode, sMediaTePt);
+    }
+
     private static void sessionTimerRefresh(String callId) {
         boolean useUpdate = JoanSessionTimer.refreshWithUpdate(
                 JoanSipBuilder.sessionRefreshMethod(), sSePeerAllow);
@@ -781,10 +824,7 @@ final class JoanSipUa {
                 /* Rebind the media first. The re-INVITE tells the peer to
                  * send here, and we want to be listening before it does
                  * rather than dropping the first seconds of audio. */
-                boolean media = JoanMedia.startRtp(sApp, sNet, sLocal,
-                        sMediaIp, sMediaPort, sMediaRtcpPort, sMediaMux,
-                        sMediaPt, sMediaAmrWb, sMediaAmrBitrate,
-                        sMediaAmrOct, sMediaAmrMaxMode, sMediaTePt);
+                boolean media = startMediaForActiveCall();
                 if (!media) {
                     JoanTrace.note("app migrate: media would not restart;"
                             + " ending call");
@@ -2759,6 +2799,21 @@ final class JoanSipUa {
              * the peer then tears the call down when its own timer runs
              * out -- a long call dying for a protocol reason, which is
              * the exact failure session timers exist to prevent. */
+            /* A direction change is the peer holding or resuming us.
+             * RFC 3264 s8.4 makes this an ordinary re-INVITE, and it is
+             * the one the far end sends when its user presses hold.
+             * Declining it 488 refuses a request the peer is entitled to
+             * make, and cores differ on whether that ends the call --
+             * some drop it, which is a user pressing hold and losing the
+             * call. Answer it, mirror the direction, and stop sending
+             * RTP into a stream nobody is listening to. */
+            JoanSipBuilder.Media reOffer = JoanSipBuilder.parseSdp(rx);
+            if (reOffer != null && reInviteKeepsNegotiatedMedia(rx)
+                    && !JoanSipBuilder.DIR_SENDRECV.equals(reOffer.direction)
+                            != sLiveHeld) {
+                handlePeerDirectionChange(rx, reOffer);
+                return;
+            }
             String refreshSe = JoanSipBuilder.header(rx, "Session-Expires");
             if (refreshSe != null
                     && JoanSessionTimer.parseExpires(refreshSe) > 0

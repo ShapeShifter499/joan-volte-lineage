@@ -93,6 +93,17 @@ public class JoanMmTelFeature extends MmTelFeature {
         }
     }
 
+    /** The far end held or resumed the call identified by its Call-ID. */
+    static void onPeerHoldChanged(String sipCallId, boolean held) {
+        JoanCallSession s = sipCallId != null ? sBySip.get(sipCallId) : null;
+        if (s == null) {
+            s = sIncoming;
+        }
+        if (s != null) {
+            s.onPeerHold(held);
+        }
+    }
+
     /** conference-info participant list from the focus NOTIFYs. */
     static void onConferenceUsers(java.util.List<String> users) {
         JoanCallSession conf = sConference;
