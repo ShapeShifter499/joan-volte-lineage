@@ -472,6 +472,12 @@ final class JoanMedia {
         sTePt = telephoneEventPt;
         sDtmfRxSeen = false;
         sRtpWrongPt = 0;
+        sPeerSsrc = 0;
+        sLastSr = 0;
+        sLastSrAtMs = 0;
+        sRx.reset();
+        sRx.setClockRate(amrWideband == null ? PCMU_HZ
+                : (amrWideband ? 16000 : 8000));
         finishDtmfQueue();
         sDtmfHold = false;
         sDtmfTone = null;
@@ -938,6 +944,18 @@ final class JoanMedia {
                     sRtpWrongPt++;
                     continue;
                 }
+                /* Account for it before decoding. The statistics are owed
+                 * to the far end whether or not we go on to play it, and
+                 * they are what fills the RTCP report block. */
+                int inSeq = ((down[2] & 0xff) << 8) | (down[3] & 0xff);
+                long inTs = get32(down, 4) & 0xffffffffL;
+                if (sPeerSsrc == 0) {
+                    sPeerSsrc = get32(down, 8);
+                }
+                sRx.observe(inSeq, inTs,
+                        (System.nanoTime() / 1000000L)
+                                * Math.max(1, sRate / 1000),
+                        System.currentTimeMillis());
                 int off = RTP_HDR;
                 m -= RTP_HDR;
                 if (m <= 0) {
@@ -1033,6 +1051,7 @@ final class JoanMedia {
                     + level(dlSumSq, dlSamples, dlPeak, dlActSq, dlActSamples)
                     + " " + rtpSourceSummary(sRtpFromDest, sRtpFromOther)
                     + " " + rtcpSummary()
+                    + " rx{" + sRx.summary() + "}"
                     + (sRtpWrongPt > 0 ? " wrong_pt=" + sRtpWrongPt : "")
                     + (sDtmfRxSeen ? " dtmf_rx=yes" : ""));
         }
