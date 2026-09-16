@@ -622,6 +622,23 @@ final class JoanSipUa {
         }, "joan-sip-regevent").start();
     }
 
+    /**
+     * Our +sip.instance value, which the REGISTER Contact carries.
+     *
+     * <p>Globally unique to this handset, so it is a far better
+     * discriminator than the host if the network echoes it back -- and
+     * unlike "accept any contact", it cannot let another endpoint on the
+     * same public identity deregister this one. The value is derived from
+     * the IMEI and must never be logged; only whether it matched.
+     */
+    private static String ourInstanceId() {
+        JoanSipBuilder.Id id = sId;
+        if (id == null || id.imei == null || id.imei.isEmpty()) {
+            return null;
+        }
+        return JoanSipBuilder.imeiInstance(id.imei);
+    }
+
     /** Our own contact URI, for matching ourselves in a reginfo body. */
     private static String ourContactUri() {
         JoanSipBuilder.Id id = sId;
@@ -652,7 +669,8 @@ final class JoanSipUa {
              * values only. */
             JoanTrace.note("reg-event notify state="
                     + (state == JoanRegInfo.STATE_ACTIVE ? "active" : "unknown")
-                    + " " + JoanRegInfo.describe(body, ourContactUri()));
+                    + " " + JoanRegInfo.describe(body, ourContactUri(),
+                            ourInstanceId()));
             return;
         }
         boolean retry = state == JoanRegInfo.STATE_TERMINATED_REREGISTER;

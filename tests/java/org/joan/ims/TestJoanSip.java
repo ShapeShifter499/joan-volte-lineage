@@ -1558,6 +1558,37 @@ public final class TestJoanSip {
                 "<reginfo state=\"full\"></reginfo>", ours);
         check(d3.contains("contacts=0"),
                 "a reginfo with no contacts at all says so");
+
+        /* Names, never values: a body's shape has to be reportable
+         * without anybody pasting subscriber identities into a bug
+         * report. */
+        check("id|state|event".equals(JoanRegInfo.attrNames(
+                        "<contact id=\"76\" state=\"active\" event=\"registered\">")),
+                "attrNames lists names in order");
+        check(JoanRegInfo.attrNames(
+                        "<contact id=\"a=b\" state=\"active\">").indexOf("b") < 0,
+                "a value containing = is not read as another attribute");
+        check("uri|unknown-param".equals(JoanRegInfo.childNames(
+                        "<uri>sip:x@y</uri><unknown-param name=\"+sip.instance\">z"
+                        + "</unknown-param>")),
+                "childNames lists each child once, without values");
+
+        String inst = "<reginfo><registration state=\"active\">"
+                + "<contact id=\"1\" state=\"active\" event=\"registered\">"
+                + "<uri>sip:x@host</uri>"
+                + "<unknown-param name=\"+sip.instance\">"
+                + "&lt;urn:gsma:imei:11111111-222222-3&gt;</unknown-param>"
+                + "</contact></registration></reginfo>";
+        String d4 = JoanRegInfo.describe(inst, ours, "11111111-222222-3");
+        check(d4.contains("inst_seen=true") && d4.contains("inst_match=true"),
+                "an echoed +sip.instance is detected and matched");
+        check(d4.indexOf("11111111") < 0,
+                "describe never carries the instance value");
+        String d5 = JoanRegInfo.describe(inst, ours, "99999999-888888-7");
+        check(d5.contains("inst_seen=true") && d5.contains("inst_match=false"),
+                "another device's instance does not read as ours");
+        check(JoanRegInfo.describe(active, ours, "x").contains("inst_seen=false"),
+                "a body with no instance parameter says so");
     }
 
     private static void testSessionTimer() {

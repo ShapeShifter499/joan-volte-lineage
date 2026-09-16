@@ -123,7 +123,83 @@ final class JoanRegInfo {
      * guessing between them from "unknown" is how a diagnostic becomes a
      * second mystery.
      */
+    /** Attribute names on one element, values deliberately dropped. */
+    static String attrNames(String element) {
+        StringBuilder b = new StringBuilder(32);
+        int i = 0;
+        while (i < element.length()) {
+            int eq = element.indexOf('=', i);
+            if (eq < 0) {
+                break;
+            }
+            int st = eq - 1;
+            while (st >= 0 && !Character.isWhitespace(element.charAt(st))) {
+                st--;
+            }
+            String name = element.substring(st + 1, eq).trim();
+            if (!name.isEmpty() && !name.startsWith("<")) {
+                if (b.length() > 0) {
+                    b.append('|');
+                }
+                b.append(name);
+            }
+            /* Step past the value so a value containing '=' is not read
+             * as another attribute. */
+            int vs = eq + 1;
+            if (vs < element.length()
+                    && (element.charAt(vs) == '"' || element.charAt(vs) == '\'')) {
+                int ve = element.indexOf(element.charAt(vs), vs + 1);
+                i = ve < 0 ? element.length() : ve + 1;
+            } else {
+                i = eq + 1;
+            }
+        }
+        return b.toString();
+    }
+
+    /** Child element names inside one element's content, values dropped. */
+    static String childNames(String inner) {
+        StringBuilder b = new StringBuilder(32);
+        int at = 0;
+        while (true) {
+            int lt = inner.indexOf('<', at);
+            if (lt < 0 || lt + 1 >= inner.length()) {
+                break;
+            }
+            at = lt + 1;
+            if (inner.charAt(lt + 1) == '/') {
+                continue;
+            }
+            int e = lt + 1;
+            while (e < inner.length()
+                    && (Character.isLetterOrDigit(inner.charAt(e))
+                            || inner.charAt(e) == ':' || inner.charAt(e) == '-'
+                            || inner.charAt(e) == '_')) {
+                e++;
+            }
+            String name = inner.substring(lt + 1, e);
+            if (name.isEmpty()) {
+                continue;
+            }
+            if (b.indexOf(name) < 0) {
+                if (b.length() > 0) {
+                    b.append('|');
+                }
+                b.append(name);
+            }
+        }
+        return b.toString();
+    }
+
     static String describe(String body, String ourUri) {
+        return describe(body, ourUri, null);
+    }
+
+    /**
+     * @param ourInstance our +sip.instance value, or null. Only whether it
+     *        appears is reported -- never the value, which is the IMEI.
+     */
+    static String describe(String body, String ourUri, String ourInstance) {
         if (body == null || body.isEmpty()) {
             return "body=empty";
         }
@@ -139,6 +215,8 @@ final class JoanRegInfo {
         int mine = 0;
         int at = 0;
         StringBuilder states = new StringBuilder();
+        String shape = "";
+        String kids = "";
         while (true) {
             int c = nextContact(low, at);
             if (c < 0) {
@@ -164,10 +242,27 @@ final class JoanRegInfo {
             states.append(attr(element, "state")).append('/')
                     .append(attr(element, "event"))
                     .append(ours ? "(ours)" : "");
+            if (shape.isEmpty()) {
+                shape = attrNames(element);
+                kids = childNames(inner);
+            }
         }
         d.append(" contacts=").append(n).append(" matched=").append(mine);
         if (states.length() > 0) {
             d.append(" [").append(states).append(']');
+        }
+        /* The shape of one contact: which attributes and children exist,
+         * so a better discriminator than the host can be found without
+         * anybody pasting a body containing subscriber identities into a
+         * bug report. Names only. */
+        if (!shape.isEmpty()) {
+            d.append(" shape{attrs=").append(shape)
+                    .append(" children=").append(kids).append('}');
+        }
+        d.append(" inst_seen=").append(low.indexOf("+sip.instance") >= 0);
+        if (ourInstance != null && !ourInstance.isEmpty()) {
+            d.append(" inst_match=").append(
+                    low.indexOf(ourInstance.toLowerCase(java.util.Locale.US)) >= 0);
         }
         return d.toString();
     }
