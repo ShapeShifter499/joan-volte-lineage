@@ -1710,9 +1710,56 @@ final class JoanAppRegister {
          * explicit release lets the driver re-register instead of
          * sleeping until refresh.
          */
-        static boolean clearOnLost(String reason, boolean uaRegistered) {
-            return POKE_IMS_LOST.equals(reason) && uaRegistered;
+        /**
+         * Whether an IMS loss should tear the registration down now.
+         *
+         * <p>Not while a call is up. The IMS bearer drops briefly for
+         * reasons a call should survive -- a PDN re-establishment, a
+         * moment of no coverage -- and releasing the UA takes the live
+         * dialog with it, so a blip becomes a dropped call. adopt()
+         * already refuses to disturb dialogs when re-registering; loss
+         * needs the same restraint.
+         *
+         * <p>Deferring is not ignoring: the caller starts a grace period
+         * and releases anyway if the network does not come back, which is
+         * the difference between riding out a handover and pretending a
+         * dead call is alive.
+         */
+        static boolean clearOnLost(String reason, boolean uaRegistered,
+                                   boolean callActive) {
+            return POKE_IMS_LOST.equals(reason) && uaRegistered && !callActive;
         }
+
+        /** Whether a loss during a call should start the grace period. */
+        static boolean deferClearForCall(String reason, boolean uaRegistered,
+                                         boolean callActive) {
+            return POKE_IMS_LOST.equals(reason) && uaRegistered && callActive;
+        }
+
+        /**
+         * Whether a loss held for a call may now be acted on.
+         *
+         * <p>The condition is the CALL ending, not a clock. AOSP holds a
+         * registration failure with SetHeldByCall() for as long as an IMS
+         * call exists and clears it through the transaction state, never
+         * on a timer -- a fixed grace period would drop a call that is
+         * simply in a long tunnel, which is the opposite of the point.
+         * Ending the call is call-layer work: no media and the peer's BYE
+         * or the user finish it, and the loss is honoured straight after.
+         *
+         * <p>The timeout that remains is a backstop for the case where the
+         * call state itself gets stuck, not the policy.
+         */
+        static boolean heldLossMayClear(long lostAtMs, long nowMs,
+                                        boolean callActive) {
+            if (lostAtMs <= 0) {
+                return false;
+            }
+            return !callActive || nowMs - lostAtMs >= LOSS_HOLD_BACKSTOP_MS;
+        }
+
+        /** Backstop only; the call ending is what normally clears a hold. */
+        static final long LOSS_HOLD_BACKSTOP_MS = 120000;
 
         /**
          * Whether an availability poke must re-acquire a binding that a

@@ -1188,6 +1188,36 @@ public final class TestJoanSip {
         check(JoanAmr.modeCount(true) == 9 && JoanAmr.modeCount(false) == 8,
                 "nine wideband modes, eight narrowband");
 
+        /* RTCP receiver reports: what the far end says it is getting.
+         * An RR is header(8) + one 24-byte report block; fraction lost is
+         * the byte after the reported SSRC, cumulative loss the next
+         * three, jitter at offset 16. */
+        byte[] rr = new byte[32];
+        rr[0] = (byte) 0x81;              // V=2, RC=1
+        rr[1] = (byte) 201;               // RR
+        rr[2] = 0; rr[3] = 7;             // length in words - 1
+        rr[8] = 0; rr[9] = 0; rr[10] = 0; rr[11] = 9;   // reported SSRC
+        rr[12] = (byte) 64;               // fraction lost = 64/256 = 25%
+        rr[13] = 0; rr[14] = 1; rr[15] = 44;            // cumulative = 300
+        rr[24] = 0; rr[25] = 0; rr[26] = 2; rr[27] = 88; // jitter = 600
+        JoanRtcp.Report rep = JoanRtcp.parse(rr, rr.length);
+        check(rep != null && rep.lossPercent() == 25,
+                "fraction lost is read as a percentage");
+        check(rep != null && rep.cumulativeLost == 300,
+                "cumulative loss spans three bytes");
+        check(rep != null && rep.jitter == 600, "interarrival jitter is read");
+        /* A truncated or unknown packet must be ignored, never read past. */
+        check(JoanRtcp.parse(new byte[] { (byte) 0x81, (byte) 201, 0, 7 }, 4) == null,
+                "a truncated RTCP packet yields no report");
+        byte[] sdes = new byte[12];
+        sdes[0] = (byte) 0x81; sdes[1] = (byte) 202; sdes[2] = 0; sdes[3] = 2;
+        check(JoanRtcp.parse(sdes, sdes.length) == null,
+                "a non-report RTCP type is skipped, not misread");
+        check(JoanRtcp.isRtcp(new byte[] { (byte) 0x80, (byte) 201, 0, 7, 0, 0, 0, 0 }, 8),
+                "an RR on a muxed port is recognised as RTCP");
+        check(!JoanRtcp.isRtcp(new byte[] { (byte) 0x80, (byte) 96, 0, 7, 0, 0, 0, 0 }, 8),
+                "a dynamic audio payload type is not mistaken for RTCP");
+
         /* A multi-frame payload: two ToCs, then both frames. We take the
          * first, since this UA offers ptime 20 and never asks for more. */
         byte[] multi = new byte[1 + 2 + 64];

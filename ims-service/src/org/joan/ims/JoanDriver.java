@@ -38,6 +38,9 @@ final class JoanDriver {
     private static final long WAIT_MS = 60_000L;
     /** Quiet user-off state: don't keep poking radio/SIM every minute. */
     private static final long USER_OFF_IDLE_MS = 10 * 60_000L;
+    /** When a loss was deferred because a call was up; 0 when not. */
+    private static volatile long sLostDuringCallAtMs;
+
     /** Failed REGISTER backoff range. */
     private static final long REG_RETRY_MIN_MS = 60_000L;
     private static final long REG_RETRY_MAX_MS = 15 * 60_000L;
@@ -103,9 +106,17 @@ final class JoanDriver {
                     JoanTrace.note("IMS network back after loss; "
                             + "re-registering");
                 }
+                sLostDuringCallAtMs = 0;
                 return;
             }
-            if (JoanAppRegister.JoanRegLifecycle.clearOnLost(reason, ua)) {
+            if (JoanAppRegister.JoanRegLifecycle.deferClearForCall(
+                    reason, ua, JoanSipUa.callActive())) {
+                sLostDuringCallAtMs = System.currentTimeMillis();
+                JoanTrace.note("IMS network lost during a call; held until "
+                        + "the call ends");
+                wake();
+            } else if (JoanAppRegister.JoanRegLifecycle.clearOnLost(
+                    reason, ua, JoanSipUa.callActive())) {
                 /* Wake first so a hiccup in the release/broadcast path can
                  * never leave the driver sleeping on stale state. */
                 wake();
@@ -116,6 +127,14 @@ final class JoanDriver {
                 wake();
             }
             return;
+        }
+        if (JoanAppRegister.JoanRegLifecycle.POKE_IMS_AVAILABLE.equals(reason)) {
+            /* The network came back inside the grace period: the call rode
+             * out the gap and nothing needs tearing down. */
+            if (sLostDuringCallAtMs != 0) {
+                JoanTrace.note("IMS network back within the call grace period");
+                sLostDuringCallAtMs = 0;
+            }
         }
         if (!ua) {
             sRegisterBackoffMs = REG_RETRY_MIN_MS;
@@ -173,6 +192,18 @@ final class JoanDriver {
     private static void loop(Context app) {
         while (true) {
             try {
+                /* A loss deferred for a live call has to expire, or a call
+                 * the network has actually dropped stays "up" forever. */
+                long lostAt = sLostDuringCallAtMs;
+                if (lostAt != 0
+                        && JoanAppRegister.JoanRegLifecycle.heldLossMayClear(
+                                lostAt, System.currentTimeMillis(),
+                                JoanSipUa.callActive())) {
+                    sLostDuringCallAtMs = 0;
+                    JoanTrace.note("IMS loss held for a call is now honoured; "
+                            + "releasing");
+                    JoanSipUa.release();
+                }
                 Discovery d = discover(app);
                 if (d.cycle == null) {
                     JoanRegistration.setRegistered(false, null);

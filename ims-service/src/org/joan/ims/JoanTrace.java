@@ -59,10 +59,28 @@ final class JoanTrace {
                 if (++sWrites % 64 == 0 && sFile.length() > MAX_BYTES) {
                     fresh = true;
                 }
+                if (fresh) {
+                    /* Rotate rather than discard. Truncation threw away
+                     * everything that led up to whatever is being
+                     * investigated -- on 2026-09-16 it ate an inbound call
+                     * one second before the outbound call that survived,
+                     * while both were being chased. The previous file is
+                     * the half a tester most often needs; one extra 256 KB
+                     * in device-protected storage is a cheap trade. */
+                    File prev = new File(sFile.getParentFile(),
+                            sFile.getName() + ".1");
+                    if (prev.exists() && !prev.delete()) {
+                        Log.w(TAG, "could not remove rotated trace");
+                    }
+                    if (!sFile.renameTo(prev)) {
+                        Log.w(TAG, "could not rotate trace; truncating");
+                    }
+                }
                 FileWriter fw = new FileWriter(sFile, !fresh);
                 if (fresh) {
-                    fw.write(ts + " trace truncated at " + MAX_BYTES
-                            + " bytes build=" + sLastBuild + "\n");
+                    fw.write(ts + " trace rotated at " + MAX_BYTES
+                            + " bytes build=" + sLastBuild
+                            + "; previous in " + sFile.getName() + ".1\n");
                     writeRemembered(fw, ts);
                 }
                 fw.write(ts + " " + msg + "\n");

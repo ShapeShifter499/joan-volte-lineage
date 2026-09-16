@@ -47,6 +47,75 @@ final class JoanMedia {
     private static volatile boolean sRun;
     private static Thread sCap;
     private static Thread sPlay;
+    private static Thread sRtcpRx;
+    /** Bound only when RTCP is NOT muxed onto the RTP port. */
+    private static volatile DatagramSocket sRtcpSock;
+    private static volatile long sRtcpReports;
+    private static volatile int sLossFrac = -1;
+    private static volatile int sLossCum;
+    private static volatile int sJitter;
+    private static volatile int sWorstLossFrac;
+
+    /** Accept one RTCP packet and keep its first receiver-report block. */
+    static void onRtcp(byte[] b, int len) {
+        JoanRtcp.Report r = JoanRtcp.parse(b, len);
+        if (r == null) {
+            return;
+        }
+        sRtcpReports++;
+        sLossFrac = r.fractionLost;
+        sLossCum = r.cumulativeLost;
+        sJitter = r.jitter;
+        if (r.fractionLost > sWorstLossFrac) {
+            sWorstLossFrac = r.fractionLost;
+            if (r.lossPercent() >= 5) {
+                JoanTrace.note("rtcp peer reports loss " + r.lossPercent()
+                        + "% jitter=" + r.jitter);
+            }
+        }
+    }
+
+    /* Readers for the host tests: the parse is the part worth pinning. */
+    static int lastLossPercent() {
+        return sLossFrac < 0 ? -1 : sLossFrac * 100 / 256;
+    }
+
+    static int lastCumulativeLost() {
+        return sLossCum;
+    }
+
+    static int lastJitter() {
+        return sJitter;
+    }
+
+    /** What the peer last told us about the stream it is receiving. */
+    private static String rtcpSummary() {
+        if (sRtcpReports == 0) {
+            return "rtcp_rr=none";
+        }
+        return "rtcp_rr=" + sRtcpReports + " loss=" + (sLossFrac * 100 / 256)
+                + "% worst=" + (sWorstLossFrac * 100 / 256)
+                + "% cum=" + sLossCum + " jitter=" + sJitter;
+    }
+
+    private static void rtcpReceive() {
+        byte[] buf = new byte[1500];
+        DatagramPacket p = new DatagramPacket(buf, buf.length);
+        while (sRun) {
+            DatagramSocket s = sRtcpSock;
+            if (s == null) {
+                return;
+            }
+            try {
+                s.receive(p);
+            } catch (java.net.SocketTimeoutException e) {
+                continue;
+            } catch (Exception e) {
+                return;     // closed by stop(), or the socket died
+            }
+            onRtcp(p.getData(), p.getLength());
+        }
+    }
     private static DatagramSocket sSock;
 
     /** Consecutive codec errors tolerated before a direction gives up. */
@@ -190,10 +259,40 @@ final class JoanMedia {
             return false;
         }
         sRun = true;
+        sRtcpReports = 0;
+        sLossFrac = -1;
+        sLossCum = 0;
+        sJitter = 0;
+        sWorstLossFrac = 0;
+        if (!sMux) {
+            /* Non-muxed RTCP arrives on RTP+1, which nothing bound before
+             * this: the kernel dropped every receiver report the peer
+             * sent. Sending is left exactly as it was -- e7783f8 found
+             * that this core needs the SR on the RTP 5-tuple, and that is
+             * not a thing to disturb while adding a reader. */
+            try {
+                DatagramSocket r = new DatagramSocket(null);
+                r.setReuseAddress(true);
+                if (net != null) {
+                    net.bindSocket(r);
+                }
+                r.bind(new InetSocketAddress(local, JoanSipUa.RTP_PORT + 1));
+                r.setSoTimeout(500);
+                sRtcpSock = r;
+            } catch (Exception e) {
+                JoanTrace.note("rtcp bind " + e.getClass().getSimpleName()
+                        + "; receiver reports will not be seen");
+                sRtcpSock = null;
+            }
+        }
         sCap = new Thread(() -> capture(app), "joan-ims-cap");
         sPlay = new Thread(() -> playback(app), "joan-ims-play");
         sCap.start();
         sPlay.start();
+        if (sRtcpSock != null) {
+            sRtcpRx = new Thread(JoanMedia::rtcpReceive, "joan-ims-rtcp");
+            sRtcpRx.start();
+        }
         sRtpFromDest = 0;
         sRtpFromOther = 0;
         JoanTrace.note("media start rtp mux=" + mux
@@ -212,13 +311,19 @@ final class JoanMedia {
 
     static void stop() {
         sRun = false;
-        Thread[] ts = { sCap, sPlay };
+        Thread[] ts = { sCap, sPlay, sRtcpRx };
         sCap = null;
         sPlay = null;
+        sRtcpRx = null;
         DatagramSocket sock = sSock;
         sSock = null;
         if (sock != null) {
             sock.close();
+        }
+        DatagramSocket rs = sRtcpSock;
+        sRtcpSock = null;
+        if (rs != null) {
+            rs.close();
         }
         for (Thread t : ts) {
             if (t == null) {
@@ -473,6 +578,16 @@ final class JoanMedia {
                 } catch (SocketTimeoutException e) {
                     continue;
                 }
+                /* With rtcp-mux the peer's reports share this port.
+                 * RFC 5761 4: RTCP types 200-204 sit at 72-76 in the
+                 * payload-type octet, which no audio payload type we
+                 * negotiate can collide with. */
+                byte[] raw = in.getData();
+                int rawLen = in.getLength();
+                if (sMux && JoanRtcp.isRtcp(raw, rawLen)) {
+                    onRtcp(raw, rawLen);
+                    continue;
+                }
                 InetAddress from = in.getAddress();
                 if (from != null && from.equals(sDest)) {
                     sRtpFromDest++;
@@ -592,7 +707,8 @@ final class JoanMedia {
             try { if (trk != null) trk.release(); } catch (Throwable ignored) {}
             JoanTrace.note("media dl stopped frames=" + dl + " "
                     + level(dlSumSq, dlSamples, dlPeak, dlActSq, dlActSamples)
-                    + " " + rtpSourceSummary(sRtpFromDest, sRtpFromOther));
+                    + " " + rtpSourceSummary(sRtpFromDest, sRtpFromOther)
+                    + " " + rtcpSummary());
         }
     }
 

@@ -591,11 +591,38 @@ public class TestJoanRegistration {
                 "routine-poke-classified");
         check(!JoanAppRegister.JoanRegLifecycle.routinePoke("manual poke"),
                 "manual-poke-classified");
-        check(JoanAppRegister.JoanRegLifecycle.clearOnLost(JoanAppRegister.JoanRegLifecycle.POKE_IMS_LOST, true),
+        /* A loss during a call is deferred, not acted on: the bearer drops
+         * briefly for reasons a call should survive, and releasing the UA
+         * takes the dialog with it. Deferring only counts if it expires. */
+        check(!JoanAppRegister.JoanRegLifecycle.clearOnLost(
+                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_LOST, true, true),
+                "a loss during a call does not clear immediately");
+        check(JoanAppRegister.JoanRegLifecycle.deferClearForCall(
+                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_LOST, true, true),
+                "a loss during a call starts the grace period");
+        check(!JoanAppRegister.JoanRegLifecycle.deferClearForCall(
+                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_LOST, true, false),
+                "a loss with no call is not deferred");
+        check(!JoanAppRegister.JoanRegLifecycle.deferClearForCall(
+                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_AVAILABLE, true, true),
+                "availability never starts a grace period");
+        /* The hold ends when the CALL ends, not on a clock: a fixed grace
+         * period would drop a call that is merely in a long tunnel.
+         * AOSP holds with SetHeldByCall() for as long as the call exists. */
+        long bs = JoanAppRegister.JoanRegLifecycle.LOSS_HOLD_BACKSTOP_MS;
+        check(!JoanAppRegister.JoanRegLifecycle.heldLossMayClear(1000, 1000 + bs - 1, true),
+                "a held loss is not honoured while the call is still up");
+        check(JoanAppRegister.JoanRegLifecycle.heldLossMayClear(1000, 1001, false),
+                "the call ending honours the loss immediately");
+        check(JoanAppRegister.JoanRegLifecycle.heldLossMayClear(1000, 1000 + bs, true),
+                "a stuck call state still releases at the backstop");
+        check(!JoanAppRegister.JoanRegLifecycle.heldLossMayClear(0, 1 << 30, false),
+                "no held loss means nothing to honour");
+        check(JoanAppRegister.JoanRegLifecycle.clearOnLost(JoanAppRegister.JoanRegLifecycle.POKE_IMS_LOST, true, false),
                 "lost-clears-registered");
-        check(!JoanAppRegister.JoanRegLifecycle.clearOnLost(JoanAppRegister.JoanRegLifecycle.POKE_IMS_LOST, false),
+        check(!JoanAppRegister.JoanRegLifecycle.clearOnLost(JoanAppRegister.JoanRegLifecycle.POKE_IMS_LOST, false, false),
                 "lost-clears-nothing-when-unregistered");
-        check(!JoanAppRegister.JoanRegLifecycle.clearOnLost(JoanAppRegister.JoanRegLifecycle.POKE_IMS_AVAILABLE, true),
+        check(!JoanAppRegister.JoanRegLifecycle.clearOnLost(JoanAppRegister.JoanRegLifecycle.POKE_IMS_AVAILABLE, true, false),
                 "available-never-clears");
         check(JoanAppRegister.JoanRegLifecycle.reacquireAfterLoss(
                         JoanAppRegister.JoanRegLifecycle.POKE_IMS_AVAILABLE, true),
