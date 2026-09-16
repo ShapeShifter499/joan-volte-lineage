@@ -101,20 +101,27 @@ final class JoanAmrCodec {
         return names;
     }
 
+    /** Frames pushed through before judging: both codecs pipeline. */
+    private static final int SELF_TEST_FRAMES = 12;
+
     /**
-     * Open the codec and round-trip one frame before we advertise it.
+     * Open the codec and round-trip real frames before we advertise it.
      *
-     * <p>A listing in MediaCodecList is not a promise that the codec works:
-     * AOSP can offer whatever carrier config names because an OEM has
-     * qualified the device against it, and we have no such guarantee on an
-     * arbitrary LineageOS build. Encoding and decoding a frame is the only
-     * evidence available in its place, and it costs a few hundred
-     * milliseconds once per boot.
+     * <p>A listing in MediaCodecList is not a promise that the codec works.
+     * AOSP can name whatever carrier config enables because an OEM has
+     * qualified the device against it; on an arbitrary LineageOS build
+     * there is no such guarantee, and this is the only evidence available
+     * in its place.
      *
-     * <p>Deliberately not a silence frame: a codec that returns a fixed
-     * empty payload would pass that and fail on speech. This is a tone,
-     * and the check is that the encoder produced a non-empty payload and
-     * the decoder gave back a full frame of PCM.
+     * <p>It has to be several frames, not one. Both encode() and decode()
+     * return 0 when the codec has accepted input but has no output ready
+     * yet -- they pipeline, and their own contracts say so. A single frame
+     * in, output demanded, reports every working codec as broken: that is
+     * what the first version of this did, and it silently reduced a
+     * healthy device to PCMU.
+     *
+     * <p>A tone rather than silence, too: a codec that returns a fixed
+     * empty payload would pass silence and fail on speech.
      */
     static boolean selfTest(boolean wideband) {
         JoanAmrCodec c = null;
@@ -130,20 +137,34 @@ final class JoanAmrCodec {
                         / (double) c.sampleRate()));
             }
             byte[] packed = new byte[n * 2];
-            int len = c.encode(pcm, n, packed);
-            if (len <= 0) {
-                JoanTrace.note("amr self-test: encoder produced nothing wb="
-                        + wideband);
-                return false;
-            }
             short[] back = new short[n];
-            int got = c.decode(packed, len, back);
-            if (got != n) {
-                JoanTrace.note("amr self-test: decoded " + got + " of " + n
-                        + " wb=" + wideband);
-                return false;
+            int encoded = 0;
+            int decoded = 0;
+            for (int i = 0; i < SELF_TEST_FRAMES; i++) {
+                int len = c.encode(pcm, n, packed);
+                if (len < 0) {
+                    JoanTrace.note("amr self-test: encoder failed wb=" + wideband);
+                    return false;
+                }
+                if (len == 0) {
+                    continue; // pipelining; keep feeding
+                }
+                encoded++;
+                int got = c.decode(packed, len, back);
+                if (got < 0) {
+                    JoanTrace.note("amr self-test: decoder failed wb=" + wideband);
+                    return false;
+                }
+                if (got == n) {
+                    decoded++;
+                    if (decoded >= 2) {
+                        return true;
+                    }
+                }
             }
-            return true;
+            JoanTrace.note("amr self-test: encoded " + encoded + " decoded "
+                    + decoded + " of " + SELF_TEST_FRAMES + " wb=" + wideband);
+            return false;
         } catch (Throwable t) {
             JoanTrace.note("amr self-test failed wb=" + wideband + ": "
                     + t.getClass().getSimpleName());
