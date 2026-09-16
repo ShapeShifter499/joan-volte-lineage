@@ -137,8 +137,15 @@ public final class JoanCarrierProfile {
     /**
      * China Mobile's own MNCs under MCC 460.
      *
-     * <p>Deliberately conservative: only the allocations we are confident
-     * of. An MNC left out of this set gets the 3GPP defaults rather than
+     * <p>Confirmed against a shipping LineageOS device tree rather than
+     * guessed: OnePlus's CarrierConfigResCommon vendor.xml (sm8250-common
+     * and siblings) lists exactly these five under
+     * {@code <carrier_config operator="CMCC">}, with China Unicom
+     * (46001/46006/46009), China Telecom (46003/46005/46011/46012) and
+     * China Broadnet (46015) as separate operators with their own
+     * entries.
+     *
+     * <p>An MNC left out of this set gets the 3GPP defaults rather than
      * another operator's profile, so being wrong by omission costs a
      * tuned profile, while being wrong by inclusion would apply China
      * Mobile's settings to a Unicom or Telecom subscriber.

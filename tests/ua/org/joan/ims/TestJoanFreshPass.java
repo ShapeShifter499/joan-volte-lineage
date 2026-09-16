@@ -162,10 +162,12 @@ public final class TestJoanFreshPass extends TestJoanUa {
             check("cn-460-" + mnc + "-unicom-is-not-cmcc",
                     JoanCarrierProfile.carrierKey("460", mnc) == null);
         }
-        for (String mnc : new String[]{"03", "05", "11"}) {
+        for (String mnc : new String[]{"03", "05", "11", "12"}) {
             check("cn-460-" + mnc + "-telecom-is-not-cmcc",
                     JoanCarrierProfile.carrierKey("460", mnc) == null);
         }
+        check("cn-460-15-broadnet-is-not-cmcc",
+                JoanCarrierProfile.carrierKey("460", "15") == null);
         check("cn-460-unknown-mnc-falls-through",
                 JoanCarrierProfile.carrierKey("460", "99") == null);
         /* Three-digit MNCs must resolve the same way as two-digit ones. */
