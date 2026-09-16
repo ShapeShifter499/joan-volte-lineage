@@ -256,6 +256,23 @@ installed or not — but "911 is fine because CS is there" only holds where
 CS is there. If emergency calling on this handset matters to you, satisfy
 yourself about it on your own network before relying on this phone.
 
+**An accidental emergency dial on 2026-09-16 did not connect**, and what
+it looked like is worth recording. Telecom placed it over CS
+(`callTechnologies: [GSM]`), it never left `DIALING`, `startTime` stayed
+0, and it hit `STATE_TIMEOUT` after 60 seconds. At the same moment the CS
+domain was `NOT_REG_SEARCHING` while the LTE PS domain advertised
+`emergencyEnabled=true availableServices=[EMERGENCY]` — the network was
+offering emergency over IMS, which is the one path this app declines.
+
+Two honest caveats. That attempt was 23 minutes after a reboot with the
+radio still moving between `IN_SERVICE` and `OUT_OF_SERVICE`, so a single
+observation cannot separate "no IMS emergency path" from "radio was still
+recovering". And this is not new: it has been true since the app was
+first installed. But on a carrier that has retired 2G/3G, CS fallback has
+nowhere to land, and that is the case to assume until you have tested
+otherwise on your own network. **Do not carry this handset as your only
+phone.**
+
 ## What changed in 0.3.0
 
 **The zip installs now.** Every earlier release — v0.1.0, v0.2.0, v0.2.1 —
@@ -402,20 +419,23 @@ so far been exercised on one live IMS core.
 - **Conference merge.** Implemented as a network-hosted focus INVITE +
   REFER / Replaces flow and offline-tested. Not live-carrier qualified.
   Do not treat Dialer merge as proven on your network until you try it.
-- **DTMF.** No RFC 4733; keypresses in an IVR do nothing. This becomes
-  more than cosmetic once AMR is carried: in-band tones do not survive a
-  speech codec, so `telephone-event` is what makes IVR keypads work at
-  all.
-- **Bandwidth-efficient AMR.** Only octet-aligned AMR is implemented
-  (`JoanAmr` does RFC 4867 octet-aligned framing). An AMR offer carrying
-  no `octet-align=1` means bandwidth-efficient by default (RFC 4867 3.6),
-  and is skipped in favour of the next codec the offerer listed, which is
-  normally PCMU. AOSP's own default payload format is bandwidth-efficient
-  (`CodecAmrConfig::DEFAULT_PAYLOAD_FORMAT`), so against a network that
-  follows that default AMR is never selected here and calls stay on
-  G.711. **This, not the negotiation, is what stops AMR running in the
-  field.**
+- **EVS.** Carriers offer it first (observed: `EVS/115, EVS/109, AMR-WB/104,
+  ...`) and this stack skips it, because LineageOS 22 ships no EVS
+  encoder. The codec profile is probed from `MediaCodecList` at startup,
+  so if a future ROM build adds one it is offered without a code change.
+- **Video (VT), RTT, and supplementary services over Ut/XCAP.** Not
+  implemented. Call waiting and the conference flow are SIP-side only.
 - VoWiFi (see `docs/vowifi-feasibility-2026-08-29.md`)
+
+Implemented since this list was written, and no longer missing:
+
+- **DTMF** now sends RFC 4733 `telephone-event`, negotiated at the chosen
+  codec's clock rate, with the audio suppressed for the tone. Not yet
+  exercised against a live IVR.
+- **Bandwidth-efficient AMR** is implemented and is what a real carrier
+  call actually negotiated here (`framing=bandwidth-efficient` on an
+  inbound call, `octet-aligned` on an outbound one, both AMR-WB at
+  12650 bps in the same session).
 
 ## License
 
