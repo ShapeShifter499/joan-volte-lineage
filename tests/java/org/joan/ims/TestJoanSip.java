@@ -1570,6 +1570,47 @@ public final class TestJoanSip {
         fill.offer(9000, 0, 0, p, 0L);
         check(fill.poll() == null,
                 "one packet is not enough to start playing");
+
+        /* observe() must account exactly as offer() does, so the report
+         * blocks are right whether or not playback is buffering yet. */
+        JoanJitter o1 = new JoanJitter();
+        JoanJitter o2 = new JoanJitter();
+        o1.setClockRate(16000);
+        o2.setClockRate(16000);
+        for (int i = 0; i < 12; i++) {
+            if (i == 3) {
+                continue;
+            }
+            o1.offer(40 + i, i * 320L, i * 320L, p, i * 20L);
+            o2.observe(40 + i, i * 320L, i * 320L, i * 20L);
+        }
+        check(o1.cumulativeLost() == o2.cumulativeLost()
+                        && o1.received() == o2.received()
+                        && o1.extendedMaxSeq() == o2.extendedMaxSeq(),
+                "observe() and offer() agree on the reception statistics");
+        check(o2.queued() == 0,
+                "but observe() queues nothing");
+
+        /* reset() must clear everything: a tracker outlives one call. */
+        o1.reset();
+        check(o1.received() == 0 && o1.cumulativeLost() == 0
+                        && o1.queued() == 0 && o1.jitter() == 0
+                        && o1.extendedMaxSeq() == 0,
+                "reset clears the statistics for the next call");
+
+        /* RFC 3550 6.4.1: cumulative lost is SIGNED 24-bit. Duplicates
+         * can drive it negative, and a report that truncates instead of
+         * sign-extending claims enormous loss on a healthy call. */
+        JoanJitter dup = new JoanJitter();
+        dup.setClockRate(16000);
+        for (int i = 0; i < 5; i++) {
+            dup.offer(80 + i, i * 320L, i * 320L, p, i * 20L);
+        }
+        for (int i = 0; i < 3; i++) {
+            dup.offer(80 + i, i * 320L, i * 320L, p, 100L + i);
+        }
+        check(dup.cumulativeLost() < 0,
+                "duplicates make cumulative lost negative, as the RFC allows");
     }
 
     private static void testRegInfo() {

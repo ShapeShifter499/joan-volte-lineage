@@ -58,6 +58,14 @@ final class JoanMedia {
 
     /** Accept one RTCP packet and keep its first receiver-report block. */
     static void onRtcp(byte[] b, int len) {
+        /* LSR/DLSR let the far end compute a round trip from our next
+         * report. Capturing the arrival time matters as much as the
+         * timestamp: DLSR is the delay between the two. */
+        long lsr = JoanRtcp.lastSrTimestamp(b, len);
+        if (lsr != 0) {
+            sLastSr = lsr;
+            sLastSrAtMs = System.currentTimeMillis();
+        }
         JoanRtcp.Report r = JoanRtcp.parse(b, len);
         if (r == null) {
             return;
@@ -195,6 +203,22 @@ final class JoanMedia {
     private static final int DTMF_QUEUE_MAX = 32;
     /** False asks the capture loop to end a held tone. */
     private static volatile boolean sDtmfHold;
+
+    /**
+     * What WE observe about the peer's stream, for the report block RFC
+     * 3550 requires us to send.
+     *
+     * <p>Deliberately not named sJitter: that already holds what the peer
+     * reports about OUR stream, read out of its receiver reports. The two
+     * are opposite directions and confusing them would have us echo the
+     * far end's own numbers back at it.
+     */
+    private static final JoanJitter sRx = new JoanJitter();
+    /** The peer's SSRC, learned from its RTP; 0 until we hear one. */
+    private static volatile int sPeerSsrc;
+    /** Middle 32 bits of the peer's last SR timestamp, and when it came. */
+    private static volatile long sLastSr;
+    private static volatile long sLastSrAtMs;
 
     /** One trace line per call when the peer sends us DTMF. */
     private static volatile boolean sDtmfRxSeen;
@@ -1168,6 +1192,11 @@ final class JoanMedia {
                 + speech;
     }
 
+    private static int get32(byte[] b, int off) {
+        return ((b[off] & 0xff) << 24) | ((b[off + 1] & 0xff) << 16)
+                | ((b[off + 2] & 0xff) << 8) | (b[off + 3] & 0xff);
+    }
+
     private static void put32(byte[] b, int off, int v) {
         b[off] = (byte) (v >>> 24);
         b[off + 1] = (byte) (v >>> 16);
@@ -1177,10 +1206,20 @@ final class JoanMedia {
 
     private static void sendRtcp(DatagramSocket sock, InetAddress dest, int rtpPort) {
         try {
-            byte[] pkt = new byte[48];
-            pkt[0] = (byte) 0x80;
+            /* RFC 3550 6.4.1: an SR carries one reception report block
+             * per source we are receiving from. We receive from exactly
+             * one and sent RC=0, so every report we have ever sent told
+             * the far end our transmit counters and nothing at all about
+             * how it sounds to us. A block is 24 bytes and is included as
+             * soon as we have heard a packet to report on. */
+            int peer = sPeerSsrc;
+            boolean withReport = peer != 0 && sRx.received() > 0;
+            int srWords = withReport ? 12 : 6;   /* (bytes / 4) - 1 */
+            int total = withReport ? 72 : 48;
+            byte[] pkt = new byte[total];
+            pkt[0] = (byte) (withReport ? 0x81 : 0x80);  /* version + RC */
             pkt[1] = (byte) 200; /* SR */
-            pkt[3] = 6; /* 28 bytes / 4 - 1 */
+            pkt[3] = (byte) srWords;
             put32(pkt, 4, sSsrc);
             long now = System.currentTimeMillis();
             int ntpSec = (int) (now / 1000 + 2208988800L);
@@ -1188,14 +1227,37 @@ final class JoanMedia {
             put32(pkt, 16, sTs);
             put32(pkt, 20, sSent);
             put32(pkt, 24, sOctets);
-            pkt[28] = (byte) 0x81;
-            pkt[29] = (byte) 202; /* SDES */
-            pkt[31] = 4;
-            put32(pkt, 32, sSsrc);
-            pkt[36] = 1;
-            pkt[37] = 8;
+            int at = 28;
+            if (withReport) {
+                put32(pkt, at, peer);
+                int frac = sRx.fractionLostAndReset();
+                int cum = sRx.cumulativeLost();
+                pkt[at + 4] = (byte) frac;
+                /* Cumulative lost is a signed 24-bit field: duplicates can
+                 * make it negative, and truncating instead of masking
+                 * would report a large positive loss on a healthy call. */
+                pkt[at + 5] = (byte) (cum >> 16);
+                pkt[at + 6] = (byte) (cum >> 8);
+                pkt[at + 7] = (byte) cum;
+                put32(pkt, at + 8, (int) sRx.extendedMaxSeq());
+                put32(pkt, at + 12, sRx.jitter());
+                put32(pkt, at + 16, (int) sLastSr);
+                /* DLSR is in units of 1/65536 s. Zero when no SR has been
+                 * heard, which is what RFC 3550 asks for and is true
+                 * until the peer sends one. */
+                int dlsr = sLastSrAtMs == 0 ? 0
+                        : (int) (((now - sLastSrAtMs) * 65536L) / 1000L);
+                put32(pkt, at + 20, dlsr);
+                at += 24;
+            }
+            pkt[at] = (byte) 0x81;
+            pkt[at + 1] = (byte) 202; /* SDES */
+            pkt[at + 3] = 4;
+            put32(pkt, at + 4, sSsrc);
+            pkt[at + 8] = 1;
+            pkt[at + 9] = 8;
             byte[] cname = "joan.ims".getBytes("US-ASCII");
-            System.arraycopy(cname, 0, pkt, 38, 8);
+            System.arraycopy(cname, 0, pkt, at + 10, 8);
             /* RFC 5761: with rtcp-mux, RTCP shares the RTP port.
              * Otherwise it belongs on the peer's a=rtcp: port, which
              * parseSdp parses and which we now honour instead of assuming

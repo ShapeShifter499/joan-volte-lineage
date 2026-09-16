@@ -46,6 +46,39 @@ final class JoanRtcp {
      * followed by SDES. Every length is checked against what actually
      * arrived, because this parses bytes straight off the network.
      */
+    /**
+     * Middle 32 bits of the NTP timestamp in the peer's sender report, or
+     * 0 when this packet carries none.
+     *
+     * <p>RFC 3550 6.4.1 calls this LSR, and a report block echoes it back
+     * with the delay since it arrived so the far end can compute a round
+     * trip. Reporting 0 for both is legal and means "I have not had one",
+     * which is true until the peer's first SR -- and stops being true
+     * immediately afterwards, so it must be captured rather than left.
+     */
+    static long lastSrTimestamp(byte[] b, int len) {
+        int off = 0;
+        while (off + 4 <= len) {
+            int pt = b[off + 1] & 0xff;
+            int words = ((b[off + 2] & 0xff) << 8) | (b[off + 3] & 0xff);
+            int bytes = (words + 1) * 4;
+            if (bytes <= 0 || off + bytes > len) {
+                return 0;
+            }
+            if (pt == PT_SR && off + 16 <= len) {
+                /* NTP sits at +8; the middle 32 bits are the low half of
+                 * the seconds word and the high half of the fraction. */
+                long hi = ((long) (b[off + 10] & 0xff) << 8)
+                        | (b[off + 11] & 0xff);
+                long lo = ((long) (b[off + 12] & 0xff) << 8)
+                        | (b[off + 13] & 0xff);
+                return ((hi << 16) | lo) & 0xffffffffL;
+            }
+            off += bytes;
+        }
+        return 0;
+    }
+
     static Report parse(byte[] b, int len) {
         if (b == null || len < 8 || len > b.length) {
             return null;

@@ -70,6 +70,27 @@ final class JoanJitter {
     private int dropped;
     private int reordered;
 
+    /** Start again for a new call; a tracker outlives one session. */
+    void reset() {
+        queue.clear();
+        depth = 4;
+        expected = -1;
+        lastSeq = -1;
+        cycles = 0;
+        received = 0;
+        lostCumulative = 0;
+        baseSeq = -1;
+        maxSeq = 0;
+        jitter = 0;
+        lastTransit = 0;
+        haveTransit = false;
+        lastGrowAtMs = 0;
+        dropped = 0;
+        reordered = 0;
+        lastExpected = 0;
+        lastReceived = 0;
+    }
+
     /** Current buffer depth, in packets. */
     int depth() {
         return depth;
@@ -138,6 +159,23 @@ final class JoanJitter {
      * @param nowMs     wall clock, for adaptation timing
      * @return false when the packet was too late to use and was dropped
      */
+    /**
+     * Account for one arrived packet without queueing it.
+     *
+     * <p>Lets the reception statistics -- which RFC 3550 requires us to
+     * report whether or not we buffer -- be collected while playback
+     * still runs straight through, so the report blocks and the buffer
+     * can be landed and judged separately.
+     */
+    void observe(int seq, long rtpTs, long arrivalTs, long nowMs) {
+        long prevMax = lastSeq < 0 ? -1 : maxSeq;
+        long ext = extend(seq);
+        updateStats(ext, rtpTs, arrivalTs, nowMs);
+        if (prevMax >= 0 && ext < prevMax) {
+            reordered++;
+        }
+    }
+
     boolean offer(int seq, long rtpTs, long arrivalTs, byte[] payload,
                   long nowMs) {
         /* Captured before extend() moves it: reordering means arriving
