@@ -34,6 +34,13 @@ final class JoanJitter {
     static final int DECREASE_THRESHOLD_MS = 2000;
     /** Frames removed at a time when shrinking. */
     static final int DECREASE_STEP = 2;
+    /** Slack allowed when deciding the buffer has filled, milliseconds. */
+    static final int ALLOWABLE_ERROR_MS = 10;
+    /** Window over which the drop rate is judged, milliseconds. */
+    static final int DROP_WINDOW_MS = 5000;
+    /** Drop rate, in percent, that forces the buffer to re-fill or grow. */
+    static final int RESET_THRESHOLD_DTX = 80;
+    static final int RESET_THRESHOLD_NO_DTX = 35;
     /** Rounding margin, milliseconds. */
     static final int ROUNDUP_MARGIN_MS = 10;
 
@@ -51,6 +58,8 @@ final class JoanJitter {
 
     private final java.util.TreeMap<Long, byte[]> queue =
             new java.util.TreeMap<>();
+    /** Extended sequence numbers whose frame is comfort noise. */
+    private final java.util.HashSet<Long> sidSeqs = new java.util.HashSet<>();
 
     private int depth = 4;
     private long expected = -1;
@@ -69,6 +78,52 @@ final class JoanJitter {
     private long lastGrowAtMs;
     private int dropped;
     private int reordered;
+
+    /**
+     * True while the buffer is filling and playing nothing.
+     *
+     * <p>Filling is judged by elapsed time, not by how many packets are
+     * queued. A count-based rule stalls outright when packets are lost
+     * during the fill -- the queue never reaches the target and playback
+     * never starts -- and this link drops packets: six on one measured
+     * call. AOSP's AudioJitterBuffer waits on
+     * {@code currentTime - mTimeStarted < size * FRAME_INTERVAL} for the
+     * same reason.
+     */
+    private boolean waiting = true;
+    private long waitStartedMs = -1;
+
+    /** SSRC of the stream being buffered; a change means a new stream. */
+    private int ssrc;
+    private boolean haveSsrc;
+
+    /** Drop timestamps inside the current window, for the drop rate. */
+    private final java.util.ArrayDeque<Long> dropTimes =
+            new java.util.ArrayDeque<>();
+    private int voiceInWindow;
+    private boolean sawSid;
+
+    /**
+     * Note the stream's SSRC, restarting if it has changed.
+     *
+     * <p>A mid-call SSRC change means a different stream: a re-INVITE,
+     * or the network moving us. Carrying the old sequence baseline across
+     * it reads as enormous loss and the reordering guard then discards
+     * everything that arrives. AOSP handles this as
+     * MEDIASUBTYPE_REFRESHED and calls Reset(); so do we.
+     *
+     * @return true when the stream changed and the buffer was reset
+     */
+    boolean onSsrc(int newSsrc) {
+        if (haveSsrc && newSsrc == ssrc) {
+            return false;
+        }
+        boolean changed = haveSsrc;
+        reset();
+        ssrc = newSsrc;
+        haveSsrc = true;
+        return changed;
+    }
 
     /** Start again for a new call; a tracker outlives one session. */
     void reset() {
@@ -89,6 +144,14 @@ final class JoanJitter {
         reordered = 0;
         lastExpected = 0;
         lastReceived = 0;
+        waiting = true;
+        waitStartedMs = -1;
+        haveSsrc = false;
+        ssrc = 0;
+        dropTimes.clear();
+        voiceInWindow = 0;
+        sawSid = false;
+        sidSeqs.clear();
     }
 
     /** Current buffer depth, in packets. */
@@ -178,6 +241,21 @@ final class JoanJitter {
 
     boolean offer(int seq, long rtpTs, long arrivalTs, byte[] payload,
                   long nowMs) {
+        return offer(seq, rtpTs, arrivalTs, payload, false, nowMs);
+    }
+
+    /**
+     * @param sid true when this frame is AMR comfort noise (a SID).
+     *        Silence is the one moment latency can be given back without
+     *        anybody hearing it shorten, which is where AOSP shrinks.
+     */
+    boolean offer(int seq, long rtpTs, long arrivalTs, byte[] payload,
+                  boolean sid, long nowMs) {
+        if (sid) {
+            sawSid = true;
+        } else {
+            voiceInWindow++;
+        }
         /* Captured before extend() moves it: reordering means arriving
          * behind a packet we have already seen, which is a property of
          * the network. Comparing against the play position instead counts
@@ -192,16 +270,22 @@ final class JoanJitter {
              * emitting audio out of order, which is worse than the gap
              * it would fill. */
             dropped++;
+            noteDrop(nowMs);
             return false;
         }
         if (prevMax >= 0 && ext < prevMax) {
             reordered++;
         }
         queue.put(ext, payload);
+        if (sid) {
+            sidSeqs.add(ext);
+        }
         while (queue.size() > MAX_DEPTH) {
             queue.remove(queue.firstKey());
             dropped++;
+            noteDrop(nowMs);
         }
+        checkDropRate(nowMs);
         return true;
     }
 
@@ -214,11 +298,35 @@ final class JoanJitter {
      * and shortening the audio.
      */
     byte[] poll() {
-        if (queue.size() < depth) {
-            return null;
+        return poll(System.currentTimeMillis());
+    }
+
+    byte[] poll(long nowMs) {
+        if (waiting) {
+            if (queue.isEmpty()) {
+                return null;
+            }
+            if (waitStartedMs < 0) {
+                waitStartedMs = nowMs;
+            }
+            /* Time, not count. A count-based rule never completes when
+             * packets are lost during the fill, and playback simply never
+             * starts -- an intermittent that looks like a dead call. */
+            if (nowMs - waitStartedMs + ALLOWABLE_ERROR_MS
+                    < (long) depth * PACKET_INTERVAL_MS) {
+                return null;
+            }
+            waiting = false;
         }
         java.util.Map.Entry<Long, byte[]> first = queue.firstEntry();
         if (first == null) {
+            /* Ran dry. Keep the playout clock moving so the stream does
+             * not silently slip, and refill before playing again. */
+            if (expected >= 0) {
+                expected++;
+            }
+            waiting = true;
+            waitStartedMs = -1;
             return null;
         }
         if (expected >= 0 && first.getKey() > expected) {
@@ -229,7 +337,65 @@ final class JoanJitter {
         }
         queue.remove(first.getKey());
         expected = first.getKey() + 1;
+        if (sidSeqs.remove(first.getKey())) {
+            /* Playing comfort noise: shorten now, while it cannot be
+             * heard, rather than carrying congestion-era depth forward. */
+            shrinkOnSilence();
+        }
         return first.getValue();
+    }
+
+    private void noteDrop(long nowMs) {
+        dropTimes.addLast(nowMs);
+    }
+
+    /**
+     * Too many drops in a window means the buffer is the wrong size, not
+     * that the network is merely lossy.
+     *
+     * <p>AOSP uses two thresholds because DTX changes what "normal"
+     * looks like: with comfort noise in the stream a high drop rate is
+     * expected and only 80% is alarming, without it 35% already is. At
+     * the ceiling there is no room to grow, so the answer is to refill;
+     * below it, grow.
+     */
+    private void checkDropRate(long nowMs) {
+        while (!dropTimes.isEmpty()
+                && nowMs - dropTimes.peekFirst() > DROP_WINDOW_MS) {
+            dropTimes.removeFirst();
+        }
+        int total = voiceInWindow + dropTimes.size();
+        if (total < 20) {
+            return; /* too little to judge */
+        }
+        int rate = (dropTimes.size() * 100) / total;
+        int threshold = sawSid ? RESET_THRESHOLD_DTX : RESET_THRESHOLD_NO_DTX;
+        if (rate <= threshold) {
+            return;
+        }
+        if (depth >= MAX_DEPTH) {
+            waiting = true;
+            waitStartedMs = nowMs;
+        } else {
+            depth++;
+            lastGrowAtMs = nowMs;
+        }
+        dropTimes.clear();
+        voiceInWindow = 0;
+    }
+
+    /**
+     * Give latency back during silence.
+     *
+     * <p>A comfort-noise frame is the one place the buffer can shorten
+     * without anybody hearing it, so a depth that grew during congestion
+     * is returned while nobody is speaking rather than held for the rest
+     * of the call.
+     */
+    private void shrinkOnSilence() {
+        if (sawSid && depth > MIN_DEPTH) {
+            depth--;
+        }
     }
 
     private long extend(int seq) {

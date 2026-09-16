@@ -1461,7 +1461,7 @@ public final class TestJoanSip {
         int delivered = 0;
         for (int i = 0; i < 40; i++) {
             j.offer(1000 + i, i * 320L, i * 320L, p, i * 20L);
-            if (j.poll() != null) {
+            if (j.poll(i * 20L) != null) {
                 delivered++;
             }
         }
@@ -1489,7 +1489,7 @@ public final class TestJoanSip {
         check(r.reordered() > 0, "an out-of-order arrival is noticed");
         java.util.List<Byte> got = new java.util.ArrayList<>();
         for (int i = 0; i < 12; i++) {
-            byte[] out = r.poll();
+            byte[] out = r.poll(200L + i * 20L);
             if (out != null) {
                 got.add(out[0]);
             }
@@ -1508,7 +1508,7 @@ public final class TestJoanSip {
         late.setClockRate(16000);
         for (int i = 0; i < 20; i++) {
             late.offer(200 + i, i * 320L, i * 320L, p, i * 20L);
-            late.poll();
+            late.poll(i * 20L);
         }
         int droppedBefore = late.dropped();
         check(!late.offer(200, 0, 0, p, 400L),
@@ -1568,8 +1568,60 @@ public final class TestJoanSip {
         JoanJitter fill = new JoanJitter();
         fill.setClockRate(16000);
         fill.offer(9000, 0, 0, p, 0L);
-        check(fill.poll() == null,
+        check(fill.poll(0L) == null,
                 "one packet is not enough to start playing");
+
+        /* The fill must be judged by elapsed time, not by how many
+         * packets are queued. A count-based rule never completes when
+         * packets go missing during the fill, and playback simply never
+         * starts -- audio that intermittently does not begin at all. */
+        JoanJitter lossy = new JoanJitter();
+        lossy.setClockRate(16000);
+        lossy.offer(300, 0, 0, p, 0L);
+        lossy.offer(302, 640L, 640L, p, 40L);   /* 301 never arrives */
+        check(lossy.poll(0L) == null, "nothing plays at once");
+        byte[] started = null;
+        for (int t = 20; t <= 400 && started == null; t += 20) {
+            started = lossy.poll(t);
+        }
+        check(started != null,
+                "playback still starts when the fill loses a packet");
+
+        /* An SSRC change is a different stream: carrying the old
+         * sequence baseline across it reads as enormous loss and the
+         * reordering guard then throws away everything that arrives. */
+        JoanJitter ss = new JoanJitter();
+        ss.setClockRate(16000);
+        check(!ss.onSsrc(0x1111), "the first SSRC is not a change");
+        for (int i = 0; i < 10; i++) {
+            ss.offer(60000 + i, i * 320L, i * 320L, p, i * 20L);
+        }
+        check(ss.received() == 10, "packets counted before the change");
+        check(ss.onSsrc(0x2222), "a new SSRC reports as a change");
+        check(ss.received() == 0 && ss.queued() == 0
+                        && ss.cumulativeLost() == 0,
+                "and resets the buffer rather than reading it as loss");
+        check(!ss.onSsrc(0x2222), "the same SSRC again is not a change");
+
+        /* Comfort noise is the one moment latency can be given back
+         * without anybody hearing the stream shorten. */
+        JoanJitter sid = new JoanJitter();
+        sid.setClockRate(16000);
+        for (int i = 0; i < 30; i++) {
+            long arrive = i * 320L + (i % 3 == 0 ? 1600L : 0L);
+            sid.offer(70000 + i, i * 320L, arrive, p, false, i * 20L);
+        }
+        int grown = sid.depth();
+        for (int i = 30; i < 60; i++) {
+            sid.offer(70000 + i, i * 320L, i * 320L, p, true, i * 20L);
+        }
+        for (int t = 0; t < 80; t++) {
+            sid.poll(2000L + t * 20L);
+        }
+        check(sid.depth() <= grown,
+                "playing comfort noise does not grow the buffer");
+        check(sid.depth() >= JoanJitter.MIN_DEPTH,
+                "and never shrinks past the floor");
 
         /* observe() must account exactly as offer() does, so the report
          * blocks are right whether or not playback is buffering yet. */
