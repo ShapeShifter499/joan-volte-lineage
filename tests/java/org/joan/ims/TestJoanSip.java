@@ -1674,6 +1674,28 @@ public final class TestJoanSip {
         check(calm.dropped() == 0,
                 "a well-behaved stream loses nothing to the ceiling");
 
+        /* late and trimmed mean opposite things and must not be summed
+         * into one number: late says the buffer is too shallow for this
+         * link, trimmed says it is holding the latency down as designed.
+         * The first bounded call reported late_dropped=5 and could not
+         * say which it was. */
+        check(back.trimmed() > 0 && back.late() == 0,
+                "a backlog is trimmed, and none of it counts as late");
+        JoanJitter lateOnly = new JoanJitter();
+        lateOnly.setClockRate(16000);
+        for (int i = 0; i < 20; i++) {
+            lateOnly.offer(600 + i, i * 320L, i * 320L, p, i * 20L);
+            lateOnly.poll(i * 20L);
+        }
+        int trimmedBefore = lateOnly.trimmed();
+        lateOnly.offer(600, 0, 0, p, 500L);      /* its slot long gone */
+        check(lateOnly.late() == 1,
+                "a packet past its slot counts as late");
+        check(lateOnly.trimmed() == trimmedBefore,
+                "and not as a trim");
+        check(lateOnly.dropped() == lateOnly.late() + lateOnly.trimmed(),
+                "dropped() is still the total of both");
+
         /* observe() must account exactly as offer() does, so the report
          * blocks are right whether or not playback is buffering yet. */
         JoanJitter o1 = new JoanJitter();

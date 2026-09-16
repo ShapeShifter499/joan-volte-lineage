@@ -88,7 +88,10 @@ final class JoanJitter {
     private boolean haveTransit;
 
     private long lastGrowAtMs;
-    private int dropped;
+    /** Arrived after its slot had already played: the depth was short. */
+    private int late;
+    /** Given up to bound the latency: the buffer doing its job. */
+    private int trimmed;
     private int reordered;
 
     /**
@@ -152,7 +155,8 @@ final class JoanJitter {
         lastTransit = 0;
         haveTransit = false;
         lastGrowAtMs = 0;
-        dropped = 0;
+        late = 0;
+        trimmed = 0;
         reordered = 0;
         lastExpected = 0;
         lastReceived = 0;
@@ -175,9 +179,27 @@ final class JoanJitter {
         return queue.size();
     }
 
-    /** Packets discarded for arriving too late to be useful. */
+    /**
+     * Packets that arrived after their slot had played.
+     *
+     * <p>Distinct from {@link #trimmed()}, and they mean opposite
+     * things: late arrivals say the buffer is too shallow for this link,
+     * while trims say it is holding the latency down as designed.
+     * Reporting them as one number cannot tell those apart, which is
+     * what the first bounded call did.
+     */
+    int late() {
+        return late;
+    }
+
+    /** Frames given up to keep the held audio within the depth. */
+    int trimmed() {
+        return trimmed;
+    }
+
+    /** Everything discarded, by either route. */
     int dropped() {
-        return dropped;
+        return late + trimmed;
     }
 
     /** Packets that arrived out of order and were put back in order. */
@@ -281,7 +303,7 @@ final class JoanJitter {
             /* Already played past this point. Keeping it would mean
              * emitting audio out of order, which is worse than the gap
              * it would fill. */
-            dropped++;
+            late++;
             noteDrop(nowMs);
             return false;
         }
@@ -294,7 +316,7 @@ final class JoanJitter {
         }
         while (queue.size() > MAX_DEPTH) {
             queue.remove(queue.firstKey());
-            dropped++;
+            trimmed++;
             noteDrop(nowMs);
         }
         checkDropRate(nowMs);
@@ -346,7 +368,7 @@ final class JoanJitter {
         while (queue.size() > depth + SLACK) {
             queue.remove(queue.firstKey());
             expected = queue.isEmpty() ? expected : queue.firstKey();
-            dropped++;
+            trimmed++;
             noteDrop(nowMs);
         }
         java.util.Map.Entry<Long, byte[]> first = queue.firstEntry();
@@ -431,7 +453,7 @@ final class JoanJitter {
              * exactly where it was. */
             if (!queue.isEmpty()) {
                 queue.remove(queue.firstKey());
-                dropped++;
+                trimmed++;
             }
         }
     }
@@ -524,6 +546,7 @@ final class JoanJitter {
                 + " jitter=" + (int) jitter
                 + " lost=" + lostCumulative
                 + " reordered=" + reordered
-                + " late_dropped=" + dropped;
+                + " late=" + late
+                + " trimmed=" + trimmed;
     }
 }
