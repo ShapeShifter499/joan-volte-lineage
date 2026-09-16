@@ -1407,12 +1407,6 @@ final class JoanSipBuilder {
         return b.toString();
     }
 
-    /** RFC 4867 bitrates, indexed by mode. */
-    private static final int[] AMR_WB_BPS = {
-            6600, 8850, 12650, 14250, 15850, 18250, 19850, 23050, 23850 };
-    private static final int[] AMR_NB_BPS = {
-            4750, 5150, 5900, 6700, 7400, 7950, 10200, 12200 };
-
     /**
      * Encoder bitrate for a negotiated codec: the highest mode the peer
      * allows, or 0 to leave the codec's own default alone when they named
@@ -1427,11 +1421,8 @@ final class JoanSipBuilder {
         if (mode < 0) {
             return 0;
         }
-        int[] table = cap.amrWideband() ? AMR_WB_BPS : AMR_NB_BPS;
-        if (mode >= table.length) {
-            mode = table.length - 1;
-        }
-        return table[mode];
+        int top = JoanAmr.modeCount(cap.amrWideband()) - 1;
+        return JoanAmr.modeBitrate(Math.min(mode, top), cap.amrWideband());
     }
 
     /** The capability matching a codec's encoding name and rate, or null. */

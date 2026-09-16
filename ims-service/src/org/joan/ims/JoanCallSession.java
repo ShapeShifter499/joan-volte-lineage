@@ -567,11 +567,48 @@ public class JoanCallSession extends ImsCallSessionImplBase {
                 JoanSipUa.mediaRtcpPort(), JoanSipUa.mediaMux(),
                 JoanSipUa.mediaPt(), JoanSipUa.mediaAmrWideband(),
                 JoanSipUa.mediaAmrBitrate(),
-                JoanSipUa.mediaAmrOctetAligned())) {
+                JoanSipUa.mediaAmrOctetAligned(),
+                JoanSipUa.mediaAmrMaxMode())) {
             return;
         }
         JoanTrace.note("media did not start; ending call");
         hangupAsync();
+    }
+
+    /** ANBR directions, as the framework numbers them. */
+    private static final int ANBR_UPLINK = 1;
+
+    /**
+     * The radio's bitrate recommendation for this call.
+     *
+     * <p>This is the adaptation mechanism VoLTE actually uses: the access
+     * network tells the handset what it can carry, rather than waiting for
+     * packets to be lost and inferred. Only the uplink direction is
+     * actionable -- a downlink recommendation concerns what the network
+     * sends us, and retuning our encoder for it would be answering the
+     * wrong question.
+     *
+     * <p>The recommendation is mapped to the highest AMR mode that fits
+     * inside it and then checked against the negotiated mode-set, which is
+     * the same order AOSP applies in NotifyAnbrReceived().
+     */
+    @Override
+    public void callSessionNotifyAnbr(int mediaType, int direction,
+                                      int bitsPerSecond) {
+        Boolean wb = JoanSipUa.mediaAmrWideband();
+        JoanTrace.note("anbr media=" + mediaType + " dir=" + direction
+                + " bps=" + bitsPerSecond
+                + (wb == null ? " (not AMR; ignored)" : ""));
+        if (wb == null || direction != ANBR_UPLINK || bitsPerSecond <= 0) {
+            return;
+        }
+        int mode = JoanAmr.bitrateMode(bitsPerSecond, wb);
+        if (mode < 0) {
+            JoanTrace.note("anbr " + bitsPerSecond
+                    + " bps is below the lowest mode; ignored");
+            return;
+        }
+        JoanMedia.requestMode(mode, "ANBR");
     }
 
     private void failStart(String why) {

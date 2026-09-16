@@ -62,6 +62,38 @@ final class JoanAmr {
           0                                     /* 15   NO_DATA       */
     };
 
+    /** RFC 4867 bitrates by mode. The single table for the whole stack. */
+    private static final int[] NB_BPS = {
+        4750, 5150, 5900, 6700, 7400, 7950, 10200, 12200 };
+    private static final int[] WB_BPS = {
+        6600, 8850, 12650, 14250, 15850, 18250, 19850, 23050, 23850 };
+
+    /** Bitrate for a mode, or 0 when the mode is not a speech mode. */
+    static int modeBitrate(int mode, boolean wideband) {
+        int[] t = wideband ? WB_BPS : NB_BPS;
+        if (mode < 0 || mode >= t.length) {
+            return 0;
+        }
+        return t[mode];
+    }
+
+    /** Highest mode whose bitrate does not exceed bps, or -1. */
+    static int bitrateMode(int bps, boolean wideband) {
+        int[] t = wideband ? WB_BPS : NB_BPS;
+        int best = -1;
+        for (int i = 0; i < t.length; i++) {
+            if (t[i] <= bps) {
+                best = i;
+            }
+        }
+        return best;
+    }
+
+    /** Number of speech modes for this bandwidth. */
+    static int modeCount(boolean wideband) {
+        return (wideband ? WB_BPS : NB_BPS).length;
+    }
+
     static final int FT_NO_DATA = 15;
     static final int FT_SPEECH_LOST = 14;
     /** No mode request: CMR 15. */

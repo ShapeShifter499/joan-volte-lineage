@@ -1170,6 +1170,24 @@ public final class TestJoanSip {
                 "a truncated bandwidth-efficient payload is refused");
         check(JoanAmr.frameBits(11, true) < 0, "a reserved frame type carries no bits");
 
+        /* Adaptation: a CMR or an ANBR recommendation is a mode, and a
+         * bitrate has to map down to the highest mode that fits inside it
+         * -- never up, or we transmit above what the network said it can
+         * carry. */
+        check(JoanAmr.modeBitrate(2, true) == 12650, "AMR-WB mode 2 is 12650 bps");
+        check(JoanAmr.modeBitrate(7, false) == 12200, "AMR-NB mode 7 is 12200 bps");
+        check(JoanAmr.modeBitrate(99, true) == 0, "an unknown mode has no bitrate");
+        check(JoanAmr.bitrateMode(12650, true) == 2,
+                "an exact bitrate maps to its own mode");
+        check(JoanAmr.bitrateMode(13000, true) == 2,
+                "a bitrate between modes rounds DOWN, never up");
+        check(JoanAmr.bitrateMode(99000, true) == JoanAmr.modeCount(true) - 1,
+                "a bitrate above every mode takes the top one");
+        check(JoanAmr.bitrateMode(1000, true) < 0,
+                "a bitrate below every mode maps to none");
+        check(JoanAmr.modeCount(true) == 9 && JoanAmr.modeCount(false) == 8,
+                "nine wideband modes, eight narrowband");
+
         /* A multi-frame payload: two ToCs, then both frames. We take the
          * first, since this UA offers ptime 20 and never asks for more. */
         byte[] multi = new byte[1 + 2 + 64];

@@ -71,6 +71,44 @@ final class JoanMedia {
     private static volatile long sRtcpNext;
     /** Negotiated AMR framing; false selects the bandwidth-efficient packer. */
     private static volatile boolean sAmrOct = true;
+    /** Highest AMR mode the peer permits; -1 when they set no ceiling. */
+    private static volatile int sAmrMaxMode = -1;
+    /** Mode asked for by CMR or ANBR, applied by the capture thread. */
+    private static volatile int sPendingMode = -1;
+    private static volatile int sAppliedMode = -1;
+
+    /**
+     * Ask the encoder to move to an AMR mode, from a CMR in the peer's RTP
+     * or an ANBR recommendation from the radio.
+     *
+     * <p>Refused above the negotiated ceiling: a request outside the
+     * mode-set both sides agreed is not a request we may honour, and AOSP
+     * makes the same check before applying an ANBR bitrate. The capture
+     * thread performs the change at a frame boundary, because reconfiguring
+     * a MediaCodec underneath a thread that is mid-encode is not safe.
+     */
+    static void requestMode(int mode, String why) {
+        if (sAmr == null || mode < 0) {
+            return;
+        }
+        if (sAmrMaxMode >= 0 && mode > sAmrMaxMode) {
+            JoanTrace.note("amr " + why + " asked mode " + mode
+                    + " above negotiated " + sAmrMaxMode + "; refused");
+            return;
+        }
+        if (mode == sAppliedMode) {
+            return;
+        }
+        JoanAmrCodec amr = sAmr;
+        if (amr != null && !JoanAmrCodec.retuneSupported(amr.wideband())) {
+            JoanTrace.note("amr " + why + " asked mode " + mode
+                    + "; this ROM cannot retune, staying at " + sAppliedMode);
+            return;
+        }
+        JoanTrace.note("amr " + why + " requests mode " + mode
+                + " (from " + sAppliedMode + ")");
+        sPendingMode = mode;
+    }
 
     private JoanMedia() {}
 
@@ -78,7 +116,7 @@ final class JoanMedia {
                             InetAddress dest, int destPort, int rtcpPort,
                             boolean mux) {
         return startRtp(ctx, net, local, dest, destPort, rtcpPort, mux, 0,
-                null, 0, true);
+                null, 0, true, -1);
     }
 
     /**
@@ -92,10 +130,16 @@ final class JoanMedia {
     static boolean startRtp(Context ctx, Network net, InetAddress local,
                             InetAddress dest, int destPort, int rtcpPort,
                                boolean mux, int payloadType, Boolean amrWideband,
-                            int amrBitrate, boolean amrOctetAligned) {
+                            int amrBitrate, boolean amrOctetAligned,
+                            int amrMaxMode) {
         stop();
         sPt = payloadType;
         sAmrOct = amrOctetAligned;
+        sAmrMaxMode = amrMaxMode;
+        sPendingMode = -1;
+        sAppliedMode = amrWideband == null ? -1
+                : JoanAmr.bitrateMode(amrBitrate > 0 ? amrBitrate
+                        : (amrWideband ? 23850 : 12200), amrWideband);
         sAmr = null;
         sRate = PCMU_HZ;
         sFrame = PCMU_SAMPLES;
@@ -317,6 +361,16 @@ final class JoanMedia {
                 }
                 int paylen;
                 if (amr != null) {
+                    int want = sPendingMode;
+                    if (want >= 0 && want != sAppliedMode) {
+                        int bps = JoanAmr.modeBitrate(want, amr.wideband());
+                        if (bps > 0 && amr.retuneEncoder(bps)) {
+                            sAppliedMode = want;
+                            JoanTrace.note("amr encoder now mode " + want
+                                    + " (" + bps + " bps)");
+                        }
+                        sPendingMode = -1;
+                    }
                     int slen = amr.encode(pcm, m, storage);
                     if (slen < 0) {
                         /* One encoder error is a lost frame, not a lost
@@ -464,6 +518,9 @@ final class JoanMedia {
                         JoanTrace.note("amr peer CMR " + lastCmr + " -> " + cmr
                                 + (cmr == JoanAmr.CMR_NONE ? " (no request)" : ""));
                         lastCmr = cmr;
+                        if (cmr != JoanAmr.CMR_NONE) {
+                            requestMode(cmr, "CMR");
+                        }
                     }
                     int slen = sAmrOct
                             ? JoanAmr.unpack(down, off, m, amr.wideband(), storage)

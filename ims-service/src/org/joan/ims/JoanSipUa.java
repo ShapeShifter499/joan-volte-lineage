@@ -78,6 +78,8 @@ final class JoanSipUa {
     private static volatile int sMediaAmrBitrate;
     /** Framing the peer negotiated; false means bandwidth-efficient. */
     private static volatile boolean sMediaAmrOct;
+    /** Highest mode the negotiated mode-set allows; -1 when unrestricted. */
+    private static volatile int sMediaAmrMaxMode = -1;
     private static volatile Boolean sMediaAmrWb;
     private static volatile boolean sMediaMux;
     /** True when the live dialog is on hold (sendonly, no RTP). */
@@ -275,6 +277,10 @@ final class JoanSipUa {
 
     static boolean mediaAmrOctetAligned() {
         return sMediaAmrOct;
+    }
+
+    static int mediaAmrMaxMode() {
+        return sMediaAmrMaxMode;
     }
 
     static Boolean mediaAmrWideband() {
@@ -528,6 +534,8 @@ final class JoanSipUa {
                             sMediaAmrWb = JoanSipBuilder.amrWideband(answered);
                             sMediaAmrBitrate = JoanSipBuilder.amrBitrate(answered);
                             sMediaAmrOct = JoanSipBuilder.amrOctetAligned(answered);
+                            sMediaAmrMaxMode = answered == null
+                                    ? -1 : answered.maxAmrMode();
                             JoanTrace.note("app invite codec="
                                     + (enc.isEmpty() ? "PCMU" : enc)
                                     + " pt=" + media.payloadType
@@ -767,6 +775,7 @@ final class JoanSipUa {
             sMediaAmrWb = JoanSipBuilder.amrWideband(chosen);
             sMediaAmrBitrate = JoanSipBuilder.amrBitrate(chosen);
             sMediaAmrOct = JoanSipBuilder.amrOctetAligned(chosen);
+            sMediaAmrMaxMode = chosen == null ? -1 : chosen.maxAmrMode();
         }
         JoanTrace.note("app ANSWER 200 codec="
                 + (chosen == null ? "PCMU" : chosen.name)
@@ -2623,6 +2632,7 @@ final class JoanSipUa {
         sMediaPt = 0;
         sMediaAmrBitrate = 0;
         sMediaAmrOct = false;
+        sMediaAmrMaxMode = -1;
         sMediaAmrWb = null;
         sMediaMux = false;
         sExpiresSec = 0;

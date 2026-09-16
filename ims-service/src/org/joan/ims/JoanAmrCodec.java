@@ -124,6 +124,42 @@ final class JoanAmrCodec {
     /** Frames pushed through before judging: both codecs pipeline. */
     private static final int SELF_TEST_FRAMES = 12;
 
+    private static volatile boolean sRetuneWb;
+    private static volatile boolean sRetuneNb;
+
+    /** Whether this ROM can reconfigure the encoder mid-call. */
+    static boolean retuneSupported(boolean wideband) {
+        return wideband ? sRetuneWb : sRetuneNb;
+    }
+
+    /** Feed frames until two decode cleanly, or give up. */
+    private static boolean roundTrip(JoanAmrCodec c, short[] pcm, int n,
+                                     byte[] packed, short[] back,
+                                     boolean wideband) {
+        int decoded = 0;
+        for (int i = 0; i < SELF_TEST_FRAMES; i++) {
+            int len = c.encode(pcm, n, packed);
+            if (len < 0) {
+                JoanTrace.note("amr self-test: encoder failed wb=" + wideband);
+                return false;
+            }
+            if (len == 0) {
+                continue; // pipelining; keep feeding
+            }
+            int got = c.decode(packed, len, back);
+            if (got < 0) {
+                JoanTrace.note("amr self-test: decoder failed wb=" + wideband);
+                return false;
+            }
+            if (got == n && ++decoded >= 2) {
+                return true;
+            }
+        }
+        JoanTrace.note("amr self-test: only " + decoded
+                + " frames decoded wb=" + wideband);
+        return false;
+    }
+
     /**
      * Open the codec and round-trip real frames before we advertise it.
      *
@@ -143,6 +179,45 @@ final class JoanAmrCodec {
      * <p>A tone rather than silence, too: a codec that returns a fixed
      * empty payload would pass silence and fail on speech.
      */
+    /**
+     * Reconfigure the ENCODER to a new bitrate mid-call.
+     *
+     * <p>MediaCodec exposes no runtime bitrate control for an audio
+     * encoder, so honouring a mode change means stopping, reconfiguring
+     * and restarting it. The decoder is left running: the peer's mode is
+     * carried in each frame's ToC and needs no reconfiguration, and
+     * tearing it down would put a hole in the downlink for a request that
+     * only concerns what we transmit.
+     *
+     * @return true when the encoder is running at the new rate; on
+     *         failure the encoder is left as it was.
+     */
+    boolean retuneEncoder(int bitrate) {
+        if (bitrate <= 0) {
+            return false;
+        }
+        try {
+            encoder.stop();
+            MediaFormat f = MediaFormat.createAudioFormat(
+                    wideband ? MIME_WB : MIME_NB,
+                    wideband ? 16000 : 8000, 1);
+            f.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
+            encoder.configure(f, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            encoder.start();
+            encPtsUs = 0;
+            return true;
+        } catch (Throwable t) {
+            JoanTrace.note("amr retune failed at " + bitrate + ": "
+                    + t.getClass().getSimpleName());
+            try {
+                encoder.start();
+            } catch (Throwable ignored) {
+                // the caller keeps sending at whatever still works
+            }
+            return false;
+        }
+    }
+
     static boolean selfTest(boolean wideband) {
         JoanAmrCodec c = null;
         try {
@@ -158,33 +233,28 @@ final class JoanAmrCodec {
             }
             byte[] packed = new byte[n * 2];
             short[] back = new short[n];
-            int encoded = 0;
-            int decoded = 0;
-            for (int i = 0; i < SELF_TEST_FRAMES; i++) {
-                int len = c.encode(pcm, n, packed);
-                if (len < 0) {
-                    JoanTrace.note("amr self-test: encoder failed wb=" + wideband);
-                    return false;
-                }
-                if (len == 0) {
-                    continue; // pipelining; keep feeding
-                }
-                encoded++;
-                int got = c.decode(packed, len, back);
-                if (got < 0) {
-                    JoanTrace.note("amr self-test: decoder failed wb=" + wideband);
-                    return false;
-                }
-                if (got == n) {
-                    decoded++;
-                    if (decoded >= 2) {
-                        return true;
-                    }
-                }
+            if (!roundTrip(c, pcm, n, packed, back, wideband)) {
+                return false;
             }
-            JoanTrace.note("amr self-test: encoded " + encoded + " decoded "
-                    + decoded + " of " + SELF_TEST_FRAMES + " wb=" + wideband);
-            return false;
+            /* Prove the mid-call retune too. A CMR or an ANBR
+             * recommendation reconfigures the encoder while a call is up,
+             * and that path would otherwise first run on a live call --
+             * which is exactly how the shared-BufferInfo race reached a
+             * tester. If reconfiguration does not work on this ROM the
+             * codec is still usable, we simply never attempt to adapt. */
+            int other = JoanAmr.modeBitrate(wideband ? 0 : 0, wideband);
+            boolean retuned = other > 0 && c.retuneEncoder(other)
+                    && roundTrip(c, pcm, n, packed, back, wideband);
+            if (wideband) {
+                sRetuneWb = retuned;
+            } else {
+                sRetuneNb = retuned;
+            }
+            if (!retuned) {
+                JoanTrace.note("amr self-test: retune unavailable wb=" + wideband
+                        + "; adaptation will be skipped");
+            }
+            return true;
         } catch (Throwable t) {
             JoanTrace.note("amr self-test failed wb=" + wideband + ": "
                     + t.getClass().getSimpleName());

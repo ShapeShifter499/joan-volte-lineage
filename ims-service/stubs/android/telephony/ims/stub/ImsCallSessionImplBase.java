@@ -8,6 +8,14 @@ import android.telephony.ims.ImsStreamMediaProfile;
 import java.util.concurrent.Executor;
 
 public class ImsCallSessionImplBase {
+    /* Access Network Bitrate Recommendation, delivered by the framework
+     * from the radio (Android 14+, present on this device's Android 15
+     * framework -- verified by dex symbol). Declared here only so the
+     * override compiles; the real base class provides the behaviour, and
+     * on a framework without it the override is simply never called. */
+    public void callSessionNotifyAnbr(int mediaType, int direction,
+                                      int bitsPerSecond) {}
+
     public static final int STATE_IDLE = 0;
     public static final int STATE_INITIATED = 1;
     public static final int STATE_NEGOTIATING = 2;
