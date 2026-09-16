@@ -201,6 +201,38 @@ The fourth, a reg-event `SUBSCRIBE` (`RegSubscription.cpp`), is real and
 still missing here, but it is a feature to build rather than a divergence
 to correct.
 
+## AOSP ImsMedia (`packages/modules/ImsMedia`)
+
+- Source: <https://android.googlesource.com/platform/packages/modules/ImsMedia>
+- Revision consulted: tag `android-17.0.0_r1`
+- Licence: Apache-2.0. Reference only; nothing copied.
+
+**The stack is split, and the split matters.** `ImsStack` owns SIP, SDP and
+negotiation; `ImsMedia` owns RTP, RTCP and codec transport. Reading only
+the first led to "AOSP has no X" conclusions about media that were really
+"X is in the other repo" -- notably RTCP, where ImsStack has no transport
+at all. Look in ImsMedia for anything below SDP.
+
+Two of our RTCP decisions have a reference behind them:
+
+- **A separate RTCP socket.** `AudioSession` holds `mRtpFd` and `mRtcpFd`
+  as distinct descriptors and builds a whole separate
+  `AudioStreamGraphRtcp(this, mRtcpFd)`. Our non-muxed RTP+1 bind is the
+  same shape.
+- **Receiver reports are diagnostic, not control.** For audio,
+  `RtcpDecoderNode` answers an RR with `SendEvent(kCollectPacketInfo,
+  kStreamRtcp)` and nothing else. The only loss-driven bitrate change in
+  the file is behind `#ifdef DEBUG_BITRATE_CHANGE_SIMULATION` and video
+  only. Adaptation is ANBR's job, which is why we log loss and do not act
+  on it.
+
+Where they go further: `RtcpXrEncoder.cpp` actually produces RTCP-XR
+blocks, which is why ImsStack negotiates `a=rtcp-xr`; and `RtcpConfig`
+carries a configurable `intervalSec` where we hardcode five seconds. Both
+are reasons NOT to advertise `a=rtcp-xr` until something here emits the
+blocks -- the same mistake as claiming mode-change-capability, AMR-NB or
+octet-align support we did not have.
+
 ## LG IMS (reverse engineered)
 
 - `docs/lg-ims-fullstack-re-2026-09-05.md`,
