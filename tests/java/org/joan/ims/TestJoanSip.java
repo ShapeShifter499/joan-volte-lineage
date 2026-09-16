@@ -1589,6 +1589,44 @@ public final class TestJoanSip {
                 "another device's instance does not read as ours");
         check(JoanRegInfo.describe(active, ours, "x").contains("inst_seen=false"),
                 "a body with no instance parameter says so");
+
+        /* Instance first, host second. The address changes across a
+         * re-registration and the network keeps listing the old binding;
+         * matching on host alone then calls every contact somebody
+         * else's. Observed on T-Mobile as contacts=4 matched=0 straight
+         * after a reboot, matching again once the address settled. */
+        String OURINST = "11111111-222222-3";
+        String THEIRS = "99999999-888888-7";
+        String staleHost = "<reginfo><registration state=\"active\">"
+                + "<contact id=\"1\" state=\"terminated\" event=\"deactivated\">"
+                + "<uri>sip:x@2001:db8::OLD:5060</uri>"
+                + "<unknown-param name=\"+sip.instance\">"
+                + "&lt;urn:gsma:imei:" + OURINST + "&gt;</unknown-param>"
+                + "</contact></registration></reginfo>";
+        check(JoanRegInfo.parse(staleHost, ours, OURINST)
+                        == JoanRegInfo.STATE_TERMINATED_REREGISTER,
+                "our instance identifies us even when the address moved on");
+        check(JoanRegInfo.parse(staleHost, ours) == JoanRegInfo.STATE_UNKNOWN,
+                "and host matching alone would have missed it");
+
+        String otherInst = staleHost.replace(OURINST, THEIRS)
+                .replace("2001:db8::OLD", "2001:db8::1");
+        check(JoanRegInfo.parse(otherInst, ours, OURINST)
+                        == JoanRegInfo.STATE_UNKNOWN,
+                "a contact naming another instance is refused even on our host");
+        check(JoanRegInfo.parse(otherInst, ours)
+                        == JoanRegInfo.STATE_TERMINATED_REREGISTER,
+                "which host matching alone would have wrongly claimed");
+
+        /* A contact with no instance at all still falls back to the host,
+         * so a network that does not echo it is no worse off. */
+        String noInst = "<reginfo><registration state=\"active\">"
+                + "<contact id=\"1\" state=\"terminated\" event=\"deactivated\">"
+                + "<uri>sip:x@2001:db8::1:5060</uri>"
+                + "</contact></registration></reginfo>";
+        check(JoanRegInfo.parse(noInst, ours, OURINST)
+                        == JoanRegInfo.STATE_TERMINATED_REREGISTER,
+                "no instance in the body falls back to matching the host");
     }
 
     private static void testSessionTimer() {

@@ -101,16 +101,56 @@ final class JoanRegInfo {
     }
 
     /**
-     * Where one contact element's content stops: the first closing tag,
-     * or the start of the next contact, whichever comes first.
+     * Where one contact element's content stops: its own closing tag, or
+     * the start of the next contact, whichever comes first.
+     *
+     * <p>Not the first closing tag of any kind. A contact's children are
+     * elements too, so stopping at the first {@code </} stops at
+     * {@code </uri>} and everything after it -- including the
+     * {@code +sip.instance} parameter, which is the one identifier worth
+     * having -- falls outside the content and is never seen.
      */
     private static int contentEnd(String low, int openEnd) {
-        int close = low.indexOf("</", openEnd);
+        int close = closingContact(low, openEnd);
         int next = nextContact(low, openEnd);
         if (next > openEnd && (close < 0 || next < close)) {
             return next;
         }
-        return close;
+        return close < 0 ? low.length() : close;
+    }
+
+    /** Index of the next {@code </contact>}, tolerating a prefix. */
+    private static int closingContact(String low, int from) {
+        int at = from;
+        while (true) {
+            int lt = low.indexOf("</", at);
+            if (lt < 0) {
+                return -1;
+            }
+            int i = lt + 2;
+            int colon = -1;
+            int j = i;
+            while (j < low.length()) {
+                char ch = low.charAt(j);
+                if (ch == ':') {
+                    colon = j;
+                    break;
+                }
+                if (!Character.isLetterOrDigit(ch) && ch != '-' && ch != '_') {
+                    break;
+                }
+                j++;
+            }
+            int nameAt = colon >= 0 ? colon + 1 : i;
+            if (low.startsWith("contact", nameAt)) {
+                int after = nameAt + "contact".length();
+                char nx = after < low.length() ? low.charAt(after) : ' ';
+                if (!Character.isLetterOrDigit(nx)) {
+                    return lt;
+                }
+            }
+            at = lt + 2;
+        }
     }
 
     /**
@@ -231,8 +271,7 @@ final class JoanRegInfo {
             String inner = close > end ? low.substring(end + 1, close) : "";
             at = end + 1;
             n++;
-            boolean ours = host == null || host.isEmpty()
-                    || inner.indexOf(host) >= 0 || element.indexOf(host) >= 0;
+            boolean ours = isOurs(element, inner, host, ourInstance);
             if (ours) {
                 mine++;
             }
@@ -267,7 +306,59 @@ final class JoanRegInfo {
         return d.toString();
     }
 
+    /** The +sip.instance parameter name, as it appears in a reginfo body. */
+    private static final String INSTANCE_PARAM = "+sip.instance";
+
+    /**
+     * Whether this contact is ours.
+     *
+     * <p>Instance first, host second, and the order matters. The Contact
+     * we register carries a {@code +sip.instance} holding a
+     * {@code urn:gsma:imei}, which is unique to this handset and survives
+     * everything the address does not: a new IPv6 address after a
+     * re-registration leaves the network still listing the old binding,
+     * and matching on host alone then reports every contact as somebody
+     * else's. That is not hypothetical -- it was observed on T-Mobile as
+     * contacts=4 matched=0 immediately after a reboot, and the same
+     * bindings matched once the address settled.
+     *
+     * <p>A contact that carries an instance which is not ours is
+     * definitively not ours, and is rejected without consulting the host:
+     * that is the case AOSP's
+     * {@code KEY_USE_REGINFO_CONTACT_WITHOUT_URI_CHECK_BOOL} gives up on,
+     * and an exact identifier is a better answer than abandoning the
+     * check.
+     */
+    private static boolean isOurs(String element, String inner, String host,
+                                  String ourInstance) {
+        boolean haveInstance = ourInstance != null && !ourInstance.isEmpty();
+        if (haveInstance) {
+            String inst = ourInstance.toLowerCase(java.util.Locale.US);
+            if (inner.indexOf(inst) >= 0 || element.indexOf(inst) >= 0) {
+                return true;
+            }
+            if (inner.indexOf(INSTANCE_PARAM) >= 0
+                    || element.indexOf(INSTANCE_PARAM) >= 0) {
+                /* It named an instance and it was not ours. */
+                return false;
+            }
+        }
+        if (host == null || host.isEmpty()) {
+            /* Nothing to compare on: accept, as the caller asked. */
+            return true;
+        }
+        return inner.indexOf(host) >= 0 || element.indexOf(host) >= 0;
+    }
+
     static int parse(String body, String ourUri) {
+        return parse(body, ourUri, null);
+    }
+
+    /**
+     * @param ourInstance our +sip.instance value, or null to match on the
+     *        URI host alone
+     */
+    static int parse(String body, String ourUri, String ourInstance) {
         if (body == null || body.isEmpty()) {
             return STATE_UNKNOWN;
         }
@@ -304,10 +395,7 @@ final class JoanRegInfo {
             String inner = close > end ? low.substring(end + 1, close) : "";
             at = end + 1;
 
-            if (host != null && !host.isEmpty()
-                    && inner.indexOf(host) < 0
-                    && element.indexOf(host) < 0) {
-                /* A contact that is not ours. */
+            if (!isOurs(element, inner, host, ourInstance)) {
                 continue;
             }
             String state = attr(element, "state");

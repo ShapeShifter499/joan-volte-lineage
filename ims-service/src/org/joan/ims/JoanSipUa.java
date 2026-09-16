@@ -659,7 +659,7 @@ final class JoanSipUa {
      */
     private static void handleRegEventNotify(String rx) {
         String body = JoanSipBuilder.bodyOf(rx);
-        int state = JoanRegInfo.parse(body, ourContactUri());
+        int state = JoanRegInfo.parse(body, ourContactUri(), ourInstanceId());
         if (state == JoanRegInfo.STATE_UNKNOWN
                 || state == JoanRegInfo.STATE_ACTIVE) {
             /* "unknown" on its own is a second mystery rather than a
