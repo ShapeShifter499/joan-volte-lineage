@@ -15,3 +15,8 @@ java -cp "$OUT:$SDK" org.joan.ims.TestJoanUa
 java -cp "$OUT:$SDK" org.joan.ims.TestJoanXfrmStats
 java -cp "$OUT:$SDK" org.joan.ims.TestJoanMerge
 java -cp "$OUT:$SDK" org.joan.ims.TestJoanFreshPass
+# The registration suite has its own runner because it compiles a different
+# file set. Call it from here so it cannot silently stop running: it was
+# reachable only by hand, and checks added to it passed unnoticed because
+# nothing executed them.
+"$(dirname "$0")/ua/run-registration-tests.sh"
