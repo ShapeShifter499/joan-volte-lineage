@@ -591,6 +591,45 @@ public class TestJoanRegistration {
                 "routine-poke-classified");
         check(!JoanAppRegister.JoanRegLifecycle.routinePoke("manual poke"),
                 "manual-poke-classified");
+        check(JoanAppRegister.JoanRegLifecycle.routinePoke(
+                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_IP_CHANGED),
+                "an ip change is routine network chatter, not a user poke");
+
+        /* Local address change. The question is not "did the link's
+         * addresses change" but "is the one we are bound to still here":
+         * a link that gains an address, or drops one we never used, has
+         * invalidated nothing, and re-registering for it would drop a
+         * working call. */
+        String[] two = { "2001:db8::1", "2001:db8::2" };
+        check(!JoanAppRegister.JoanRegLifecycle.localAddressGone(
+                        two, "2001:db8::1"),
+                "our address still present is not a change");
+        check(JoanAppRegister.JoanRegLifecycle.localAddressGone(
+                        two, "2001:db8::9"),
+                "our address missing from the link is a change");
+        check(!JoanAppRegister.JoanRegLifecycle.localAddressGone(
+                        new String[] { "2001:db8::1" }, "2001:db8::1"),
+                "a link that lost an address we never used is not a change");
+        check(!JoanAppRegister.JoanRegLifecycle.localAddressGone(
+                        new String[0], "2001:db8::1")
+                        && !JoanAppRegister.JoanRegLifecycle.localAddressGone(
+                                null, "2001:db8::1"),
+                "an empty address list is mid-reconfiguration, not a loss");
+        check(!JoanAppRegister.JoanRegLifecycle.localAddressGone(two, null)
+                        && !JoanAppRegister.JoanRegLifecycle.localAddressGone(
+                                two, ""),
+                "no address of our own means nothing to compare");
+        check(JoanAppRegister.JoanRegLifecycle.reregisterOnIpChange(
+                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_IP_CHANGED,
+                        true),
+                "an ip change with a binding re-registers");
+        check(!JoanAppRegister.JoanRegLifecycle.reregisterOnIpChange(
+                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_IP_CHANGED,
+                        false),
+                "an ip change with no binding leaves discovery to it");
+        check(!JoanAppRegister.JoanRegLifecycle.reregisterOnIpChange(
+                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_LOST, true),
+                "only an ip change takes the ip-change path");
         /* A loss during a call is deferred, not acted on: the bearer drops
          * briefly for reasons a call should survive, and releasing the UA
          * takes the dialog with it. Deferring only counts if it expires. */

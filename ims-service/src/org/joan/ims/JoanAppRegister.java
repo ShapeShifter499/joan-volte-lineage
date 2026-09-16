@@ -1690,6 +1690,8 @@ final class JoanAppRegister {
         /** Poke reasons produced by the IMS network callback. */
         static final String POKE_IMS_AVAILABLE = "ims available";
         static final String POKE_IMS_LOST = "ims lost";
+        /** The address our sockets are bound to left the IMS link. */
+        static final String POKE_IMS_IP_CHANGED = "ims ip changed";
 
         /**
          * Routine network-presence chatter (the connectivity callback) vs
@@ -1700,7 +1702,53 @@ final class JoanAppRegister {
          */
         static boolean routinePoke(String reason) {
             return POKE_IMS_AVAILABLE.equals(reason)
-                    || POKE_IMS_LOST.equals(reason);
+                    || POKE_IMS_LOST.equals(reason)
+                    || POKE_IMS_IP_CHANGED.equals(reason);
+        }
+
+        /**
+         * Whether the local address we are bound to is gone from a link.
+         *
+         * <p>AOSP compares the whole cached address set
+         * (Apn.ImsNetworkCallback.isIpChanged) and calls any difference an
+         * IP change. The sharper question here is whether the ONE address
+         * our sockets are actually bound to survived: a link that gains a
+         * second address, or loses one we never used, changes nothing we
+         * have to act on, and re-registering for it would drop a working
+         * call for no reason. A link that no longer carries ours has
+         * invalidated every socket and every IPsec SA at once.
+         *
+         * <p>An empty or unreadable address list is not treated as gone:
+         * a callback that arrives mid-reconfiguration would otherwise
+         * look identical to a genuine change, and the cost of being wrong
+         * is a dropped call. A real loss still arrives as onLost.
+         */
+        static boolean localAddressGone(String[] linkAddresses,
+                                        String inUse) {
+            if (inUse == null || inUse.isEmpty()) {
+                return false;
+            }
+            if (linkAddresses == null || linkAddresses.length == 0) {
+                return false;
+            }
+            for (String a : linkAddresses) {
+                if (inUse.equals(a)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /**
+         * Whether an IP-change poke must re-register.
+         *
+         * <p>Only when we believe we hold a binding: with no registration
+         * there is nothing bound to the old address, and the ordinary
+         * discovery path will pick the new one up on its own.
+         */
+        static boolean reregisterOnIpChange(String reason,
+                                            boolean uaRegistered) {
+            return POKE_IMS_IP_CHANGED.equals(reason) && uaRegistered;
         }
 
         /**

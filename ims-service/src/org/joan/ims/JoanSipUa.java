@@ -680,6 +680,8 @@ final class JoanSipUa {
                       Socket tcpClient,
                       IpSecManager ipsec, AutoCloseable[] held) {
         boolean liveCalls = sCall || sParked != null || sHeldInvite != null;
+        InetAddress wasLocal = sLocal;
+        String wasCallId = currentCallId();
         synchronized (LOCK) {
             if (liveCalls) {
                 /* A successful refresh re-plumbs sockets and SAs, but the
@@ -740,6 +742,77 @@ final class JoanSipUa {
         } else {
             JoanTrace.note("app UA REGISTER 200 but no public identity");
         }
+        if (sReg && liveCalls && wasLocal != null
+                && !wasLocal.equals(local)) {
+            /* The registration was re-plumbed onto a different local
+             * address while a call was up -- a VoWiFi/VoLTE swap, or a
+             * PDN that came back with a new address. The dialog survived
+             * (RFC 3261 s12), but everything bound to the old address did
+             * not: the RTP socket cannot send from an address the
+             * interface no longer has, and the peer is still sending to
+             * it. Left alone this is a call that stays on screen, stays
+             * silent, and never ends. */
+            migrateCallToNewAddress(wasLocal, local, wasCallId);
+        }
+    }
+
+    /**
+     * Move a live call onto the address the registration just moved to.
+     *
+     * <p>Off-thread: this sends a re-INVITE and waits for its final
+     * response, and adopt() is called from the registration path.
+     *
+     * <p>Every failure here ends the call. That is the point -- the
+     * alternative is a call that looks connected and carries nothing,
+     * which is the state this whole path exists to get out of.
+     */
+    private static void migrateCallToNewAddress(final InetAddress from,
+                                                final InetAddress to,
+                                                final String callId) {
+        JoanTrace.note("app local address changed during a call; migrating"
+                + " fam=" + (to instanceof Inet6Address ? "v6" : "v4")
+                + " cid=" + callId);
+        new Thread(() -> {
+            try {
+                if (callId == null || !dialogAlive(callId)) {
+                    JoanTrace.note("app migrate: dialog already gone");
+                    return;
+                }
+                /* Rebind the media first. The re-INVITE tells the peer to
+                 * send here, and we want to be listening before it does
+                 * rather than dropping the first seconds of audio. */
+                boolean media = JoanMedia.startRtp(sApp, sNet, sLocal,
+                        sMediaIp, sMediaPort, sMediaRtcpPort, sMediaMux,
+                        sMediaPt, sMediaAmrWb, sMediaAmrBitrate,
+                        sMediaAmrOct, sMediaAmrMaxMode, sMediaTePt);
+                if (!media) {
+                    JoanTrace.note("app migrate: media would not restart;"
+                            + " ending call");
+                    hangup(callId);
+                    return;
+                }
+                /* A re-INVITE is a target refresh: its Contact and its SDP
+                 * both carry the new address, which is what moves the
+                 * peer's signalling and its media together. */
+                String r = reInviteLive(liveHeld(), callId);
+                if (r != null && r.startsWith("OK")) {
+                    JoanTrace.note("app migrate: call moved to the new"
+                            + " address");
+                    return;
+                }
+                JoanTrace.note("app migrate: re-INVITE failed (" + r
+                        + "); ending call");
+                hangup(callId);
+            } catch (Throwable t) {
+                JoanTrace.note("app migrate " + t.getClass().getSimpleName()
+                        + "; ending call");
+                try {
+                    hangup(callId);
+                } catch (Throwable ignored) {
+                    // nothing left to do
+                }
+            }
+        }, "joan-sip-migrate").start();
     }
 
     static String invite(String dest) {

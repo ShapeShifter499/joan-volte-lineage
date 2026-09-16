@@ -311,6 +311,21 @@ turns every refresh into a 405), and the values are re-read on
 ACTION_CARRIER_CONFIG_CHANGED because com.android.phone can restart
 under a running call.
 
+### Local IP change, and where we deliberately differ
+
+`Apn.ImsNetworkCallback.onLinkPropertiesChanged()` is the right callback
+and we watch the same one, but AOSP's `isIpChanged()` compares the whole
+cached address set and calls any difference an IP change. We ask a
+narrower question: is the ONE address our sockets are bound to still on
+the link? A link that gains an address, or loses one we never used, has
+invalidated nothing, and re-registering for it would drop a working
+call. A link that no longer carries ours has invalidated the SIP
+sockets, both IPsec SAs and the RTP socket at once.
+
+AOSP's own recovery is in its native stack (EVENT_IP_CHANGED ->
+EDataState.DATA_STATE_IP_CHANGED, consumed across SystemCallInterface),
+so what we do afterwards has no upstream to follow.
+
 ## LG IMS (reverse engineered)
 
 - `docs/lg-ims-fullstack-re-2026-09-05.md`,

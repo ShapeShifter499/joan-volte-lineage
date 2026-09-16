@@ -2,6 +2,7 @@ package org.joan.ims;
 
 import android.content.Context;
 import android.net.ConnectivityManager;
+import android.net.LinkAddress;
 import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -91,6 +92,21 @@ final class JoanDriver {
             return;
         }
         boolean ua = JoanSipUa.isRegistered();
+        if (JoanAppRegister.JoanRegLifecycle
+                .reregisterOnIpChange(reason, ua)) {
+            /* Everything is bound to an address the link no longer has:
+             * the SIP sockets, both IPsec SAs, and the RTP socket. A
+             * refresh on the old address cannot leave, so re-register
+             * from scratch. adopt() keeps any live dialog and then moves
+             * its media to the new address; nothing here has to know
+             * whether a call is up. */
+            sStaleAfterLoss = false;
+            sRegisterBackoffMs = REG_RETRY_MIN_MS;
+            wake();
+            JoanSipUa.release();
+            JoanTrace.note("IMS local address changed; re-registering");
+            return;
+        }
         if (JoanAppRegister.JoanRegLifecycle.routinePoke(reason)) {
             if (JoanAppRegister.JoanRegLifecycle
                     .reacquireAfterLoss(reason, sStaleAfterLoss)) {
@@ -570,6 +586,43 @@ final class JoanDriver {
                     public void onLost(Network network) {
                         JoanTrace.note("IMS network callback lost");
                         poke(JoanAppRegister.JoanRegLifecycle.POKE_IMS_LOST);
+                    }
+
+                    @Override
+                    public void onLinkPropertiesChanged(Network network,
+                            LinkProperties lp) {
+                        /* AOSP watches the same callback for this
+                         * (Apn.ImsNetworkCallback.onLinkPropertiesChanged)
+                         * and raises EVENT_IP_CHANGED; what it does next
+                         * is in its native stack, so the recovery below
+                         * is ours. */
+                        java.net.InetAddress inUse = JoanSipUa.localAddr();
+                        if (inUse == null || lp == null) {
+                            return;
+                        }
+                        java.util.List<LinkAddress> las;
+                        try {
+                            las = lp.getLinkAddresses();
+                        } catch (Throwable t) {
+                            return;
+                        }
+                        if (las == null || las.isEmpty()) {
+                            return;
+                        }
+                        String[] have = new String[las.size()];
+                        for (int i = 0; i < have.length; i++) {
+                            java.net.InetAddress a = las.get(i).getAddress();
+                            have[i] = a == null ? "" : a.getHostAddress();
+                        }
+                        if (!JoanAppRegister.JoanRegLifecycle
+                                .localAddressGone(have,
+                                        inUse.getHostAddress())) {
+                            return;
+                        }
+                        JoanTrace.note("IMS link no longer carries our local"
+                                + " address (" + have.length + " present)");
+                        poke(JoanAppRegister.JoanRegLifecycle
+                                .POKE_IMS_IP_CHANGED);
                     }
                 };
                 cm.requestNetwork(req, sImsCallback);
