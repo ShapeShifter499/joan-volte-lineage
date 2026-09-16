@@ -131,6 +131,11 @@ failing the new thing:
   there. The installer used to try, and now does not touch `/vendor` at
   all.
 
+  How much it helps is **not** established -- see the AGC section of
+  `upstream/README.md`. Enabling it is verifiable (`platform_agc` goes
+  true); a level improvement was claimed from a before-and-after
+  comparison and does not survive the calls measured since.
+
   **It is two lines in a device tree.** See the AGC section of
   [`upstream/README.md`](upstream/README.md) and
   `upstream/merge-agc-effect.sh`. `platform_agc=false` in your trace

@@ -1155,8 +1155,10 @@ final class JoanMedia {
      * hotter than the platform's and sounded worse, and its limiter was
      * squaring off peaks the platform had already levelled.
      *
-     * The zip enables the platform AGC instead -- and until 2026-09-16 it
-     * did not, which is why this said platform_agc=false on every call.
+     * A device tree enables the platform AGC instead -- the zip cannot,
+     * and until 2026-09-16 nothing did, which is why this said
+     * platform_agc=false on every call. Whether enabling it actually
+     * raises the level is unproven: see upstream/README.md.
      * joan ships libaudiopreprocessing.so under /vendor/lib/soundfx but
      * audio_effects.xml never declared it, so the effect the comment
      * relied on did not exist. scripts/merge-agc-effect.sh adds it.

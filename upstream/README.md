@@ -133,20 +133,32 @@ that means emergency calls may have nowhere to go.
 > `scripts/merge-agc-effect.sh` moved here, to `upstream/`, because a
 > ROM build is the only place it can run.
 >
-> **If you are building a ROM for joan, apply this.** It is two lines and
-> it is measurable. Verified on the bench, same handset and same PSTN far
-> end, two calls each way before and after, with the far end confirming
-> the difference by ear:
+> **What is established, and what is not.** The declaration demonstrably
+> works: `AutomaticGainControl.isAvailable()` becomes true and the trace
+> turns `platform_agc=false` into `platform_agc=true`. That part is
+> binary and verifiable.
 >
-> | | without | with |
-> |---|---|---|
-> | uplink speech | -39.2 dBFS | **-32.7 / -31.9 dBFS** |
-> | uplink peak | -20.8 dBFS | **-10.4 / -11.0 dBFS** |
-> | downlink speech | -23.2 dBFS | -23.4 / -21.7 dBFS (unchanged) |
+> **Whether it improves the uplink level is NOT established.** An earlier
+> version of this section claimed about +7 dB of speech and +10 dB of
+> peak. That was wrong -- it compared the first two calls after enabling
+> it against one call before, in time order, which confounds the change
+> with everything else that differs between calls, including how loudly
+> the talker happened to speak. Every whole-call figure gathered since:
 >
-> About +7 dB of speech and +10 dB of peak. The uplink still sits some
-> 9 dB below the downlink, so this improves the problem without closing
-> it -- do not expect it to be the last word on level.
+> | AGC | uplink speech, per call |
+> |---|---|
+> | off | -39.2 dBFS |
+> | on | -32.7, -31.9, -39.1, -40.1 dBFS |
+>
+> Two of the four were better and two were the same or worse, and the
+> spread with the AGC enabled is over 8 dB -- wider than the effect that
+> was claimed for it. The only positive signal is subjective: the far end
+> reported it sounding louder on the first pair.
+>
+> So apply it because the effect is the platform's job and this is how
+> the platform is told to do it, not because of a number. Establishing a
+> real figure needs interleaved A/B calls with a controlled talker, not
+> before-and-after.
 >
 > `upstream/merge-agc-effect.sh` applies the patch to an existing
 > `audio_effects.xml` idempotently, preserving every library and effect
