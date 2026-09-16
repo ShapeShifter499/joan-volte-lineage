@@ -351,6 +351,17 @@ in three places -- the root-element guard, the contact finder and the
 closing-tag search. None of them threw; they found no contacts, which
 reads exactly like a network that said nothing about us.
 
+### Adopting ImsMedia rather than reading it
+
+Evaluated 2026-09-16; see `docs/imsmedia-evaluation-2026-09-16.md`. The
+short version: the AP-side path is the default, the API links statically
+into an app, and `openSession()` takes the RTP and RTCP sockets from the
+caller -- so our IPsec-bound sockets are not an obstacle. What blocks it
+is `sharedUserId="android.uid.phone"` plus `certificate: "platform"`,
+which the flashable zip cannot satisfy on a release-keys ROM. It is a
+device-tree feature, not a zip feature. The jitter buffer we lack
+entirely is the part worth porting in the meantime.
+
 ## LG IMS (reverse engineered)
 
 - `docs/lg-ims-fullstack-re-2026-09-05.md`,
