@@ -69,6 +69,8 @@ final class JoanMedia {
     private static volatile int sRecv;
     private static volatile int sOctets;
     private static volatile long sRtcpNext;
+    /** Negotiated AMR framing; false selects the bandwidth-efficient packer. */
+    private static volatile boolean sAmrOct = true;
 
     private JoanMedia() {}
 
@@ -76,7 +78,7 @@ final class JoanMedia {
                             InetAddress dest, int destPort, int rtcpPort,
                             boolean mux) {
         return startRtp(ctx, net, local, dest, destPort, rtcpPort, mux, 0,
-                null, 0);
+                null, 0, true);
     }
 
     /**
@@ -90,9 +92,10 @@ final class JoanMedia {
     static boolean startRtp(Context ctx, Network net, InetAddress local,
                             InetAddress dest, int destPort, int rtcpPort,
                                boolean mux, int payloadType, Boolean amrWideband,
-                            int amrBitrate) {
+                            int amrBitrate, boolean amrOctetAligned) {
         stop();
         sPt = payloadType;
+        sAmrOct = amrOctetAligned;
         sAmr = null;
         sRate = PCMU_HZ;
         sFrame = PCMU_SAMPLES;
@@ -157,7 +160,9 @@ final class JoanMedia {
                 + " codec=" + (sAmr == null ? "PCMU"
                         : (sAmr.wideband() ? "AMR-WB" : "AMR-NB"))
                 + " pt=" + sPt + " rate=" + sRate
-                + " bitrate=" + (amrBitrate > 0 ? amrBitrate : 0));
+                + " bitrate=" + (amrBitrate > 0 ? amrBitrate : 0)
+                + " framing=" + (sAmr == null ? "n/a"
+                        : (sAmrOct ? "octet-aligned" : "bandwidth-efficient")));
         return true;
     }
 
@@ -331,8 +336,11 @@ final class JoanMedia {
                          * this tick rather than a malformed packet. */
                         continue;
                     }
-                    paylen = JoanAmr.pack(storage, 0, slen, JoanAmr.CMR_NONE,
-                            amr.wideband(), payload);
+                    paylen = sAmrOct
+                            ? JoanAmr.pack(storage, 0, slen, JoanAmr.CMR_NONE,
+                                    amr.wideband(), payload)
+                            : JoanAmr.packBe(storage, 0, slen, JoanAmr.CMR_NONE,
+                                    amr.wideband(), payload);
                     if (paylen < 0) {
                         continue;
                     }
@@ -401,6 +409,7 @@ final class JoanMedia {
             short[] pcm = new short[sFrame];
             byte[] storage = new byte[512];
             int decFails = 0;
+            int lastCmr = JoanAmr.CMR_NONE;
             DatagramPacket in = new DatagramPacket(down, down.length);
             JoanTrace.note("media play rolling voice mode="
                     + (am == null ? -1 : am.getMode()));
@@ -442,8 +451,23 @@ final class JoanMedia {
                     continue;
                 }
                 if (amr != null) {
-                    int slen = JoanAmr.unpack(down, off, m, amr.wideband(),
-                            storage);
+                    /* The peer can ask us to change mode in every packet.
+                     * We advertise mode-change-capability and then ignore
+                     * it, and MediaCodec offers no runtime bitrate key for
+                     * an audio encoder -- honouring a request would mean
+                     * reopening the codec mid-call. Before building that,
+                     * find out whether any network actually asks: a CMR
+                     * that never moves off 15 (no request) makes the whole
+                     * question moot. Logged on change only. */
+                    int cmr = JoanAmr.requestedMode(down, off, m);
+                    if (cmr != lastCmr) {
+                        JoanTrace.note("amr peer CMR " + lastCmr + " -> " + cmr
+                                + (cmr == JoanAmr.CMR_NONE ? " (no request)" : ""));
+                        lastCmr = cmr;
+                    }
+                    int slen = sAmrOct
+                            ? JoanAmr.unpack(down, off, m, amr.wideband(), storage)
+                            : JoanAmr.unpackBe(down, off, m, amr.wideband(), storage);
                     if (slen < 0) {
                         continue;
                     }

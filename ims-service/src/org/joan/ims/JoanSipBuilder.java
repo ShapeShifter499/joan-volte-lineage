@@ -1295,7 +1295,7 @@ final class JoanSipBuilder {
         /** Payload type we use when OFFERING; an answer echoes theirs. */
         final int offerPt;
         final String fmtp;
-        /** AMR without octet-aligned framing is not implemented. */
+        /** True for the AMR family: framing follows the peer's fmtp. */
         final boolean needsOctetAlign;
 
         Capability(String name, int rate, int offerPt, String fmtp,
@@ -1447,6 +1447,15 @@ final class JoanSipBuilder {
         return null;
     }
 
+    /**
+     * Framing the peer negotiated. Absent octet-align means
+     * bandwidth-efficient (RFC 4867 4.1), never "either".
+     */
+    static boolean amrOctetAligned(Codec c) {
+        Capability cap = capabilityFor(c);
+        return cap != null && cap.amrWideband() != null && c.amrOctetAligned();
+    }
+
     /** Wideband flag for the media layer, from the one profile. */
     static Boolean amrWideband(Codec c) {
         Capability cap = capabilityFor(c);
@@ -1465,9 +1474,6 @@ final class JoanSipBuilder {
         for (Codec c : offer.codecs) {
             Capability cap = capabilityFor(c);
             if (cap == null) {
-                continue;
-            }
-            if (cap.needsOctetAlign && !c.amrOctetAligned()) {
                 continue;
             }
             return c;
@@ -1556,11 +1562,14 @@ final class JoanSipBuilder {
             rtpmap = "a=rtpmap:" + pt + ' ' + cap.name + '/' + cap.rate
                     + (cap.amrWideband() != null ? "/1" : "") + "\r\n";
             if (cap.needsOctetAlign) {
-                /* Echo their mode-set: an answer that stays silent about
-                 * it claims every mode, and we are about to encode inside
-                 * theirs. */
+                /* Mirror their framing and their mode-set. Both are now
+                 * carried, so the answer states what we will actually
+                 * send rather than what we would prefer: octet-align=0 is
+                 * also the default, so it is only written when they wrote
+                 * it. An answer silent on mode-set claims every mode. */
                 String ms = chosen.modeSet();
-                fmtp = "a=fmtp:" + pt + " octet-align=1"
+                boolean oct = chosen.amrOctetAligned();
+                fmtp = "a=fmtp:" + pt + (oct ? " octet-align=1" : " octet-align=0")
                         + (ms.isEmpty() ? "" : ";" + ms) + "\r\n";
             }
         }

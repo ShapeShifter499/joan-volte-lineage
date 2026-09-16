@@ -566,7 +566,8 @@ public class JoanCallSession extends ImsCallSessionImplBase {
                 JoanSipUa.mediaIp(), JoanSipUa.mediaPort(),
                 JoanSipUa.mediaRtcpPort(), JoanSipUa.mediaMux(),
                 JoanSipUa.mediaPt(), JoanSipUa.mediaAmrWideband(),
-                JoanSipUa.mediaAmrBitrate())) {
+                JoanSipUa.mediaAmrBitrate(),
+                JoanSipUa.mediaAmrOctetAligned())) {
             return;
         }
         JoanTrace.note("media did not start; ending call");

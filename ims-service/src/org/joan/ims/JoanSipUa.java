@@ -76,6 +76,8 @@ final class JoanSipUa {
     private static volatile int sMediaPt;
     /** Encoder bitrate from the negotiated AMR mode-set; 0 = codec default. */
     private static volatile int sMediaAmrBitrate;
+    /** Framing the peer negotiated; false means bandwidth-efficient. */
+    private static volatile boolean sMediaAmrOct;
     private static volatile Boolean sMediaAmrWb;
     private static volatile boolean sMediaMux;
     /** True when the live dialog is on hold (sendonly, no RTP). */
@@ -269,6 +271,10 @@ final class JoanSipUa {
 
     static int mediaAmrBitrate() {
         return sMediaAmrBitrate;
+    }
+
+    static boolean mediaAmrOctetAligned() {
+        return sMediaAmrOct;
     }
 
     static Boolean mediaAmrWideband() {
@@ -521,6 +527,7 @@ final class JoanSipUa {
                             sMediaPt = media.payloadType;
                             sMediaAmrWb = JoanSipBuilder.amrWideband(answered);
                             sMediaAmrBitrate = JoanSipBuilder.amrBitrate(answered);
+                            sMediaAmrOct = JoanSipBuilder.amrOctetAligned(answered);
                             JoanTrace.note("app invite codec="
                                     + (enc.isEmpty() ? "PCMU" : enc)
                                     + " pt=" + media.payloadType
@@ -759,6 +766,7 @@ final class JoanSipUa {
             sMediaPt = chosen == null ? 0 : chosen.pt;
             sMediaAmrWb = JoanSipBuilder.amrWideband(chosen);
             sMediaAmrBitrate = JoanSipBuilder.amrBitrate(chosen);
+            sMediaAmrOct = JoanSipBuilder.amrOctetAligned(chosen);
         }
         JoanTrace.note("app ANSWER 200 codec="
                 + (chosen == null ? "PCMU" : chosen.name)
@@ -2614,6 +2622,7 @@ final class JoanSipUa {
         sMediaRtcpPort = 0;
         sMediaPt = 0;
         sMediaAmrBitrate = 0;
+        sMediaAmrOct = false;
         sMediaAmrWb = null;
         sMediaMux = false;
         sExpiresSec = 0;

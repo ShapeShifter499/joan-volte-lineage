@@ -310,11 +310,17 @@ public final class TestJoanSip {
                 + "a=rtpmap:0 PCMU/8000\r\n";
         JoanSipBuilder.Codec be =
                 JoanSipBuilder.selectAnswerCodec(JoanSipBuilder.parseSdp(beAmr));
-        check(be != null && be.pt == 0,
-                "AMR without octet-align=1 falls back to PCMU");
-        check(JoanSipBuilder.sdpAnswer("2001:db8::2", 40000, beAmr)
-                        .contains("m=audio 40000 RTP/AVP 0\r\n"),
-                "the fallback answer is PCMU");
+        check(be != null && be.pt == 104,
+                "bandwidth-efficient AMR is now carried, not skipped");
+        check(!JoanSipBuilder.amrOctetAligned(be),
+                "an fmtp with no octet-align means bandwidth-efficient");
+        String beAns = JoanSipBuilder.sdpAnswer("2001:db8::2", 40000, beAmr);
+        check(beAns.contains("m=audio 40000 RTP/AVP 104\r\n"),
+                "the answer takes their bandwidth-efficient payload type");
+        check(beAns.contains("a=fmtp:104 octet-align=0"),
+                "the answer states the framing it will actually send");
+        check(JoanSipBuilder.amrOctetAligned(pick),
+                "an offer naming octet-align=1 is carried octet-aligned");
 
         /* The trace has to distinguish "they preferred PCMU" from "they
          * offered AMR we had to skip", because only the second is a bug
@@ -1102,6 +1108,67 @@ public final class TestJoanSip {
             same &= back[i] == storage[i];
         }
         check(same, "round trip is byte-identical");
+
+        /* Bandwidth-efficient (RFC 4867 4.3): nothing is byte-aligned.
+         * CMR(4) + ToC(6) + 253 speech bits = 263 bits -> 33 bytes, one
+         * less than the octet-aligned 34, and the speech no longer starts
+         * on a byte boundary. */
+        byte[] be = new byte[64];
+        int bn = JoanAmr.packBe(storage, 0, storage.length, JoanAmr.CMR_NONE,
+                true, be);
+        check(JoanAmr.frameBits(2, true) == 253,
+                "AMR-WB mode 2 carries 253 bits");
+        check(bn == 33, "bandwidth-efficient WB mode 2 payload is 33 bytes");
+        check(bn < n, "bandwidth-efficient is smaller than octet-aligned");
+        check((be[0] & 0xf0) == 0xf0, "CMR 15 still occupies the top nibble");
+        /* CMR(1111) F(0) FT(0010) Q(1) runs straight across the boundary:
+         * byte 0 is 1111 0 001 = 0xF1, and the last FT bit plus Q begin
+         * byte 1 as 01. Nothing lands where the octet-aligned form puts
+         * it, which is the point. */
+        check((be[0] & 0xff) == 0xf1,
+                "CMR, F and the first FT bits fill byte 0");
+        check((be[1] & 0x80) == 0 && (be[1] & 0x40) != 0,
+                "the ToC straddles the byte boundary, Q leading byte 1");
+
+        byte[] beBack = new byte[64];
+        int bm = JoanAmr.unpackBe(be, 0, bn, true, beBack);
+        check(bm == storage.length, "bandwidth-efficient unpack returns a full frame");
+        boolean beSame = true;
+        for (int i = 0; i < bm; i++) {
+            beSame &= beBack[i] == storage[i];
+        }
+        check(beSame, "bandwidth-efficient round trip is byte-identical");
+
+        /* Narrowband too, where the bit counts differ again. */
+        byte nbHdr = (byte) ((7 << 3) | (1 << 2));   /* FT=7, 12.2 kbit/s */
+        byte[] nbStore = new byte[1 + 31];
+        nbStore[0] = nbHdr;
+        for (int i = 0; i < 31; i++) {
+            nbStore[1 + i] = (byte) (0x5a ^ i);
+        }
+        /* 244 bits is 30 whole bytes plus 4, so the last four bits of the
+         * final byte are padding and carry nothing. Leaving junk there
+         * would be asserting that padding survives a round trip, which it
+         * must not -- bandwidth-efficient never transmits it. */
+        nbStore[1 + 30] &= (byte) 0xf0;
+        byte[] nbBe = new byte[64];
+        int nn = JoanAmr.packBe(nbStore, 0, nbStore.length, JoanAmr.CMR_NONE,
+                false, nbBe);
+        check(JoanAmr.frameBits(7, false) == 244, "AMR-NB mode 7 carries 244 bits");
+        check(nn == (4 + 6 + 244 + 7) / 8, "narrowband bandwidth-efficient length");
+        byte[] nbBack = new byte[64];
+        check(JoanAmr.unpackBe(nbBe, 0, nn, false, nbBack) == nbStore.length,
+                "narrowband bandwidth-efficient unpack returns a full frame");
+        boolean nbSame = true;
+        for (int i = 0; i < nbStore.length; i++) {
+            nbSame &= nbBack[i] == nbStore[i];
+        }
+        check(nbSame, "narrowband bandwidth-efficient round trip is byte-identical");
+
+        /* Truncation must be refused, not read past the end. */
+        check(JoanAmr.unpackBe(be, 0, bn - 1, true, beBack) < 0,
+                "a truncated bandwidth-efficient payload is refused");
+        check(JoanAmr.frameBits(11, true) < 0, "a reserved frame type carries no bits");
 
         /* A multi-frame payload: two ToCs, then both frames. We take the
          * first, since this UA offers ptime 20 and never asks for more. */

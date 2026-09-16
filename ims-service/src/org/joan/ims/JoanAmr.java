@@ -42,6 +42,26 @@ final class JoanAmr {
          0                              /* 15    NO_DATA             */
     };
 
+    /* Speech data BITS per frame type. Bandwidth-efficient packing carries
+     * exactly these, with no padding to a byte -- AMR-WB mode 2 is 253
+     * bits, not the 32 bytes the octet-aligned form rounds it up to. Each
+     * entry is ceil()-consistent with the byte table above. */
+    private static final int[] NB_BITS = {
+        95, 103, 118, 134, 148, 159, 204, 244, /* 0-7  4.75 .. 12.2   */
+        39,                                    /* 8    SID            */
+         0,  0,  0,  0,  0,                    /* 9-13 reserved       */
+         0,                                    /* 14   speech lost    */
+         0                                     /* 15   NO_DATA        */
+    };
+    private static final int[] WB_BITS = {
+        132, 177, 253, 285, 317, 365, 397, 461, /* 0-7  6.60 .. 23.05 */
+        477,                                    /* 8    23.85         */
+         40,                                    /* 9    SID           */
+          0,  0,  0,  0,                        /* 10-13 reserved     */
+          0,                                    /* 14   speech lost   */
+          0                                     /* 15   NO_DATA       */
+    };
+
     static final int FT_NO_DATA = 15;
     static final int FT_SPEECH_LOST = 14;
     /** No mode request: CMR 15. */
@@ -61,6 +81,136 @@ final class JoanAmr {
         int n = (wideband ? WB_BYTES : NB_BYTES)[ft];
         /* Reserved types carry nothing and must not be invented. */
         return n == 0 ? -1 : n;
+    }
+
+    /** Speech bits for a frame type, or -1 if the type is not carried. */
+    static int frameBits(int ft, boolean wideband) {
+        if (ft < 0 || ft > 15) {
+            return -1;
+        }
+        if (ft == FT_NO_DATA || ft == FT_SPEECH_LOST) {
+            return 0;
+        }
+        int n = (wideband ? WB_BITS : NB_BITS)[ft];
+        return n == 0 ? -1 : n;
+    }
+
+    private static int putBits(byte[] out, int pos, int value, int nbits) {
+        for (int i = nbits - 1; i >= 0; i--) {
+            if (((value >> i) & 1) != 0) {
+                out[pos >> 3] |= (byte) (0x80 >>> (pos & 7));
+            }
+            pos++;
+        }
+        return pos;
+    }
+
+    private static int getBits(byte[] in, int base, int pos, int nbits) {
+        int v = 0;
+        for (int i = 0; i < nbits; i++) {
+            int at = pos + i;
+            v = (v << 1) | ((in[base + (at >> 3)] >>> (7 - (at & 7))) & 1);
+        }
+        return v;
+    }
+
+    /**
+     * One storage-format frame -> one bandwidth-efficient RTP payload
+     * (RFC 4867 4.3): CMR(4), then ToC F(1)+FT(4)+Q(1), then the speech
+     * bits, zero-padded to the next octet. Nothing is byte-aligned, which
+     * is the whole difference from {@link #pack}.
+     */
+    static int packBe(byte[] storage, int off, int len, int cmr,
+                      boolean wideband, byte[] out) {
+        if (storage == null || out == null || len < 1
+                || off < 0 || off + len > storage.length) {
+            return -1;
+        }
+        int ft = ftOf(storage[off]);
+        int nBytes = frameBytes(ft, wideband);
+        int nBits = frameBits(ft, wideband);
+        if (nBytes < 0 || nBits < 0 || len < 1 + nBytes) {
+            return -1;
+        }
+        int outLen = (4 + 6 + nBits + 7) / 8;
+        if (out.length < outLen) {
+            return -1;
+        }
+        for (int i = 0; i < outLen; i++) {
+            out[i] = 0;
+        }
+        int pos = putBits(out, 0, cmr & 0x0f, 4);
+        pos = putBits(out, pos, 0, 1);                       // F: last frame
+        pos = putBits(out, pos, ft & 0x0f, 4);
+        pos = putBits(out, pos, qualityOk(storage[off]) ? 1 : 0, 1);
+        for (int i = 0; i < nBits; i++) {
+            int bit = (storage[off + 1 + (i >> 3)] >>> (7 - (i & 7))) & 1;
+            pos = putBits(out, pos, bit, 1);
+        }
+        return outLen;
+    }
+
+    /**
+     * Bandwidth-efficient RTP payload -> the first speech frame, in
+     * storage format. As with {@link #unpack}, later frames in a bundle
+     * are skipped over rather than decoded.
+     */
+    static int unpackBe(byte[] rtp, int off, int len, boolean wideband,
+                        byte[] out) {
+        if (rtp == null || out == null || len < 2
+                || off < 0 || off + len > rtp.length) {
+            return -1;
+        }
+        int avail = len * 8;
+        int pos = 4;                                          // skip CMR
+        int firstFt = -1;
+        int firstQ = 0;
+        int frames = 0;
+        int bitsOfSpeech = 0;
+        while (true) {
+            if (pos + 6 > avail) {
+                return -1;
+            }
+            int f = getBits(rtp, off, pos, 1);
+            int ft = getBits(rtp, off, pos + 1, 4);
+            int q = getBits(rtp, off, pos + 5, 1);
+            pos += 6;
+            frames++;
+            int bits = frameBits(ft, wideband);
+            if (bits < 0) {
+                return -1;
+            }
+            if (firstFt < 0) {
+                firstFt = ft;
+                firstQ = q;
+            } else {
+                bitsOfSpeech += bits;
+            }
+            if (f == 0) {
+                break;
+            }
+            if (frames > 8) {
+                return -1;
+            }
+        }
+        int nBits = frameBits(firstFt, wideband);
+        int nBytes = frameBytes(firstFt, wideband);
+        if (nBits < 0 || nBytes < 0 || out.length < 1 + nBytes) {
+            return -1;
+        }
+        if (pos + nBits > avail) {
+            return -1;
+        }
+        out[0] = (byte) (((firstFt & 0x0f) << 3) | ((firstQ & 1) << 2));
+        for (int i = 0; i < nBytes; i++) {
+            out[1 + i] = 0;
+        }
+        for (int i = 0; i < nBits; i++) {
+            if (getBits(rtp, off, pos + i, 1) != 0) {
+                out[1 + (i >> 3)] |= (byte) (0x80 >>> (i & 7));
+            }
+        }
+        return 1 + nBytes;
     }
 
     static int ftOf(byte header) {
