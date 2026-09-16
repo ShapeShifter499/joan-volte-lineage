@@ -1093,8 +1093,13 @@ final class JoanMedia {
      * carried a software AGC for a while because joan's audio_effects.xml
      * declares only Qualcomm's aec and ns. It is gone -- it ran 10-13 dB
      * hotter than the platform's and sounded worse, and its limiter was
-     * squaring off peaks the platform had already levelled. The zip
-     * enables the platform AGC instead.
+     * squaring off peaks the platform had already levelled.
+     *
+     * The zip enables the platform AGC instead -- and until 2026-09-16 it
+     * did not, which is why this said platform_agc=false on every call.
+     * joan ships libaudiopreprocessing.so in /vendor/lib*/soundfx but
+     * audio_effects.xml never declared it, so the effect the comment
+     * relied on did not exist. scripts/merge-agc-effect.sh adds it.
      *
      * Still reported in the trace, so a false value makes it obvious the
      * audio_effects.xml override is missing or was wiped by a ROM update

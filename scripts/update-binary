@@ -71,6 +71,7 @@ need_file "$TMP/app/joan-ims.apk" 5000
 # in the way on this build. Mount them ourselves at private mountpoints.
 SYSMNT=/mnt/joan_system
 PRODMNT=/mnt/joan_product
+VENDMNT=/mnt/joan_vendor
 TMPDM=$(stat -c %d /tmp 2>/dev/null)
 
 mount_part() {
@@ -143,6 +144,13 @@ SYSMNT="$MP_RESULT"; SYSMNT_OWNED="$MP_OWNED"
 ui_print "Mounting product"
 mount_part product "$PRODMNT"
 PRODMNT="$MP_RESULT"; PRODMNT_OWNED="$MP_OWNED"
+# vendor carries audio_effects.xml. It is mounted last and its absence is
+# not fatal: everything else this zip installs lives on system and
+# product, and a device whose vendor will not mount should still get a
+# working IMS stack rather than a failed flash.
+ui_print "Mounting vendor"
+mount_part vendor "$VENDMNT" || true
+VENDMNT="$MP_RESULT"; VENDMNT_OWNED="$MP_OWNED"
 
 # system-as-root: the partition root is /, and the /system tree sits in
 # a system/ subdirectory of it.
@@ -279,9 +287,45 @@ if [ -f "$TMP/apn/viettel-45204.xml" ] && [ -f "$TMP/scripts/merge-viettel-apns.
   copy_file "$TMP/apns-merged.xml" "$ORIG" 644 u:object_r:system_file:s0
 fi
 
+# --- AGC pre-processing effect (merge, never replace) -------------------
+#
+# joan ships libaudiopreprocessing.so but audio_effects.xml never
+# declares it, so AutomaticGainControl.isAvailable() is false and the
+# VoLTE uplink runs at whatever level the microphone gave us -- measured
+# about 16 dB below the downlink on real calls. Only agc is added; aec
+# and ns already come from Qualcomm's libqcomvoiceprocessing.so.
+if [ -f "$TMP/scripts/merge-agc-effect.sh" ] && [ -d "$VENDMNT/etc" ]; then
+  AE="$VENDMNT/etc/audio_effects.xml"
+  AEBACK="$VENDMNT/etc/audio_effects.xml.joan-orig"
+  if [ -f "$AE" ]; then
+    ui_print "Adding the AGC audio effect (uplink level)"
+    if [ ! -f "$AEBACK" ]; then
+      copy_file "$AE" "$AEBACK" 644 u:object_r:vendor_configs_file:s0
+      ui_print "  audio_effects.xml: saved the ROM copy before merging."
+    fi
+    if [ -f "$VENDMNT/lib64/soundfx/libaudiopreprocessing.so" ] \
+       || [ -f "$VENDMNT/lib/soundfx/libaudiopreprocessing.so" ]; then
+      sh "$TMP/scripts/merge-agc-effect.sh" "$AEBACK" \
+        > "$TMP/audio_effects-merged.xml" || error "agc effect merge failed"
+      need_file "$TMP/audio_effects-merged.xml" 200
+      grep -q "libaudiopreprocessing.so" "$TMP/audio_effects-merged.xml" \
+        || error "merged audio_effects.xml missing the pre_processing library"
+      grep -q "<effect name=\"agc\"" "$TMP/audio_effects-merged.xml" \
+        || error "merged audio_effects.xml missing the agc effect"
+      copy_file "$TMP/audio_effects-merged.xml" "$AE" 644 \
+        u:object_r:vendor_configs_file:s0
+    else
+      # Declaring an effect whose library is absent makes audioserver log
+      # a load failure on every boot and gains nothing.
+      ui_print "  libaudiopreprocessing.so not present; skipping AGC."
+    fi
+  fi
+fi
+
 sync
 # Only unmount what we mounted. Tearing down recovery's own mount would
 # pull the ground out from under it mid-install.
+[ "$VENDMNT_OWNED" = "1" ] && umount "$VENDMNT" 2>/dev/null
 [ "$PRODMNT_OWNED" = "1" ] && umount "$PRODMNT" 2>/dev/null
 [ "$SYSMNT_OWNED" = "1" ] && umount "$SYSMNT" 2>/dev/null
 

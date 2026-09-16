@@ -20,6 +20,7 @@ $CC $CFLAGS -Isrc -o build/joan-ims-host-test \
 
 echo "== apn overlay merge"
 "$ROOT/tests/apn/run-apn-tests.sh"
+"$ROOT/tests/audio/run-agc-tests.sh"
 
 echo "== java sip/crypto (host javac)"
 JAVA_SRC="$ROOT/ims-service/src/org/joan/ims"
