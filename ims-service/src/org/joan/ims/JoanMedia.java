@@ -196,6 +196,11 @@ final class JoanMedia {
     /** False asks the capture loop to end a held tone. */
     private static volatile boolean sDtmfHold;
 
+    /** One trace line per call when the peer sends us DTMF. */
+    private static volatile boolean sDtmfRxSeen;
+    /** Packets dropped for carrying a payload type we never negotiated. */
+    private static volatile int sRtpWrongPt;
+
     /* Owned by the capture thread alone. */
     private static Tone sDtmfTone;
     private static int sDtmfTs;
@@ -441,6 +446,8 @@ final class JoanMedia {
         stop();
         sPt = payloadType;
         sTePt = telephoneEventPt;
+        sDtmfRxSeen = false;
+        sRtpWrongPt = 0;
         finishDtmfQueue();
         sDtmfHold = false;
         sDtmfTone = null;
@@ -880,6 +887,33 @@ final class JoanMedia {
                 if (type >= 200 && type <= 204) {
                     continue; /* RTCP, not audio */
                 }
+                /* Payload type, without the marker bit. Until alpha25 we
+                 * never offered telephone-event, so nothing but audio
+                 * arrived and this was never checked. We now negotiate it
+                 * in both directions, which means a far-end keypress or an
+                 * IVR sends four-byte RFC 4733 events to this socket --
+                 * and handing those to the AMR decoder as speech is
+                 * audible noise, not a silent mismatch. */
+                int inPt = down[1] & 0x7f;
+                if (sTePt > 0 && inPt == sTePt) {
+                    int ev = JoanDtmf.eventOf(down, RTP_HDR, m - RTP_HDR);
+                    if (ev >= 0 && !sDtmfRxSeen) {
+                        /* Once per call: an event repeats every packet for
+                         * the length of the tone, and a line per packet
+                         * would bury the call in the trace. */
+                        sDtmfRxSeen = true;
+                        JoanTrace.note("dtmf inbound event=" + ev
+                                + " pt=" + inPt + " (not decoded as audio)");
+                    }
+                    continue;
+                }
+                if (inPt != sPt) {
+                    /* Some other payload type we did not agree to carry.
+                     * Dropping it is right; decoding it is how a codec
+                     * mismatch becomes a burst of noise. */
+                    sRtpWrongPt++;
+                    continue;
+                }
                 int off = RTP_HDR;
                 m -= RTP_HDR;
                 if (m <= 0) {
@@ -974,7 +1008,9 @@ final class JoanMedia {
             JoanTrace.note("media dl stopped frames=" + dl + " "
                     + level(dlSumSq, dlSamples, dlPeak, dlActSq, dlActSamples)
                     + " " + rtpSourceSummary(sRtpFromDest, sRtpFromOther)
-                    + " " + rtcpSummary());
+                    + " " + rtcpSummary()
+                    + (sRtpWrongPt > 0 ? " wrong_pt=" + sRtpWrongPt : "")
+                    + (sDtmfRxSeen ? " dtmf_rx=yes" : ""));
         }
     }
 
