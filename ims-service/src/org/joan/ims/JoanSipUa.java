@@ -645,8 +645,14 @@ final class JoanSipUa {
         int state = JoanRegInfo.parse(body, ourContactUri());
         if (state == JoanRegInfo.STATE_UNKNOWN
                 || state == JoanRegInfo.STATE_ACTIVE) {
+            /* "unknown" on its own is a second mystery rather than a
+             * diagnosis: it cannot say whether the body carried no
+             * contacts, or carried somebody else's. The structural
+             * description carries no identity -- counts and attribute
+             * values only. */
             JoanTrace.note("reg-event notify state="
-                    + (state == JoanRegInfo.STATE_ACTIVE ? "active" : "unknown"));
+                    + (state == JoanRegInfo.STATE_ACTIVE ? "active" : "unknown")
+                    + " " + JoanRegInfo.describe(body, ourContactUri()));
             return;
         }
         boolean retry = state == JoanRegInfo.STATE_TERMINATED_REREGISTER;

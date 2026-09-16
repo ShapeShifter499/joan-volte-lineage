@@ -326,6 +326,31 @@ AOSP's own recovery is in its native stack (EVENT_IP_CHANGED ->
 EDataState.DATA_STATE_IP_CHANGED, consumed across SystemCallInterface),
 so what we do afterwards has no upstream to follow.
 
+### Registration event package
+
+Two things from ImsStack shaped ours.
+
+- **The URI check is known-unreliable.**
+  `CarrierConfig.KEY_USE_REGINFO_CONTACT_WITHOUT_URI_CHECK_BOOL` is a
+  per-carrier switch to accept a reginfo contact *without* matching its
+  URI. Its existence is the evidence: some networks send a contact that
+  cannot be matched against the Contact we registered. We keep strict
+  matching as the default -- accepting any contact lets a second handset
+  on the same public identity deregister this one -- but the trace now
+  distinguishes "no contacts at all" from "contacts, none ours", because
+  those are the two sides of that switch and a bare "unknown" cannot
+  tell them apart.
+- **Nothing else is in Java.** ImsStack has no reginfo parser; the body
+  is handled in the native stack and only this config key crosses the
+  boundary. So the parsing itself has no upstream to copy, which is why
+  ours is a small tolerant scanner with its own tests rather than a port.
+
+Our first version was also wrong in a way worth recording: namespace
+prefixes. `<reg:reginfo>` is not `<reginfo>`, and the same blind spot sat
+in three places -- the root-element guard, the contact finder and the
+closing-tag search. None of them threw; they found no contacts, which
+reads exactly like a network that said nothing about us.
+
 ## LG IMS (reverse engineered)
 
 - `docs/lg-ims-fullstack-re-2026-09-05.md`,

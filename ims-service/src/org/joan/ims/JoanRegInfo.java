@@ -39,20 +39,156 @@ final class JoanRegInfo {
      *        any contact in the document. Matching matters on a public
      *        identity registered from more than one device: another
      *        handset being deregistered is not news about ours.
+     *
+     * <p>Matching is deliberately strict, and deliberately not the whole
+     * story. AOSP's ImsStack carries a per-carrier switch,
+     * {@code KEY_USE_REGINFO_CONTACT_WITHOUT_URI_CHECK_BOOL}, whose
+     * existence says plainly that some networks send a contact whose URI
+     * cannot be matched against the one we registered. Their answer is to
+     * stop checking, for those carriers only.
+     *
+     * <p>We do not do that by default and should not: accepting any
+     * contact means a second handset on the same public identity can
+     * deregister this one. When the trace shows contacts present and none
+     * matched, that is the case the switch exists for -- and the decision
+     * to add our own equivalent should be made from a real body, per
+     * carrier, not as a blanket relaxation.
      */
+    /**
+     * Index of the next {@code <contact} element at or after {@code from},
+     * tolerating a namespace prefix.
+     *
+     * <p>A core is free to send {@code <reg:contact>} instead of
+     * {@code <contact>}; both are the same element, and a plain
+     * indexOf("&lt;contact") sees only one of them. Getting this wrong
+     * does not throw -- it silently finds no contacts and reads as "I
+     * have nothing to say about your binding", which is indistinguishable
+     * from a body that genuinely said nothing.
+     */
+    static int nextContact(String low, int from) {
+        int at = from;
+        while (at < low.length()) {
+            int lt = low.indexOf('<', at);
+            if (lt < 0) {
+                return -1;
+            }
+            int i = lt + 1;
+            /* Skip an optional "prefix:" between '<' and the name. */
+            int colon = -1;
+            int j = i;
+            while (j < low.length()) {
+                char ch = low.charAt(j);
+                if (ch == ':') {
+                    colon = j;
+                    break;
+                }
+                if (!Character.isLetterOrDigit(ch) && ch != '-' && ch != '_') {
+                    break;
+                }
+                j++;
+            }
+            int nameAt = colon >= 0 ? colon + 1 : i;
+            if (low.startsWith("contact", nameAt)) {
+                int after = nameAt + "contact".length();
+                char nx = after < low.length() ? low.charAt(after) : ' ';
+                if (!Character.isLetterOrDigit(nx)) {
+                    return lt;
+                }
+            }
+            at = lt + 1;
+        }
+        return -1;
+    }
+
+    /**
+     * Where one contact element's content stops: the first closing tag,
+     * or the start of the next contact, whichever comes first.
+     */
+    private static int contentEnd(String low, int openEnd) {
+        int close = low.indexOf("</", openEnd);
+        int next = nextContact(low, openEnd);
+        if (next > openEnd && (close < 0 || next < close)) {
+            return next;
+        }
+        return close;
+    }
+
+    /**
+     * A structural description of a reginfo body, for the trace.
+     *
+     * <p>Carries no identity: element counts and attribute values only,
+     * never a URI. When {@link #parse} returns unknown this says whether
+     * the body had no contacts at all, or had contacts that were somebody
+     * else's -- which are different problems with different fixes, and
+     * guessing between them from "unknown" is how a diagnostic becomes a
+     * second mystery.
+     */
+    static String describe(String body, String ourUri) {
+        if (body == null || body.isEmpty()) {
+            return "body=empty";
+        }
+        String low = body.toLowerCase(java.util.Locale.US);
+        if (low.indexOf("reginfo") < 0) {
+            return "body=" + body.length() + "b not-reginfo";
+        }
+        String host = hostOf(ourUri);
+        StringBuilder d = new StringBuilder(64);
+        d.append("body=").append(body.length()).append('b');
+        d.append(" host_known=").append(host != null && !host.isEmpty());
+        int n = 0;
+        int mine = 0;
+        int at = 0;
+        StringBuilder states = new StringBuilder();
+        while (true) {
+            int c = nextContact(low, at);
+            if (c < 0) {
+                break;
+            }
+            int end = low.indexOf('>', c);
+            if (end < 0) {
+                break;
+            }
+            int close = contentEnd(low, end);
+            String element = low.substring(c, end + 1);
+            String inner = close > end ? low.substring(end + 1, close) : "";
+            at = end + 1;
+            n++;
+            boolean ours = host == null || host.isEmpty()
+                    || inner.indexOf(host) >= 0 || element.indexOf(host) >= 0;
+            if (ours) {
+                mine++;
+            }
+            if (states.length() > 0) {
+                states.append(',');
+            }
+            states.append(attr(element, "state")).append('/')
+                    .append(attr(element, "event"))
+                    .append(ours ? "(ours)" : "");
+        }
+        d.append(" contacts=").append(n).append(" matched=").append(mine);
+        if (states.length() > 0) {
+            d.append(" [").append(states).append(']');
+        }
+        return d.toString();
+    }
+
     static int parse(String body, String ourUri) {
         if (body == null || body.isEmpty()) {
             return STATE_UNKNOWN;
         }
         String low = body.toLowerCase(java.util.Locale.US);
-        if (low.indexOf("<reginfo") < 0) {
+        /* "<reg:reginfo" is not "<reginfo". The root element takes a
+         * namespace prefix as readily as its children, and a guard that
+         * misses it rejects the whole body before a single contact is
+         * looked at. */
+        if (low.indexOf("reginfo") < 0) {
             return STATE_UNKNOWN;
         }
         String host = hostOf(ourUri);
         int best = STATE_UNKNOWN;
         int at = 0;
         while (true) {
-            int c = low.indexOf("<contact", at);
+            int c = nextContact(low, at);
             if (c < 0) {
                 break;
             }
@@ -61,8 +197,14 @@ final class JoanRegInfo {
                 break;
             }
             /* The element's own attributes, plus enough of what follows to
-             * reach its <uri> child. A self-closing contact has no uri. */
-            int close = low.indexOf("</contact", end);
+             * reach its <uri> child. A self-closing contact has no uri.
+             *
+             * The boundary is the first closing tag OR the next contact,
+             * whichever comes first -- not a literal "</contact", which a
+             * namespace prefix defeats, and not an unbounded run, which
+             * would let a self-closing contact absorb the next one's uri
+             * and claim somebody else's binding as ours. */
+            int close = contentEnd(low, end);
             String element = low.substring(c, end + 1);
             String inner = close > end ? low.substring(end + 1, close) : "";
             at = end + 1;

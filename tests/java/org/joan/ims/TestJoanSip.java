@@ -1522,6 +1522,42 @@ public final class TestJoanSip {
                 "a plain host is read");
         check(JoanRegInfo.hostOf(null) == null,
                 "no uri gives no host");
+
+        /* A namespace prefix is legal and changes nothing about meaning.
+         * Missing it does not throw -- it finds no contacts at all, which
+         * reads exactly like a body that said nothing about us. */
+        String pfx = "<reg:reginfo xmlns:reg=\"urn:ietf:params:xml:ns:reginfo\">"
+                + "<reg:registration aor=\"sip:u@ims\" state=\"active\">"
+                + "<reg:contact id=\"76\" state=\"terminated\" event=\"deactivated\">"
+                + "<reg:uri>sip:joan@2001:db8::1:5060</reg:uri>"
+                + "</reg:contact></reg:registration></reg:reginfo>";
+        check(JoanRegInfo.parse(pfx, ours)
+                        == JoanRegInfo.STATE_TERMINATED_REREGISTER,
+                "a namespace-prefixed contact is still read");
+        check(JoanRegInfo.nextContact(
+                        pfx.toLowerCase(java.util.Locale.US), 0) > 0,
+                "nextContact finds a prefixed element");
+        check(JoanRegInfo.nextContact("<contacts>no</contacts>", 0) < 0,
+                "a longer element merely starting with contact is not one");
+
+        /* The description must separate "no contacts" from "not ours",
+         * and must never carry a URI. */
+        String d1 = JoanRegInfo.describe(active, ours);
+        check(d1.contains("contacts=1") && d1.contains("matched=1"),
+                "describe counts our own contact as matched");
+        String d2 = JoanRegInfo.describe(other, ours);
+        check(d2.contains("contacts=1") && d2.contains("matched=0"),
+                "describe separates somebody else's contact from ours");
+        check(d2.indexOf("198.51.100.7") < 0 && d2.indexOf("sip:") < 0,
+                "describe carries no uri");
+        check(JoanRegInfo.describe(null, ours).contains("empty")
+                        && JoanRegInfo.describe("hello", ours)
+                                .contains("not-reginfo"),
+                "describe names an empty or non-reginfo body as such");
+        String d3 = JoanRegInfo.describe(
+                "<reginfo state=\"full\"></reginfo>", ours);
+        check(d3.contains("contacts=0"),
+                "a reginfo with no contacts at all says so");
     }
 
     private static void testSessionTimer() {
