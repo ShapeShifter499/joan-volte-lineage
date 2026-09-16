@@ -1324,6 +1324,33 @@ final class JoanSipBuilder {
         sProfile = java.util.Collections.unmodifiableList(keep);
     }
 
+    /**
+     * What an offer proposed, in the offerer's order, for the trace.
+     *
+     * <p>Without this a PCMU answer is unreadable: it looks identical
+     * whether the offerer put PCMU first and we honoured their order, or
+     * they offered AMR we had to skip. Those want opposite responses --
+     * nothing, versus implementing bandwidth-efficient framing -- so the
+     * octet-align state of each AMR entry is spelled out. Codec names and
+     * payload numbers carry no subscriber identity.
+     */
+    static String codecSummary(Media m) {
+        if (m == null || m.codecs.isEmpty()) {
+            return "none";
+        }
+        StringBuilder b = new StringBuilder();
+        for (Codec c : m.codecs) {
+            if (b.length() > 0) {
+                b.append(',');
+            }
+            b.append(c.name.isEmpty() ? "pt" : c.name).append('/').append(c.pt);
+            if (c.name.toUpperCase(java.util.Locale.ROOT).startsWith("AMR")) {
+                b.append(c.amrOctetAligned() ? "(oct=1)" : "(oct=0)");
+            }
+        }
+        return b.toString();
+    }
+
     /** Codec names in the active profile, for the trace. */
     static String profileSummary() {
         StringBuilder b = new StringBuilder();

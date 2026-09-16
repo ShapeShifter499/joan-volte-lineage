@@ -316,6 +316,18 @@ public final class TestJoanSip {
                         .contains("m=audio 40000 RTP/AVP 0\r\n"),
                 "the fallback answer is PCMU");
 
+        /* The trace has to distinguish "they preferred PCMU" from "they
+         * offered AMR we had to skip", because only the second is a bug
+         * on our side. */
+        check("AMR-WB/104(oct=1),PCMU/0".equals(JoanSipBuilder.codecSummary(
+                        JoanSipBuilder.parseSdp(wbFirst))),
+                "offer summary marks octet-aligned AMR");
+        check(JoanSipBuilder.codecSummary(JoanSipBuilder.parseSdp(beAmr))
+                        .contains("AMR-WB/104(oct=0)"),
+                "offer summary marks bandwidth-efficient AMR");
+        check("none".equals(JoanSipBuilder.codecSummary(null)),
+                "no offer summarises as none");
+
         // Nothing usable is the only honest reason to decline.
         String none = head + "m=audio 40000 RTP/AVP 9\r\n"
                 + "a=rtpmap:9 G722/8000\r\n";

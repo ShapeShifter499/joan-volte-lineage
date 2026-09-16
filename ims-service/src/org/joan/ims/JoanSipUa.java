@@ -2144,7 +2144,8 @@ final class JoanSipUa {
         JoanTrace.note("app inbound INVITE tcp=" + sReplyTcp
                 + " waiting=" + sCall
                 + " number=" + (cli.withheld || cli.uri.isEmpty() ? "no" : "yes")
-                + " name=" + (cli.name.isEmpty() ? "no" : "yes"));
+                + " name=" + (cli.name.isEmpty() ? "no" : "yes")
+                + " offer=" + JoanSipBuilder.codecSummary(offer));
         if (sApp != null) {
             JoanMmTelFeature.onIncomingCall(sApp, cli.uri, cli.name,
                     JoanSipBuilder.header(rx, "Call-ID"));
