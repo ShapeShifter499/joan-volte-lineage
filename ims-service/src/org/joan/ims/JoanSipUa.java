@@ -2269,7 +2269,6 @@ final class JoanSipUa {
             sTcpPeer = got;
             sTcpAcc.setLength(0);
             sReplyTcp = true;
-            JoanSipBuilder.sUseTcp = true;
             JoanTrace.note("tcp accept");
         }
         peer = sTcpPeer;
@@ -2289,7 +2288,6 @@ final class JoanSipUa {
                 closeFd(sTcpPeer);
                 sTcpPeer = null;
                 sReplyTcp = false;
-                JoanSipBuilder.sUseTcp = false;
                 return null;
             }
             sTcpAcc.append(new String(buf, 0, n, StandardCharsets.US_ASCII));
@@ -2327,6 +2325,12 @@ final class JoanSipUa {
 
     private static void sendReply(byte[] pkt) throws Exception {
         if (sReplyTcp && sTcpPeer != null) {
+            /* Requests built for the UDP client socket are about to leave
+             * over TCP instead; their top Via must say so or the P-CSCF
+             * answers 400 Bad Request. Responses are left alone. */
+            pkt = JoanSipBuilder.retargetRequestViaToTcp(
+                    new String(pkt, StandardCharsets.US_ASCII))
+                    .getBytes(StandardCharsets.US_ASCII);
             int off = 0;
             while (off < pkt.length) {
                 int n = Os.write(sTcpPeer, pkt, off, pkt.length - off);

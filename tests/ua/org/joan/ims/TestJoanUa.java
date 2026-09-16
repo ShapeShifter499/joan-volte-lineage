@@ -62,7 +62,7 @@ public class TestJoanUa {
         set("sTcpPeer",null);set("sTcpClient",null);set("sReplyTcp",false);set("sApp",null);
         set("sPcscf",InetAddress.getLoopbackAddress());set("sPcscfPortS",5060);
         ((Map<?,?>)get("sInviteWaits")).clear();((JoanSipBuilder.InviteAckArchive)get("sInviteAcks")).clear();
-        ((StringBuilder)get("sTcpClientAcc")).setLength(0);JoanSipBuilder.sUseTcp=false;
+        ((StringBuilder)get("sTcpClientAcc")).setLength(0);
         Wire w=new Wire();set("sSockC",w);set("sSockS",null);return w;
     }
     static String request(String method,String cid,int seq,String body) {
@@ -136,11 +136,14 @@ public class TestJoanUa {
         int pc=JoanSipBuilder.cseqForMethod(prack,"PRACK"),rc=JoanSipBuilder.cseqForMethod(ri,"INVITE");
         defect("prack-cseq-reused",pc==rc,"PRACK CSeq="+pc+", following re-INVITE CSeq="+rc);
 
-        // 9: Transport selected as TCP must appear in initial INVITE Via.
-        JoanSipBuilder.sUseTcp=true;
+        // 9: An outbound request's Via transport must match the socket it is
+        // sent on. Every request leaves on the UDP client socket, including
+        // after an inbound TCP accept, so a Via claiming TCP is the defect:
+        // the P-CSCF answers 400 Bad Request (Viettel MO, alpha20).
         String inv=JoanSipBuilder.buildInvite(id,dialog("fresh"),"sip:peer@example.invalid","",null,40000,null);
-        defect("tcp-invite-claims-udp",JoanSipBuilder.header(inv,"Via").contains("/UDP"),"sUseTcp=true, Via="+JoanSipBuilder.header(inv,"Via"));
-        JoanSipBuilder.sUseTcp=false;
+        defect("invite-via-claims-tcp-but-sends-udp",
+                JoanSipBuilder.header(inv,"Via").contains("/TCP"),
+                "Via="+JoanSipBuilder.header(inv,"Via"));
 
         // 10: SUBSCRIBE builder emits no mandatory To header.
         String sub=JoanSipBuilder.buildConfSubscribe(id,dialog("focus"),"sip:focus@example.invalid","",null,21600);

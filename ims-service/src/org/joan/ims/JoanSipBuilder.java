@@ -1063,7 +1063,67 @@ final class JoanSipBuilder {
 
     /** Transport of in-dialog requests; mirrors the UA's reply socket.
      * Set by JoanSipUa before sends (sendReply / TCP peer adopt). */
-    static volatile boolean sUseTcp;
+    /**
+     * Transport token for the top Via of an outbound REQUEST.
+     *
+     * <p>Always UDP: {@code JoanSipUa} transmits every outbound request on
+     * its protected UDP client socket ({@code sSockC}). An inbound TCP
+     * connection from the P-CSCF carries MT requests and their responses
+     * only -- it is never used to send a request -- so it must not change
+     * what our Via claims. Claiming TCP on a datagram we sent over UDP is
+     * a transport mismatch the P-CSCF answers with 400 Bad Request, and it
+     * breaks every MO call for the life of the UA once one MT call has
+     * arrived (Viettel, alpha20).
+     *
+     * <p>The receiving side of this rule is written out in AOSP's IMS
+     * stack, which is what a P-CSCF does to us:
+     * {@code SipServerTransport::ValidateViaHeader()} -- "If the topmost
+     * Via header has scheme SIP/2.0/TCP, but actually came on UDP, (or
+     * vice versa) flag off error. Application SHOULD respond to this with
+     * 400 Bad Request." See RFC 3261 18.1.1 and
+     * packages/modules/ImsStack native/libimsstack/engine/sipcore/
+     * SipServerTransport.cpp at tag android-17.0.0_r1. Referenced only --
+     * no AOSP code is used here.
+     */
+    static String requestViaTransport() {
+        return "UDP";
+    }
+
+    /**
+     * Re-aim the top Via sent-protocol of a REQUEST at TCP, for the one
+     * path that does not use the UDP client socket: {@code sendReply()}
+     * writes to the P-CSCF's accepted TCP connection when it has one, and
+     * it carries in-dialog requests (ACK, BYE, re-INVITE, SUBSCRIBE,
+     * REFER) as well as responses.
+     *
+     * <p>This is done here, at the write, rather than at each builder,
+     * because the transport is only known to the code performing the send:
+     * {@code inDialog()} output leaves over UDP for PRACK and over TCP for
+     * a BYE, from the same builder. Deciding it at the choke point is what
+     * makes it impossible for a new call site to get it wrong. AOSP fixes
+     * the same field at the same kind of choke point on the receiving side
+     * (ImsStack {@code SipStack::UpdateSentProtocol} from
+     * {@code SipServerTransport::ValidateViaHeader}).
+     *
+     * <p>Responses are returned untouched: RFC 3261 8.2.6.2 requires a
+     * response to echo the request's Via headers verbatim, so rewriting
+     * one would misroute it.
+     */
+    static String retargetRequestViaToTcp(String msg) {
+        if (msg == null || msg.startsWith("SIP/2.0 ")) {
+            return msg; // a response: its Via belongs to the request
+        }
+        int i = msg.indexOf("SIP/2.0/UDP");
+        if (i < 0) {
+            return msg;
+        }
+        int hdrEnd = msg.indexOf("\r\n\r\n");
+        if (hdrEnd >= 0 && i > hdrEnd) {
+            return msg; // only in the body; not a Via
+        }
+        return msg.substring(0, i) + "SIP/2.0/TCP"
+                + msg.substring(i + "SIP/2.0/UDP".length());
+    }
 
     static final class Media {
         String ip;
@@ -1202,7 +1262,7 @@ final class JoanSipBuilder {
         }
         StringBuilder a = new StringBuilder(1800);
         a.append("INVITE ").append(dest).append(" SIP/2.0\r\n");
-        a.append("Via: SIP/2.0/").append(sUseTcp ? "TCP " : "UDP ").append(host).append(':')
+        a.append("Via: SIP/2.0/").append(requestViaTransport()).append(' ').append(host).append(':')
                 .append(id.viaPort).append(";branch=").append(dlg.branch)
                 .append(";rport\r\n");
         a.append("Max-Forwards: 70\r\n");
@@ -1505,7 +1565,7 @@ final class JoanSipBuilder {
         }
         StringBuilder a = new StringBuilder(1200);
         a.append(method).append(' ').append(target).append(" SIP/2.0\r\n");
-        a.append("Via: SIP/2.0/").append(sUseTcp ? "TCP" : "UDP").append(' ')
+        a.append("Via: SIP/2.0/").append(requestViaTransport()).append(' ')
                 .append(host).append(':')
                 .append(id.viaPort).append(";branch=").append(branch)
                 .append(";rport\r\n");
