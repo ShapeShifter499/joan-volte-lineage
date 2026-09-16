@@ -133,6 +133,12 @@ final class JoanSipUa {
         String dest, target, route, toHdr, fromHdr, ourToTag;
         InetAddress mediaIp;
         int mediaPort, mediaRtcpPort, mediaPt;
+        /* A parked leg carried only the payload type, so resuming one
+         * restored AMR at the codec default bitrate, octet-aligned even
+         * when the call had negotiated bandwidth-efficient, and with no
+         * mode-set ceiling. Snapshot every negotiated parameter. */
+        int mediaAmrBitrate, mediaAmrMaxMode;
+        boolean mediaAmrOct;
         Boolean mediaAmrWb;
         boolean mux;
         boolean held;
@@ -1466,6 +1472,9 @@ final class JoanSipUa {
         l.mediaRtcpPort = sMediaRtcpPort;
         l.mediaPt = sMediaPt;
         l.mediaAmrWb = sMediaAmrWb;
+        l.mediaAmrBitrate = sMediaAmrBitrate;
+        l.mediaAmrOct = sMediaAmrOct;
+        l.mediaAmrMaxMode = sMediaAmrMaxMode;
         l.mux = sMediaMux;
         l.held = sLiveHeld;
         return l;
@@ -1484,6 +1493,9 @@ final class JoanSipUa {
         sMediaRtcpPort = l.mediaRtcpPort;
         sMediaPt = l.mediaPt;
         sMediaAmrWb = l.mediaAmrWb;
+        sMediaAmrBitrate = l.mediaAmrBitrate;
+        sMediaAmrOct = l.mediaAmrOct;
+        sMediaAmrMaxMode = l.mediaAmrMaxMode;
         sMediaMux = l.mux;
         sLiveHeld = l.held;
     }
