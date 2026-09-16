@@ -588,15 +588,16 @@ public class JoanCallSession extends ImsCallSessionImplBase {
      */
     @Override
     public void sendDtmf(char c, Message result) {
-        boolean ok = JoanMedia.sendDtmf(c, 0);
+        /* The callback fires when the tone has finished on the wire, not
+         * when it was accepted: ImsPhoneConnection.processPostDialChar()
+         * sends one digit, waits for this message, waits a
+         * carrier-configured gap and only then sends the next. Answering
+         * early would race the next digit against the tone still playing.
+         * JoanMedia answers it even when it refuses the digit, because a
+         * post-dial string stalls on a callback that never arrives. */
+        boolean ok = JoanMedia.sendDtmf(c, 0,
+                result == null ? null : result::sendToTarget);
         JoanTrace.note("app sendDtmf '" + c + "' " + (ok ? "queued" : "refused"));
-        if (result != null) {
-            /* The framework only wants to know the request was taken; it
-             * has no way to represent "the far end heard it". Answering
-             * unconditionally keeps Telephony from waiting on a message
-             * that would never arrive when no event type was negotiated. */
-            result.sendToTarget();
-        }
     }
 
     @Override

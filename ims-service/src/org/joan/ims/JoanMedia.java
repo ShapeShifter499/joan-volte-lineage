@@ -157,15 +157,47 @@ final class JoanMedia {
 
     /** Negotiated telephone-event payload type; 0 when the peer offered none. */
     private static volatile int sTePt;
-    /** Digit waiting to begin, as an RFC 4733 event number; -1 when none. */
-    private static volatile int sDtmfQueued = -1;
-    /** False asks the capture loop to end the tone in flight. */
+
+    /**
+     * One queued digit.
+     *
+     * <p>{@code done} is run when the tone has actually finished on the
+     * wire, not when it was accepted. The framework's post-dial machinery
+     * (ImsPhoneConnection.processPostDialChar) sends one digit, waits for
+     * that callback, waits a carrier-configured gap, and only then sends
+     * the next -- so answering early turns a post-dial string like
+     * "555000,,1234#" into whichever digits happened to fit.
+     */
+    private static final class Tone {
+        final int event;
+        final boolean held;
+        int leftMs;
+        Runnable done;
+
+        Tone(int event, boolean held, int leftMs, Runnable done) {
+            this.event = event;
+            this.held = held;
+            this.leftMs = leftMs;
+            this.done = done;
+        }
+    }
+
+    /**
+     * Digits accepted but not yet sent.
+     *
+     * <p>A queue rather than a single slot for the same reason: a burst
+     * arriving faster than one tone per 200 ms must be played in order,
+     * not overwritten.
+     */
+    private static final java.util.Queue<Tone> sDtmfQueue =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+    /** Longest backlog worth holding; beyond this the dialler is runaway. */
+    private static final int DTMF_QUEUE_MAX = 32;
+    /** False asks the capture loop to end a held tone. */
     private static volatile boolean sDtmfHold;
-    /** Remaining time for a fixed-length tone; 0 means "until stopDtmf". */
-    private static volatile int sDtmfLeftMs;
 
     /* Owned by the capture thread alone. */
-    private static int sDtmfEvent = -1;
+    private static Tone sDtmfTone;
     private static int sDtmfTs;
     private static int sDtmfDur;
     private static int sDtmfEnds;
@@ -247,12 +279,21 @@ final class JoanMedia {
      *         far end as noise an IVR cannot decode.
      */
     static boolean startDtmf(char digit) {
-        return queueDtmf(digit, 0);
+        sDtmfHold = true;
+        return queueDtmf(digit, true, 0, null);
     }
 
-    /** Play a tone of a fixed length, as the framework's sendDtmf asks. */
-    static boolean sendDtmf(char digit, int durationMs) {
-        return queueDtmf(digit, durationMs > 0 ? durationMs : DTMF_TONE_MS);
+    /**
+     * Play a tone of a fixed length, as the framework's sendDtmf asks.
+     *
+     * @param done run once the tone has finished on the wire, or
+     *             immediately if the digit could not be queued at all.
+     *             Never dropped: the post-dial state machine stalls
+     *             forever on a callback that does not arrive.
+     */
+    static boolean sendDtmf(char digit, int durationMs, Runnable done) {
+        return queueDtmf(digit, false,
+                durationMs > 0 ? durationMs : DTMF_TONE_MS, done);
     }
 
     /** Release a held tone; the capture loop sends the end packets. */
@@ -260,29 +301,59 @@ final class JoanMedia {
         sDtmfHold = false;
     }
 
-    private static boolean queueDtmf(char digit, int durationMs) {
+    private static boolean queueDtmf(char digit, boolean held, int durationMs,
+                                     Runnable done) {
         int ev = JoanDtmf.event(digit);
+        String refuse = null;
         if (ev < 0) {
-            JoanTrace.note("dtmf '" + digit + "' is not a DTMF digit");
+            refuse = "not a DTMF digit";
+        } else if (!sRun) {
+            refuse = "no media running";
+        } else if (sTePt <= 0) {
+            refuse = "no telephone-event type was negotiated";
+        } else if (sDtmfQueue.size() >= DTMF_QUEUE_MAX) {
+            refuse = "queue full";
+        }
+        if (refuse != null) {
+            JoanTrace.note("dtmf '" + digit + "' refused: " + refuse);
+            run(done);
             return false;
         }
-        if (!sRun) {
-            JoanTrace.note("dtmf '" + digit + "' with no media running");
-            return false;
-        }
-        if (sTePt <= 0) {
-            JoanTrace.note("dtmf '" + digit
-                    + "' but no telephone-event type was negotiated");
-            return false;
-        }
-        /* A held tone gets the backstop as its length, so a dialler that
-         * never calls stopDtmf() cannot mute the call for its duration. */
-        sDtmfLeftMs = durationMs <= 0 || durationMs > DTMF_MAX_MS
-                ? DTMF_MAX_MS
-                : Math.max(durationMs, DTMF_MIN_MS);
-        sDtmfQueued = ev;
-        sDtmfHold = true;
+        int ms = held ? DTMF_MAX_MS
+                : Math.min(Math.max(durationMs, DTMF_MIN_MS), DTMF_MAX_MS);
+        sDtmfQueue.add(new Tone(ev, held, ms, done));
         return true;
+    }
+
+    /** Run a completion without letting its failure reach the audio path. */
+    private static void run(Runnable done) {
+        if (done == null) {
+            return;
+        }
+        try {
+            done.run();
+        } catch (Throwable t) {
+            JoanTrace.note("dtmf callback " + t.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * Answer every outstanding completion and drop the backlog.
+     *
+     * <p>Called when media starts or stops. A digit queued against a call
+     * that has ended will never be sent, but its caller is still waiting:
+     * dropping the callback with the tone would wedge a post-dial string
+     * until the wake lock times out.
+     */
+    private static void finishDtmfQueue() {
+        for (Tone t = sDtmfQueue.poll(); t != null; t = sDtmfQueue.poll()) {
+            run(t.done);
+        }
+        Tone cur = sDtmfTone;
+        sDtmfTone = null;
+        if (cur != null) {
+            run(cur.done);
+        }
     }
 
     /**
@@ -293,10 +364,18 @@ final class JoanMedia {
      * the tone is paced by the same clock as the audio it replaces.
      */
     private static int dtmfFrame(byte[] out, int samples) {
-        int queued = sDtmfQueued;
-        if (queued >= 0 && sDtmfEvent < 0) {
-            sDtmfQueued = -1;
-            sDtmfEvent = queued;
+        if (sDtmfTone == null) {
+            Tone next = sDtmfQueue.poll();
+            if (next == null) {
+                return 0;
+            }
+            sDtmfTone = next;
+            if (next.held && !sDtmfHold) {
+                /* Released before it ever started: play the shortest tone
+                 * that is still detectable rather than nothing, so a very
+                 * quick key press is not silently swallowed. */
+                next.leftMs = DTMF_MIN_MS;
+            }
             /* The event's timestamp is the instant the tone began and does
              * not advance with its packets; only the duration field grows.
              * The audio clock keeps running underneath so that speech
@@ -305,19 +384,16 @@ final class JoanMedia {
             sDtmfDur = 0;
             sDtmfEnds = 0;
             sDtmfMark = true;
-            JoanTrace.note("dtmf start event=" + sDtmfEvent + " pt=" + sTePt);
+            JoanTrace.note("dtmf start event=" + next.event + " pt=" + sTePt
+                    + (next.held ? " held" : " ms=" + next.leftMs));
         }
-        if (sDtmfEvent < 0) {
-            return 0;
-        }
-        boolean end = !sDtmfHold;
+        Tone tone = sDtmfTone;
+        boolean end = tone.held && !sDtmfHold;
         if (!end) {
             int ms = samples * 1000 / (sRate > 0 ? sRate : PCMU_HZ);
-            if (sDtmfLeftMs > 0) {
-                sDtmfLeftMs -= ms;
-                if (sDtmfLeftMs <= 0) {
-                    end = true;
-                }
+            tone.leftMs -= ms;
+            if (tone.leftMs <= 0) {
+                end = true;
             }
             sDtmfDur += samples;
             if (sDtmfDur >= 0xffff) {
@@ -325,20 +401,19 @@ final class JoanMedia {
                 sDtmfDur = 0xffff;
                 end = true;
             }
-            if (end) {
-                sDtmfHold = false;
-            }
         }
-        int n = JoanDtmf.pack(sDtmfEvent, end, JoanDtmf.DEFAULT_VOLUME,
+        int n = JoanDtmf.pack(tone.event, end, JoanDtmf.DEFAULT_VOLUME,
                 sDtmfDur, out);
         if (n < 0) {
-            sDtmfEvent = -1;
+            sDtmfTone = null;
+            run(tone.done);
             return 0;
         }
         if (end && ++sDtmfEnds >= DTMF_END_REPEATS) {
-            JoanTrace.note("dtmf end event=" + sDtmfEvent
+            JoanTrace.note("dtmf end event=" + tone.event
                     + " ticks=" + sDtmfDur);
-            sDtmfEvent = -1;
+            sDtmfTone = null;
+            run(tone.done);
         }
         return n;
     }
@@ -366,10 +441,9 @@ final class JoanMedia {
         stop();
         sPt = payloadType;
         sTePt = telephoneEventPt;
-        sDtmfQueued = -1;
+        finishDtmfQueue();
         sDtmfHold = false;
-        sDtmfLeftMs = 0;
-        sDtmfEvent = -1;
+        sDtmfTone = null;
         sDtmfEnds = 0;
         sAmrOct = amrOctetAligned;
         sAmrMaxMode = amrMaxMode;
@@ -480,6 +554,8 @@ final class JoanMedia {
 
     static void stop() {
         sRun = false;
+        sDtmfHold = false;
+        finishDtmfQueue();
         Thread[] ts = { sCap, sPlay, sRtcpRx };
         sCap = null;
         sPlay = null;
