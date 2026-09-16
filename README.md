@@ -39,12 +39,28 @@ is **not** a live-carrier qualifier. Sideload
 `joan-volte-recovery.zip` from the GitHub release, reboot, then confirm
 the `build` row below reads `0.4.0-alpha25 (33)`.
 
-**If you are testing CMCC (46002): this build changes nothing about the
-`reg2=404`.** Everything new here is call-path work that only runs after
-registration succeeds. It is worth flashing only for the alpha21
-rejection diagnostic, which records the `Warning`, `Reason` and the two
-domains from a 404 with every subscriber identity stripped. That trace
-is the one thing that would move the 404 forward.
+**If you are testing CMCC (46002): this build does not fix the
+`reg2=404`, but it is worth flashing for what it will tell us.**
+Everything else new here is call-path work that only runs after
+registration succeeds.
+
+Two diagnostics matter for that 404, and neither costs you anything
+beyond a flash and one trace:
+
+- the ISIM read now says *why* it produced nothing -- `ok`, `absent`
+  (the card genuinely has no such record), `no-api`, `denied`, or the
+  exception name. Until now it claimed "no ISIM" for all of those alike,
+  including the cases that would be our own bug;
+- the trace records the realm we registered with and whether it came
+  from the card or was derived from the IMSI. A realm is a network name,
+  not a subscriber identity, so nothing personal is logged.
+
+Four independent sources -- 3GPP TS 23.003, AOSP's ImsStack,
+rust-rcs-core, and the CMCC carrier config shipped in LineageOS's own
+OnePlus device trees -- agree that deriving the domain from the SIM's own
+MNC is correct, and no upstream IMS carries a China Mobile identity
+quirk. So the 404 is something else, and those two lines are what will
+say what.
 
 **What to test first, in this order.** alpha25 changes the headers on
 every INVITE and the SDP on *every answer*, not just the new features,
