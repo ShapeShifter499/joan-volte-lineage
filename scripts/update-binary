@@ -144,13 +144,46 @@ SYSMNT="$MP_RESULT"; SYSMNT_OWNED="$MP_OWNED"
 ui_print "Mounting product"
 mount_part product "$PRODMNT"
 PRODMNT="$MP_RESULT"; PRODMNT_OWNED="$MP_OWNED"
-# vendor carries audio_effects.xml. It is mounted last and its absence is
-# not fatal: everything else this zip installs lives on system and
-# product, and a device whose vendor will not mount should still get a
-# working IMS stack rather than a failed flash.
-ui_print "Mounting vendor"
-mount_part vendor "$VENDMNT" || true
-VENDMNT="$MP_RESULT"; VENDMNT_OWNED="$MP_OWNED"
+# vendor carries audio_effects.xml, and it is genuinely optional:
+# everything else this zip installs lives on system and product.
+#
+# It must NOT go through mount_part. That function ends every failure
+# with error(), which calls exit 1, and an exit cannot be caught by
+# "|| true" -- guarding it that way is what made a full vendor
+# partition abort the whole install before a single file was copied
+# (US998, 2026-09-16: /vendor has 335 free blocks and fails
+# mount_part's own write test).
+#
+# A read-only or full vendor is the normal state on this device. Android
+# itself cannot write there; that is why "adb remount" builds a scratch
+# overlay instead. So this probes quietly and gives up without noise.
+VENDMNT_OWNED=0
+VENDOR_RW=0
+mkdir -p "$VENDMNT"
+if mount | grep -q " $VENDMNT "; then
+  VENDOR_RW=1
+else
+  for vdev in /dev/block/mapper/vendor /dev/block/by-name/vendor; do
+    [ -b "$vdev" ] || continue
+    if mount -o rw "$vdev" "$VENDMNT" 2>/dev/null; then
+      VENDMNT_OWNED=1
+      VENDOR_RW=1
+    fi
+    break
+  done
+fi
+if [ "$VENDOR_RW" = "1" ]; then
+  # Mounted is not the same as writable. Prove it with the same readback
+  # the other partitions get, because a silent half-write to the device's
+  # audio configuration is worse than not trying.
+  vwt="$VENDMNT/.joan_write_test"
+  if echo joan > "$vwt" 2>/dev/null && [ "$(cat "$vwt" 2>/dev/null)" = "joan" ]; then
+    rm -f "$vwt"
+  else
+    rm -f "$vwt" 2>/dev/null
+    VENDOR_RW=0
+  fi
+fi
 
 # system-as-root: the partition root is /, and the /system tree sits in
 # a system/ subdirectory of it.
@@ -294,7 +327,8 @@ fi
 # VoLTE uplink runs at whatever level the microphone gave us -- measured
 # about 16 dB below the downlink on real calls. Only agc is added; aec
 # and ns already come from Qualcomm's libqcomvoiceprocessing.so.
-if [ -f "$TMP/scripts/merge-agc-effect.sh" ] && [ -d "$VENDMNT/etc" ]; then
+if [ "$VENDOR_RW" = "1" ] && [ -f "$TMP/scripts/merge-agc-effect.sh" ] \
+   && [ -d "$VENDMNT/etc" ]; then
   AE="$VENDMNT/etc/audio_effects.xml"
   AEBACK="$VENDMNT/etc/audio_effects.xml.joan-orig"
   if [ -f "$AE" ]; then
@@ -320,6 +354,13 @@ if [ -f "$TMP/scripts/merge-agc-effect.sh" ] && [ -d "$VENDMNT/etc" ]; then
       ui_print "  libaudiopreprocessing.so not present; skipping AGC."
     fi
   fi
+else
+  # Expected on joan: /vendor is full and unwritable, so the uplink stays
+  # unconditioned. Said out loud rather than passed over in silence,
+  # because "platform_agc=false" in a later trace should not look like a
+  # mystery.
+  ui_print "Vendor is not writable; skipping the AGC effect."
+  ui_print "  (uplink stays unconditioned; platform_agc will read false)"
 fi
 
 sync

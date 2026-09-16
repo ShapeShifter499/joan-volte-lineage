@@ -84,10 +84,19 @@ failing the new thing:
   refresh by UPDATE or re-INVITE.
 - **b=AS / b=RS / b=RR** in the SDP, so the network sizes the dedicated
   bearer from what we asked for rather than its own default.
-- **The AGC effect is declared.** joan ships libaudiopreprocessing.so
-  but never declared it, so the uplink ran unconditioned -- measured
-  about 16 dB below the downlink. Watch for `platform_agc=true` in the
-  trace.
+- **The AGC effect is declared -- where `/vendor` allows it.** joan ships
+  libaudiopreprocessing.so but never declares it, so the uplink runs
+  unconditioned -- measured about 16 dB below the downlink. The installer
+  adds the declaration to `audio_effects.xml`.
+
+  **On the US998 bench this step is skipped**, and probably on your
+  device too: `/vendor` there has 335 free blocks and refuses writes,
+  which is exactly why Android builds a scratch overlay for
+  `adb remount` rather than writing to it. The installer probes with a
+  write-readback, says "Vendor is not writable; skipping the AGC effect"
+  and carries on. `platform_agc=false` in a later trace means that
+  happened -- it is expected, not a fault, and the uplink is unchanged
+  from earlier alphas.
 - **Registration event package (RFC 3680)**, so a network-initiated
   deregistration is noticed at once instead of at the next refresh.
 - **Local IP change** during a call migrates the media and re-INVITEs

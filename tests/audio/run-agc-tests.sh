@@ -68,4 +68,28 @@ if sh "$MERGE" "$OUT/bad.xml" > /dev/null 2>&1; then
 fi
 pass "a config without the expected sections is refused, not mangled"
 
+# The installer must treat vendor as optional. This is a static check on
+# update-binary because the failure it guards against cannot be
+# reproduced offline: mount_part ends every failure with error(), which
+# calls exit 1, and an exit is not catchable by "|| true". Guarding the
+# vendor mount that way aborted the entire install on a device whose
+# /vendor is full -- before a single file was copied.
+UB=$ROOT/scripts/update-binary
+[ -f "$UB" ] || fail "missing $UB"
+
+grep -qE '^[[:space:]]*mount_part[[:space:]]+vendor' "$UB"     && fail "vendor must not go through mount_part: its error() exits the install"
+pass "the vendor mount does not use the function that exits on failure"
+
+grep -q 'VENDOR_RW' "$UB" || fail "no VENDOR_RW probe in the installer"
+grep -qE '\[ "\$VENDOR_RW" = "1" \].*merge-agc-effect' "$UB"     || fail "the AGC merge is not gated on the vendor write probe"
+pass "the AGC merge only runs when vendor proved writable"
+
+# A mounted partition is not a writable one; the probe must read back.
+grep -q 'joan_write_test' "$UB" || fail "no write-readback probe"
+pass "vendor writability is proven by readback, not by mount succeeding"
+
+# And a skip must be visible, so platform_agc=false is not a mystery later.
+grep -q 'skipping the AGC effect' "$UB"     || fail "a skipped AGC step must say so in the installer output"
+pass "a skipped AGC step is announced rather than passed over"
+
 echo "AGC effect merge tests passed"
