@@ -146,6 +146,30 @@ executed on a real call:
 - **mode-set** and the `mode-change-*` parameters: AOSP negotiates them, we
   ignore them.
 
+AOSP has **no device-capability gate anywhere in this path**. There is not
+one `MediaCodecList`, `getCodecInfos` or `MediaCodecInfo` in the module;
+every codec value comes from `CarrierConfig::Ims*::KEY_*`. `ImsMediaManager`
+is not the gate it sounds like either -- every use is `setCodecType(...)`,
+writing a decision into an `AudioConfig` and handing it to the session, with
+`getCodecType()` only reading back what they set. It is a sink, not an
+oracle, and never advertises what the ROM can run.
+
+That works for an OEM integration, where carrier config and the hardware
+media stack agree by construction. It does not work for us: we are an app
+on arbitrary LineageOS builds using general-purpose MediaCodec, with no
+integration contract. So `JoanSipBuilder.restrictProfile()` narrows the
+profile at startup from `JoanAmrCodec.availableAmr()`, requiring both an
+encoder and a decoder. **This is a deliberate divergence, not a copy.**
+Offering a codec the device cannot open is worse than not offering it: the
+carrier selects it, the encoder fails, the media layer falls back to PCMU,
+and the peer keeps sending AMR.
+
+One value worth knowing: `CodecAmrConfig::DEFAULT_PAYLOAD_FORMAT` is
+`BANDWIDTH_EFFICIENT`. AOSP's default AMR packing is the framing JoanAmr
+does not implement, so on a network following that default our octet-align
+gate falls through to PCMU every time. That, rather than the negotiation,
+is what keeps AMR from running -- recorded under "Not in this zip".
+
 Structural gap still open on our side: AOSP builds its *offer* from carrier
 configuration (`AudioProfileGenerator` with `AudioConfiguration`,
 `CodecAmrConfig`, `CodecEvsConfig`), so it offers AMR-NB, EVS, mode-set and

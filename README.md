@@ -402,7 +402,19 @@ so far been exercised on one live IMS core.
 - **Conference merge.** Implemented as a network-hosted focus INVITE +
   REFER / Replaces flow and offline-tested. Not live-carrier qualified.
   Do not treat Dialer merge as proven on your network until you try it.
-- **DTMF.** No RFC 4733; keypresses in an IVR do nothing.
+- **DTMF.** No RFC 4733; keypresses in an IVR do nothing. This becomes
+  more than cosmetic once AMR is carried: in-band tones do not survive a
+  speech codec, so `telephone-event` is what makes IVR keypads work at
+  all.
+- **Bandwidth-efficient AMR.** Only octet-aligned AMR is implemented
+  (`JoanAmr` does RFC 4867 octet-aligned framing). An AMR offer carrying
+  no `octet-align=1` means bandwidth-efficient by default (RFC 4867 3.6),
+  and is skipped in favour of the next codec the offerer listed, which is
+  normally PCMU. AOSP's own default payload format is bandwidth-efficient
+  (`CodecAmrConfig::DEFAULT_PAYLOAD_FORMAT`), so against a network that
+  follows that default AMR is never selected here and calls stay on
+  G.711. **This, not the negotiation, is what stops AMR running in the
+  field.**
 - VoWiFi (see `docs/vowifi-feasibility-2026-08-29.md`)
 
 ## License
