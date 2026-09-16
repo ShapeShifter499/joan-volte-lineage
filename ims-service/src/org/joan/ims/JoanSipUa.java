@@ -989,6 +989,10 @@ final class JoanSipUa {
          * demanded with another 422 is not going to agree to anything,
          * and retrying forever would hold the dial screen open. */
         boolean seRetried = false;
+        /* One redirect only. A core that 302s us back into another 302 is
+         * a routing loop, and RFC 3261 s8.1.3.4 leaves the depth to the
+         * UAC; one hop covers number portability without risking it. */
+        boolean seRedirected = false;
         String msg = JoanSipBuilder.buildInvite(id, dlg, dest, sServiceRoute,
                 sSecVerify, RTP_PORT, sPani, secAgree);
         if (msg == null) {
@@ -1227,6 +1231,52 @@ final class JoanSipUa {
                 deadline = System.currentTimeMillis() + 30000;
                 continue;
             }
+            if (p.status >= 300 && p.status < 400 && !seRedirected) {
+                /* RFC 3261 s8.1.3.4: a redirect names where to go in
+                 * Contact, and a UAC that treats it as a failure simply
+                 * does not reach the callee. Cores use 302 for number
+                 * portability and for routing a call to a different
+                 * S-CSCF, so failing here is a call that could have
+                 * connected and did not. */
+                String redirTo = nullToEmpty(JoanSipBuilder.header(rx, "To"));
+                String redirFrom = nullToEmpty(JoanSipBuilder.header(rx, "From"));
+                String redirContact = JoanSipBuilder.header(rx, "Contact");
+                String next = redirContact == null ? null
+                        : JoanSipBuilder.contactUri(redirContact);
+                sendAckNon2xx(id, dlg, next == null ? dest : next,
+                        sServiceRoute, redirTo, redirFrom, wait.cseq,
+                        dlg.branch);
+                clearInviteWait(wait);
+                if (next == null || next.isEmpty() || next.equals(dest)) {
+                    /* No Contact, or one pointing back where we already
+                     * are. Following that is a loop, not a redirect. */
+                    JoanTrace.note("app invite " + p.status
+                            + " with no usable Contact; not following");
+                    return "ERR invite " + p.status;
+                }
+                JoanTrace.note("app invite " + p.status + " redirect; retrying");
+                seRedirected = true;
+                dest = next;
+                dlg = new JoanSipBuilder.Dialog();
+                String redir = JoanSipBuilder.buildInvite(id, dlg, dest,
+                        sServiceRoute, sSecVerify, RTP_PORT, sPani, secAgree);
+                if (redir == null) {
+                    return "ERR build invite";
+                }
+                sInviteAcks.begin(dlg.callId, dlg.cseq, dlg, "", "",
+                        dest, sServiceRoute);
+                wait = new InviteWait(dlg.callId, dlg.cseq);
+                registerInviteWait(wait);
+                try {
+                    send(sSockC, sPcscf, sPcscfPortS,
+                            redir.getBytes(StandardCharsets.US_ASCII));
+                } catch (Exception e) {
+                    clearInviteWait(wait);
+                    return "ERR invite send";
+                }
+                deadline = System.currentTimeMillis() + 30000;
+                continue;
+            }
             if (p.status >= 300) {
                 String finalTo = nullToEmpty(JoanSipBuilder.header(rx, "To"));
                 String finalFrom = nullToEmpty(JoanSipBuilder.header(rx, "From"));
@@ -1238,6 +1288,19 @@ final class JoanSipUa {
                 sendAckNon2xx(id, dlg, finalTarget, finalRoute, finalTo,
                         finalFrom, wait.cseq, dlg.branch);
                 clearInviteWait(wait);
+                if (p.status == 503) {
+                    /* RFC 3261 s21.5.4: 503 is this server being
+                     * unavailable, not the call being refused. Retry-After
+                     * says for how long. Reporting it as a plain failure
+                     * hides a transient from the user and from the log. */
+                    int after = JoanSessionTimer.parseExpires(
+                            JoanSipBuilder.header(rx, "Retry-After"));
+                    JoanTrace.note("app invite 503 service unavailable"
+                            + (after > 0 ? " retry_after=" + after + "s"
+                                    : " (no Retry-After)"));
+                    return "ERR invite 503"
+                            + (after > 0 ? " retry_after=" + after : "");
+                }
                 return "ERR invite " + p.status;
             }
         }
@@ -2793,6 +2856,23 @@ final class JoanSipUa {
             /* Log the method, never the message: the REGISTER Contact
              * advertises +g.3gpp.smsip, so a core may deliver SMS here as
              * a SIP MESSAGE and its body is the text of someone's SMS. */
+            if ("PRACK".equals(method)) {
+                /* A PRACK only acknowledges a reliable provisional, and
+                 * RFC 3262 s3 wants a 200 for it. We never send a 1xx
+                 * with Require: 100rel, so this should not arrive -- but
+                 * PRACK is in our Allow, and answering 501 to a method we
+                 * advertise is the kind of contradiction that makes a
+                 * core give up on the dialog. */
+                try {
+                    sendReply(buildResponse(rx, 200, "OK", sId,
+                            sOurToTag != null ? sOurToTag : "prk", null)
+                            .getBytes(StandardCharsets.US_ASCII));
+                    JoanTrace.note("app inbound PRACK; 200");
+                } catch (Exception ignored) {
+                    // the sender retransmits
+                }
+                return;
+            }
             if (!"ACK".equals(method)) {
                 /* ACK needs no response and ignoring it is correct.
                  * Everything else does: RFC 3261 8.2.1 requires a UAS to

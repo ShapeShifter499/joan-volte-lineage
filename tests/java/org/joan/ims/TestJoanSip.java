@@ -851,16 +851,23 @@ public final class TestJoanSip {
         check(!inv.contains("Supported: replaces"),
                 "INVITE does not claim Replaces");
         /* MESSAGE still is not implemented -- SMS would be dropped -- so
-         * it must not appear. Allow lists only what we answer. */
-        for (String m2 : new String[] { "MESSAGE" }) {
+         * it must not appear. Allow lists only what we answer.
+         *
+         * INFO left the list for the same reason it should never have
+         * been on it: there is no handler, so an INFO from the core was
+         * answered 501 by a UA that had just advertised support for it.
+         * DTMF goes as RFC 4733 telephone-events, not as
+         * application/dtmf-relay, so nothing here needs INFO. */
+        for (String m2 : new String[] { "MESSAGE", "INFO" }) {
             check(!reg.contains(m2) && !inv.contains(m2),
-                    "neither request allows " + m2);
+                    "neither request allows " + m2 + " (no handler)");
         }
         /* UPDATE joined the list because we answer it: a network
          * refreshing the session (RFC 4028) picks a method the peer
-         * allows, and an unanswered refresh tears the call down. */
+         * allows, and an unanswered refresh tears the call down. PRACK
+         * stays because an inbound one is now answered 200. */
         for (String m2 : new String[] { "REFER", "SUBSCRIBE", "NOTIFY",
-                "PRACK", "INFO", "UPDATE" }) {
+                "PRACK", "UPDATE" }) {
             check(reg.contains(m2) && inv.contains(m2),
                     "both allow " + m2 + " (implemented)");
         }

@@ -24,8 +24,19 @@ final class JoanSipBuilder {
      * session (RFC 4028) picks a method the peer allows, and leaving it
      * out pushes a refresh onto re-INVITE or, worse, onto a method we
      * silently ignored. Only methods we actually answer belong here. */
+    /**
+     * Methods we will actually answer.
+     *
+     * <p>INFO is deliberately absent. It was advertised for a long time
+     * with no handler behind it, so an INFO from the core was answered
+     * 501 by a UA that had just claimed to support it -- the same
+     * contradiction as advertising mode-change-capability or octet-align
+     * we could not honour. Nothing here needs INFO: DTMF goes as RFC 4733
+     * telephone-events, not as application/dtmf-relay. If a handler is
+     * ever written, this is the line that re-advertises it.
+     */
     static final String ALLOW = "INVITE, ACK, CANCEL, BYE, UPDATE, OPTIONS, "
-            + "REFER, SUBSCRIBE, NOTIFY, PRACK, INFO";
+            + "REFER, SUBSCRIBE, NOTIFY, PRACK";
     static final int PCSCF_SIP_PORT = 5060;
 
     static final class Params {
