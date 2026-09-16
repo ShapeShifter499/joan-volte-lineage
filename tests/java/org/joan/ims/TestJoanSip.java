@@ -1696,6 +1696,47 @@ public final class TestJoanSip {
         check(lateOnly.dropped() == lateOnly.late() + lateOnly.trimmed(),
                 "dropped() is still the total of both");
 
+        /* A gap and a fill both return null and need opposite answers:
+         * a gap wants concealment so the stream keeps its timing, a fill
+         * wants silence because the call has not started. Concealing
+         * during the fill would invent audio before the first real
+         * frame. */
+        JoanJitter gp = new JoanJitter();
+        gp.setClockRate(16000);
+        gp.offer(800, 0, 0, p, 0L);
+        check(gp.poll(0L) == null && !gp.lastWasGap(),
+                "a null while filling is not a gap");
+        for (int i = 1; i < 6; i++) {
+            gp.offer(800 + i, i * 320L, i * 320L, p, i * 20L);
+        }
+        byte[] first = null;
+        for (int t = 20; t <= 300 && first == null; t += 20) {
+            first = gp.poll(t);
+        }
+        check(first != null, "playback starts once the fill completes");
+        /* 806 never arrives; 807 does. */
+        gp.offer(807, 7 * 320L, 7 * 320L, p, 200L);
+        byte[] out = null;
+        boolean sawGap = false;
+        for (int t = 220; t <= 600; t += 20) {
+            out = gp.poll(t);
+            if (out == null && gp.lastWasGap()) {
+                sawGap = true;
+                break;
+            }
+        }
+        check(sawGap, "a missing frame reports as a gap");
+
+        /* The lost-frame signal RFC 4867 s4.3.2 defines, which is what
+         * asks the decoder to run its own concealment. */
+        byte[] lf = new byte[4];
+        check(JoanAmr.lostFrame(lf) == 1, "a lost frame is one byte");
+        check(((lf[0] >> 3) & 0x0f) == JoanAmr.FT_SPEECH_LOST,
+                "and carries frame type 14, SPEECH_LOST");
+        check((lf[0] & 0x80) == 0, "with the F bit clear");
+        check(JoanAmr.lostFrame(new byte[0]) < 0,
+                "and refuses a buffer it cannot fill");
+
         /* observe() must account exactly as offer() does, so the report
          * blocks are right whether or not playback is buffering yet. */
         JoanJitter o1 = new JoanJitter();

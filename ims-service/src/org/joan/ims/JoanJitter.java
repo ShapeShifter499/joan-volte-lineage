@@ -108,6 +108,22 @@ final class JoanJitter {
     private boolean waiting = true;
     private long waitStartedMs = -1;
 
+    /**
+     * Why the last poll() returned nothing.
+     *
+     * <p>A gap and a fill both come back as null and need opposite
+     * answers: a gap wants concealment written so the stream keeps its
+     * timing, while a fill wants silence because the call has not
+     * started. Concealing during the fill would play invented audio
+     * before the first real frame.
+     */
+    private boolean lastWasGap;
+
+    /** True when the last poll() found a frame missing, not still filling. */
+    boolean lastWasGap() {
+        return lastWasGap;
+    }
+
     /** SSRC of the stream being buffered; a change means a new stream. */
     private int ssrc;
     private boolean haveSsrc;
@@ -162,6 +178,7 @@ final class JoanJitter {
         lastReceived = 0;
         waiting = true;
         waitStartedMs = -1;
+        lastWasGap = false;
         haveSsrc = false;
         ssrc = 0;
         dropTimes.clear();
@@ -336,6 +353,7 @@ final class JoanJitter {
     }
 
     byte[] poll(long nowMs) {
+        lastWasGap = false;
         if (waiting) {
             if (queue.isEmpty()) {
                 return null;
@@ -380,12 +398,14 @@ final class JoanJitter {
             }
             waiting = true;
             waitStartedMs = -1;
+            lastWasGap = true;
             return null;
         }
         if (expected >= 0 && first.getKey() > expected) {
             /* The packet we wanted never came. Advance past it and let
              * the caller conceal rather than playing the next one early. */
             expected++;
+            lastWasGap = true;
             return null;
         }
         queue.remove(first.getKey());

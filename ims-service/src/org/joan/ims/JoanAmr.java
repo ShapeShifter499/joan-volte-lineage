@@ -370,6 +370,29 @@ final class JoanAmr {
         return ft == FT_SID;
     }
 
+    /**
+     * A storage-format frame telling the decoder a frame was lost.
+     *
+     * <p>RFC 4867 s4.3.2 defines frame type 14 as SPEECH_LOST, which is
+     * exactly this signal, and an AMR decoder answers it by running the
+     * error concealment 3GPP specifies for the codec. That is a far
+     * better reconstruction than anything this application could write,
+     * and it is how AOSP handles a gap too: ImsMedia's audio player calls
+     * onDataFrame(nullptr, 0, NO_DATA) and lets the codec decide, rather
+     * than synthesising audio itself.
+     *
+     * @return bytes written, always 1, or -1 if out is too small
+     */
+    static int lostFrame(byte[] out) {
+        if (out == null || out.length < 1) {
+            return -1;
+        }
+        /* Storage format is the ToC octet with the F bit clear, then the
+         * frame's bytes -- and a lost frame has none. */
+        out[0] = (byte) (FT_SPEECH_LOST << 3);
+        return 1;
+    }
+
     /** CMR the peer is requesting, or CMR_NONE. */
     static int requestedMode(byte[] rtp, int off, int len) {
         if (rtp == null || len < 1 || off < 0 || off >= rtp.length) {

@@ -224,6 +224,8 @@ final class JoanMedia {
     private static volatile boolean sDtmfRxSeen;
     /** Packets dropped for carrying a payload type we never negotiated. */
     private static volatile int sRtpWrongPt;
+    /** Frames handed to the decoder as lost, for it to conceal. */
+    private static volatile int sConcealed;
 
     /* Owned by the capture thread alone. */
     private static Tone sDtmfTone;
@@ -472,6 +474,7 @@ final class JoanMedia {
         sTePt = telephoneEventPt;
         sDtmfRxSeen = false;
         sRtpWrongPt = 0;
+        sConcealed = 0;
         sPeerSsrc = 0;
         sLastSr = 0;
         sLastSrAtMs = 0;
@@ -871,6 +874,7 @@ final class JoanMedia {
             short[] pcm = new short[sFrame];
             byte[] storage = new byte[512];
             int decFails = 0;
+            boolean concealWarned = false;
             int lastCmr = JoanAmr.CMR_NONE;
             DatagramPacket in = new DatagramPacket(down, down.length);
             JoanTrace.note("media play rolling voice mode="
@@ -977,8 +981,34 @@ final class JoanMedia {
                         held, isSid, nowMs);
                 byte[] play = sRx.poll(nowMs);
                 if (play == null) {
-                    /* Still filling, or a gap we cannot fill. Either way
-                     * there is nothing to decode this tick. */
+                    if (!sRx.lastWasGap()) {
+                        /* Still filling: the call has not started, and
+                         * concealing here would invent audio before the
+                         * first real frame. */
+                        continue;
+                    }
+                    /* A frame is missing. Tell the decoder so, rather
+                     * than writing nothing and letting the track
+                     * underrun -- an AMR decoder runs the concealment
+                     * 3GPP specifies for it, which is a better
+                     * reconstruction than this application could make.
+                     * AOSP does the same: onDataFrame(nullptr, 0,
+                     * NO_DATA) and let the codec decide. */
+                    sConcealed++;
+                    if (amr == null) {
+                        continue;   /* PCMU has no concealment to ask for */
+                    }
+                    int ll = JoanAmr.lostFrame(storage);
+                    int cm = ll < 0 ? -1 : amr.decode(storage, ll, pcm);
+                    if (cm <= 0) {
+                        if (!concealWarned) {
+                            concealWarned = true;
+                            JoanTrace.note("media dl: decoder will not conceal"
+                                    + " a lost frame; gaps stay silent");
+                        }
+                        continue;
+                    }
+                    trk.write(pcm, 0, cm);
                     continue;
                 }
                 System.arraycopy(play, 0, down, off, play.length);
@@ -1074,6 +1104,7 @@ final class JoanMedia {
                     + " " + rtpSourceSummary(sRtpFromDest, sRtpFromOther)
                     + " " + rtcpSummary()
                     + " rx{" + sRx.summary() + "}"
+                    + (sConcealed > 0 ? " concealed=" + sConcealed : "")
                     + (sRtpWrongPt > 0 ? " wrong_pt=" + sRtpWrongPt : "")
                     + (sDtmfRxSeen ? " dtmf_rx=yes" : ""));
         }
