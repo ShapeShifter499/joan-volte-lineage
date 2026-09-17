@@ -170,12 +170,30 @@ does not implement, so on a network following that default our octet-align
 gate falls through to PCMU every time. That, rather than the negotiation,
 is what keeps AMR from running -- recorded under "Not in this zip".
 
-Structural gap still open on our side: AOSP builds its *offer* from carrier
+Structural difference on our side: AOSP builds its *offer* from carrier
 configuration (`AudioProfileGenerator` with `AudioConfiguration`,
-`CodecAmrConfig`, `CodecEvsConfig`), so it offers AMR-NB, EVS, mode-set and
-ptime per carrier. Ours is a fixed string offering only AMR-WB and PCMU --
-no AMR-NB, which IR.92 mandates. That is a plausible reason T-Mobile skips
-our AMR-WB and answers G.711, which in turn is why AMR has never run here.
+`CodecAmrConfig`, `CodecEvsConfig`), so it offers EVS, mode-set and ptime
+per carrier. Ours is a fixed table narrowed by a `MediaCodecList` probe.
+
+**Superseded, and left here because it was wrong in a way worth keeping.**
+This paragraph used to read "Ours is a fixed string offering only AMR-WB
+and PCMU -- no AMR-NB, which IR.92 mandates", and named that as the
+plausible reason T-Mobile skipped our AMR-WB and answered G.711. Both
+halves have since been overtaken:
+
+- AMR-NB **is** offered, as `Capability("AMR", 8000, 97, ...)`, and it
+  survives the probe on this handset -- every startup logs
+  `codec profile: AMR-WB,AMR,PCMU`.
+- The real cause of the PCMU fallback was framing, not the codec list.
+  AOSP's `CodecAmrConfig::DEFAULT_PAYLOAD_FORMAT` is `BANDWIDTH_EFFICIENT`
+  and we implemented only octet-aligned, so the AMR entries were skipped
+  and PCMU taken. Once bandwidth-efficient framing landed, AMR-WB began
+  running on every call: 32 consecutive sessions, MO and MT, at 12650 bps
+  with no PCMU fallback at all.
+
+A stale "we do not implement X" is worse than no note, because it is
+quoted back as current behaviour -- this one was, months after it stopped
+being true.
 
 ### What they do NOT do, corrected
 
