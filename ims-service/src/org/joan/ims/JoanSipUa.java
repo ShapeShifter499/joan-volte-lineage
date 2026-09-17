@@ -994,7 +994,11 @@ final class JoanSipUa {
     }
 
     static String invite(String dest) {
-        return invite(dest, false);
+        return invite(dest, false, false);
+    }
+
+    static String invite(String dest, boolean conferenceFocus) {
+        return invite(dest, conferenceFocus, false);
     }
 
     /**
@@ -1002,8 +1006,13 @@ final class JoanSipUa {
      * focus dialog, a THIRD dialog beside the two held legs, so the
      * two-call admission guard must not apply to it (that guard is what
      * made merge() refuse the state it itself requires).
+     * @param oirRestricted the user asked to withhold their number on
+     * this call. Per-call rather than global: it comes off this call's
+     * ImsCallProfile, and the retries below carry it onto each fresh
+     * dialog because a 420 or a 302 must not unmask a caller.
      */
-    static String invite(String dest, boolean conferenceFocus) {
+    static String invite(String dest, boolean conferenceFocus,
+                         boolean oirRestricted) {
         if (!sReg) {
             return "ERR call before register";
         }
@@ -1028,6 +1037,7 @@ final class JoanSipUa {
                 sId.impi, sPublicId, sId.realm, sId.localIp,
                 sId.viaPort, sId.contactPort, sId.imei);
         JoanSipBuilder.Dialog dlg = new JoanSipBuilder.Dialog();
+        dlg.privacyId = oirRestricted;
         boolean secAgree = true;
         /* One 422 retry only. A core that answers the value it just
          * demanded with another 422 is not going to agree to anything,
@@ -1205,6 +1215,7 @@ final class JoanSipUa {
                 JoanTrace.note("app invite 420; retrying without sec-agree");
                 clearInviteWait(wait);
                 dlg = new JoanSipBuilder.Dialog();
+                dlg.privacyId = oirRestricted;
                 String retry = JoanSipBuilder.buildInvite(id, dlg, dest,
                         sServiceRoute, sSecVerify, RTP_PORT, sPani, false);
                 if (retry == null) {
@@ -1258,6 +1269,7 @@ final class JoanSipUa {
                 JoanSipBuilder.setSessionTimer(raised, raised,
                         JoanSipBuilder.sessionRefresher());
                 dlg = new JoanSipBuilder.Dialog();
+                dlg.privacyId = oirRestricted;
                 String retry422 = JoanSipBuilder.buildInvite(id, dlg, dest,
                         sServiceRoute, sSecVerify, RTP_PORT, sPani, secAgree);
                 if (retry422 == null) {
@@ -1304,6 +1316,7 @@ final class JoanSipUa {
                 seRedirected = true;
                 dest = next;
                 dlg = new JoanSipBuilder.Dialog();
+                dlg.privacyId = oirRestricted;
                 String redir = JoanSipBuilder.buildInvite(id, dlg, dest,
                         sServiceRoute, sSecVerify, RTP_PORT, sPani, secAgree);
                 if (redir == null) {

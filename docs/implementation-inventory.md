@@ -71,6 +71,8 @@ conflating the two produced a wrong diagnosis once already.
 | RFC 3264 | Offer/answer; direction mirrored rather than always `sendrecv` | `JoanSipUa`, `JoanSipBuilder` |
 | RFC 3310 | Digest AKAv1-MD5, including AUTS resync with an empty password | `JoanAka`, `JoanSipCrypto`, `JoanAppRegister` |
 | RFC 3311 | UPDATE | `JoanSipUa`, `JoanSipBuilder` |
+| RFC 3323 | `Privacy` honoured on receive (`id`/`header` withhold, `user` drops the name) and requested on send for per-call OIR | `JoanSipBuilder`, `JoanCallSession` |
+| RFC 3325 | `P-Asserted-Identity` (every field, `tel:` preferred) for caller ID; `P-Preferred-Identity` on INVITE only, never on REGISTER | `JoanSipBuilder`, `JoanMmTelFeature` |
 | RFC 3329 | Security-Client / Security-Server / Security-Verify, `ipsec-3gpp` | `JoanSecAgree`, `JoanSipBuilder` |
 | RFC 3515 | REFER | `JoanSipBuilder`, `JoanSipUa` |
 | RFC 3550 | RTP/RTCP; SR **and** a real reception report block; interarrival jitter | `JoanJitter`, `JoanRtcp`, `JoanMedia` |

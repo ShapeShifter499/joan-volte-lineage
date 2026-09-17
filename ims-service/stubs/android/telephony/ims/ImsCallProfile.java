@@ -28,4 +28,9 @@ public class ImsCallProfile {
     public void setCallExtraInt(String name, int value) {}
 
     public String getCallExtra(String name) { return null; }
+
+    /* The one-arg form, which is the older of the two in AOSP and the
+     * one certain to exist on API 35. Returns 0 when the extra is
+     * absent, and 0 is OIR_DEFAULT -- "the user asked for nothing". */
+    public int getCallExtraInt(String name) { return 0; }
 }

@@ -1477,6 +1477,11 @@ final class JoanSipBuilder {
         String sessionId;
         /** The peer's UUID, once it has named one; null until then. */
         String sessionIdRemote;
+        /**
+         * The user asked to withhold their number on this call, so the
+         * INVITE carries {@code Privacy: id} (TS 24.229 5.1.3.1).
+         */
+        boolean privacyId;
     }
 
     /**
@@ -2605,6 +2610,20 @@ final class JoanSipBuilder {
                 .append(host).append(':').append(id.contactPort)
                 .append(">;+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\";audio\r\n");
         a.append("P-Preferred-Identity: <").append(aor).append(">\r\n");
+        /* TS 24.229 5.1.3.1: a UE requesting originating identification
+         * restriction sends Privacy: id and leaves P-Preferred-Identity
+         * alone. The identity is what the network bills and asserts on;
+         * anonymising it is the S-CSCF's job, inside the trust domain,
+         * and a UE that anonymised its own From would also be changing a
+         * dialog identifier its peer has to match on.
+         *
+         * Nothing is emitted when the user asked for nothing. Privacy:
+         * none is a real value meaning "apply no privacy", and sending it
+         * on a subscriber with permanent OIR provisioned would unmask
+         * them -- the platform's silence is not consent to be shown. */
+        if (dlg.privacyId) {
+            a.append("Privacy: id\r\n");
+        }
         a.append("P-Access-Network-Info: ").append(pani).append("\r\n");
         a.append("Allow: ").append(ALLOW).append("\r\n");
         if (sSendUa) {
@@ -3046,25 +3065,125 @@ final class JoanSipBuilder {
         }
     }
 
+    /** Privacy levels we act on, RFC 3323 4.2 and RFC 3325. */
+    static final int PRIV_NONE = 0;
+    /** "user": anonymise user-supplied information, i.e. the display name. */
+    static final int PRIV_USER = 1;
+    /** "id" or "header": the asserted identity must not be presented. */
+    static final int PRIV_ID = 2;
+
     /**
-     * Same rules as native sip_calling_identity: P-Asserted-Identity
-     * tel: wins for the number, From supplies the display name.
+     * The strongest privacy the sender asked for, RFC 3323 4.2.
+     *
+     * <p>Values are a semicolon-separated list. "critical" is a modifier
+     * rather than a level and says the request must fail if privacy
+     * cannot be applied, which is not the receiving UA's decision, so it
+     * is read and ignored. "none" is an explicit request for no privacy
+     * and is the reason this returns a level rather than a boolean: it
+     * must not be confused with the header being absent, where the
+     * network's own default may still apply.
+     *
+     * <p>"header" is grouped with "id" deliberately. RFC 3323 4.2 has it
+     * hide headers that reveal the originator, and the P-Asserted-Identity
+     * is the header that reveals the originator.
+     */
+    static int privacyLevel(String msg) {
+        java.util.List<String> vals = headers(msg, "Privacy");
+        int level = PRIV_NONE;
+        for (String v : vals) {
+            for (String tok : v.split(";")) {
+                String t = tok.trim().toLowerCase(java.util.Locale.ROOT);
+                if (t.equals("id") || t.equals("header")) {
+                    level = PRIV_ID;
+                } else if (t.equals("user") && level < PRIV_USER) {
+                    level = PRIV_USER;
+                }
+            }
+        }
+        return level;
+    }
+
+    /**
+     * Whether a URI is the anonymous placeholder, RFC 3323 4.1.1.3.
+     *
+     * <p>Matched on structure rather than on the substring "anonymous",
+     * which the previous version used. A caller at
+     * {@code sip:anonymous.jones@example.com} is not withholding
+     * anything, and a business called "Anonymous Vodka Ltd" was having
+     * its display name blanked.
+     */
+    static boolean isAnonymousUri(String uri) {
+        if (uri == null || uri.isEmpty()) {
+            return true;
+        }
+        String u = uri.trim().toLowerCase(java.util.Locale.ROOT);
+        int colon = u.indexOf(':');
+        if (colon >= 0) {
+            u = u.substring(colon + 1);
+        }
+        int semi = u.indexOf(';');
+        if (semi >= 0) {
+            u = u.substring(0, semi);
+        }
+        int at = u.indexOf('@');
+        String user = at >= 0 ? u.substring(0, at) : u;
+        String host = at >= 0 ? u.substring(at + 1) : "";
+        return user.equals("anonymous") || host.equals("anonymous.invalid");
+    }
+
+    /**
+     * Who is calling, for the dialer to display.
+     *
+     * <p>Built on native {@code sip_calling_identity}: the asserted
+     * {@code tel:} wins for the number, From supplies a display name the
+     * assertion did not. Three things it got wrong, each confirmed
+     * against a constructed message before it was changed:
+     *
+     * <p><b>Privacy was not read at all.</b> A caller who withholds their
+     * number arrives as an anonymous From with the real number still in
+     * P-Asserted-Identity and {@code Privacy: id} saying not to show it
+     * (RFC 3325 7, TS 24.229 5.1.2A). We took the PAI and put the
+     * withheld number on the callee's screen. A compliant terminating
+     * P-CSCF strips the PAI before it ever reaches a UE, so this needed a
+     * network that does not -- which is exactly the case worth defending
+     * against, because nothing on the handset would reveal it.
+     *
+     * <p><b>Only the first P-Asserted-Identity field was read.</b> RFC
+     * 3325 9 allows one {@code sip:} and one {@code tel:}, and a network
+     * may send them as two header fields rather than one comma-joined
+     * field. With {@code sip:alice@example.com} first, the dialer got
+     * "alice" and no dialable number even though the tel: was right
+     * there on the next line.
+     *
+     * <p><b>"anonymous" was matched as a substring</b> of the URI and of
+     * the display name. See {@link #isAnonymousUri}.
      */
     static Cli callingIdentity(String msg) {
-        String pai = header(msg, "P-Asserted-Identity");
-        String from = header(msg, "From");
+        int privacy = privacyLevel(msg);
         String uri = "";
         String name = "";
-        if (pai != null) {
-            String pick = pai;
+
+        /* Every P-Asserted-Identity field, each of which may itself carry
+         * a comma-separated pair. A tel: anywhere in the set wins. */
+        for (String pai : headers(msg, "P-Asserted-Identity")) {
             int tel = indexOfIgnoreCase(pai, "<tel:");
-            if (tel >= 0) {
-                pick = pai.substring(tel);
+            String[] p = splitNameAddr(tel >= 0 ? pai.substring(tel) : pai);
+            if (name.isEmpty()) {
+                /* The name belongs to the whole field, not to the half we
+                 * sliced off at "<tel:" -- reading it from the slice threw
+                 * away a display name the network had asserted. */
+                name = splitNameAddr(pai)[1];
             }
-            String[] p = splitNameAddr(pick);
-            uri = p[0];
-            name = p[1];
+            if (tel >= 0) {
+                uri = p[0];
+                break;
+            }
+            if (uri.isEmpty()) {
+                uri = p[0];
+            }
         }
+
+        String from = header(msg, "From");
         if (from != null) {
             String[] p = splitNameAddr(from);
             if (uri.isEmpty()) {
@@ -3074,11 +3193,15 @@ final class JoanSipBuilder {
                 name = p[1];
             }
         }
-        if (uri.isEmpty() || uri.toLowerCase(java.util.Locale.ROOT)
-                .contains("anonymous")) {
+
+        /* Withheld: by the sender's request, or because the only identity
+         * on offer is the anonymous placeholder. Both return empty rather
+         * than something the dialer might render. */
+        if (privacy >= PRIV_ID || isAnonymousUri(uri)) {
             return new Cli("", "", true);
         }
-        if (name.toLowerCase(java.util.Locale.ROOT).contains("anonymous")) {
+        if (privacy >= PRIV_USER
+                || name.trim().equalsIgnoreCase("anonymous")) {
             name = "";
         }
         return new Cli(uri, name, false);

@@ -31,6 +31,7 @@ public final class TestJoanSip {
         testRegisterShape();
         testCarrierTcpCriterion();
         testSessionId();
+        testOutgoingOir();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -1102,6 +1103,119 @@ public final class TestJoanSip {
         check(c.uri.startsWith("sip:+") && c.uri.indexOf('<') < 0,
                 "cli uri has no leftover angle bracket");
         check("Alice".equals(c.name), "cli name from PAI/From display");
+
+        /* RFC 3325 7 / TS 24.229 5.1.2A: the caller withheld their
+         * number, and this network did not strip the assertion on the way
+         * in. Showing it puts a withheld number on the callee's screen,
+         * and nothing on the handset would ever reveal that we had. */
+        String withheldButAsserted = "INVITE sip:me SIP/2.0\r\n"
+                + "From: \"Anonymous\" <sip:anonymous@anonymous.invalid>;tag=a\r\n"
+                + "P-Asserted-Identity: \"Real Name\" <tel:+15555550123>\r\n"
+                + "Privacy: id\r\n\r\n";
+        c = JoanSipBuilder.callingIdentity(withheldButAsserted);
+        check(c.withheld && c.uri.isEmpty() && c.name.isEmpty(),
+                "Privacy: id withholds an asserted identity the network left in");
+
+        String privHeader = "INVITE sip:me SIP/2.0\r\n"
+                + "From: <sip:x@y>;tag=a\r\n"
+                + "P-Asserted-Identity: <tel:+15555550123>\r\n"
+                + "Privacy: header;critical\r\n\r\n";
+        c = JoanSipBuilder.callingIdentity(privHeader);
+        check(c.withheld,
+                "Privacy: header withholds too, and critical is not a level");
+
+        /* "user" is display-name privacy (RFC 3323 4.2), not identity
+         * privacy. Withholding the number for it would break callbacks on
+         * every network that sets it as a matter of course. */
+        String privUser = "INVITE sip:me SIP/2.0\r\n"
+                + "From: \"Bob\" <tel:+15555550123>;tag=a\r\n"
+                + "P-Asserted-Identity: \"Bob\" <tel:+15555550123>\r\n"
+                + "Privacy: user\r\n\r\n";
+        c = JoanSipBuilder.callingIdentity(privUser);
+        check(!c.withheld && "tel:+15555550123".equals(c.uri)
+                        && c.name.isEmpty(),
+                "Privacy: user drops the name and keeps the number");
+
+        String privNone = "INVITE sip:me SIP/2.0\r\n"
+                + "From: <tel:+15555550123>;tag=a\r\n"
+                + "Privacy: none\r\n\r\n";
+        check(!JoanSipBuilder.callingIdentity(privNone).withheld,
+                "Privacy: none is not privacy");
+
+        /* RFC 3325 9 allows a sip: and a tel: as two header FIELDS, not
+         * only as one comma-joined field. Reading the first field alone
+         * handed the dialer "alice" and no dialable number. */
+        String twoPaiFields = "INVITE sip:me SIP/2.0\r\n"
+                + "From: <sip:alice@example.com>;tag=a\r\n"
+                + "P-Asserted-Identity: <sip:alice@example.com>\r\n"
+                + "P-Asserted-Identity: <tel:+15555550123>\r\n\r\n";
+        c = JoanSipBuilder.callingIdentity(twoPaiFields);
+        check("tel:+15555550123".equals(c.uri),
+                "a tel: in the second P-Asserted-Identity field is found");
+
+        /* The name belongs to the whole asserted field, not to the slice
+         * taken from "<tel:". */
+        String namedTel = "INVITE sip:me SIP/2.0\r\n"
+                + "From: <sip:x@y>;tag=a\r\n"
+                + "P-Asserted-Identity: \"Real Name\" <tel:+15555550123>\r\n\r\n";
+        c = JoanSipBuilder.callingIdentity(namedTel);
+        check("Real Name".equals(c.name) && "tel:+15555550123".equals(c.uri),
+                "an asserted display name survives picking the tel: form");
+
+        /* "anonymous" was matched as a substring of the URI and of the
+         * display name, so a real caller could be blanked by their name. */
+        String anonish = "INVITE sip:me SIP/2.0\r\n"
+                + "From: \"Anonymous Vodka Ltd\" <tel:+15555559999>;tag=a\r\n"
+                + "P-Asserted-Identity: <tel:+15555559999>\r\n\r\n";
+        c = JoanSipBuilder.callingIdentity(anonish);
+        check(!c.withheld && "Anonymous Vodka Ltd".equals(c.name),
+                "a caller named Anonymous-something is not withheld");
+        check(JoanSipBuilder.isAnonymousUri("sip:anonymous@anonymous.invalid")
+                        && JoanSipBuilder.isAnonymousUri("tel:anonymous")
+                        && JoanSipBuilder.isAnonymousUri(""),
+                "the anonymous placeholder is recognised by structure");
+        check(!JoanSipBuilder.isAnonymousUri("sip:anonymous.jones@example.com")
+                        && !JoanSipBuilder.isAnonymousUri("tel:+15555550100"),
+                "a name that merely contains 'anonymous' is not the placeholder");
+
+        check(JoanSipBuilder.privacyLevel("INVITE sip:me SIP/2.0\r\n\r\n")
+                        == JoanSipBuilder.PRIV_NONE,
+                "no Privacy header is not a privacy request");
+    }
+
+    /**
+     * Outgoing caller-ID restriction, TS 24.229 5.1.3.1: Privacy: id and
+     * an untouched P-Preferred-Identity, because anonymising the asserted
+     * identity is the S-CSCF's job inside the trust domain.
+     */
+    private static void testOutgoingOir() {
+        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                "310260123456789@ims.mnc260.mcc310.3gppnetwork.org",
+                "sip:+15550000@ims.mnc260.mcc310.3gppnetwork.org",
+                "ims.mnc260.mcc310.3gppnetwork.org",
+                "2001:db8::1", 5060, 5060, null);
+
+        JoanSipBuilder.Dialog plain = new JoanSipBuilder.Dialog();
+        String ordinary = JoanSipBuilder.buildInvite(id, plain,
+                "sip:peer@host", "", null, 40000, null);
+        check(ordinary.indexOf("Privacy:") < 0,
+                "an ordinary call sends no Privacy header at all");
+
+        JoanSipBuilder.Dialog hidden = new JoanSipBuilder.Dialog();
+        hidden.privacyId = true;
+        String restricted = JoanSipBuilder.buildInvite(id, hidden,
+                "sip:peer@host", "", null, 40000, null);
+        check(restricted.indexOf("\r\nPrivacy: id\r\n") > 0,
+                "a restricted call sends Privacy: id");
+        check(restricted.indexOf("P-Preferred-Identity: <sip:+15550000@") > 0,
+                "and keeps P-Preferred-Identity for the network to assert on");
+        check(restricted.indexOf("anonymous") < 0,
+                "the UE does not anonymise its own From, which is a dialog id");
+        /* The whole point: never emit "none". A subscriber with permanent
+         * OIR provisioned would be unmasked by a UE that volunteered it. */
+        check(ordinary.indexOf("Privacy: none") < 0
+                        && restricted.indexOf("Privacy: none") < 0,
+                "Privacy: none is never volunteered");
     }
 
     private static void testGrantedExpires() {

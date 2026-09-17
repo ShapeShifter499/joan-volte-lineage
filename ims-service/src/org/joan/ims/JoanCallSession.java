@@ -85,6 +85,27 @@ public class JoanCallSession extends ImsCallSessionImplBase {
         return callId;
     }
 
+    /* Telecom carries per-call caller-ID restriction as the "oir" int
+     * extra, the same key applyCallerId() writes in the other direction.
+     * Only OIR_PRESENTATION_RESTRICTED asks for anything: the extra is
+     * absent (0, OIR_DEFAULT) on an ordinary call, and a UE must not turn
+     * silence into "show my number" -- a subscriber with permanent OIR
+     * provisioned would be unmasked by it. Guarded because the getter is
+     * a system API and this compiles against a stub. */
+    private static final String EXTRA_OIR = "oir";
+    private static final int OIR_PRESENTATION_RESTRICTED = 1;
+
+    private static boolean oirRestricted(ImsCallProfile p) {
+        if (p == null) {
+            return false;
+        }
+        try {
+            return p.getCallExtraInt(EXTRA_OIR) == OIR_PRESENTATION_RESTRICTED;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     @Override
     public ImsCallProfile getCallProfile() {
         return profile;
@@ -116,12 +137,13 @@ public class JoanCallSession extends ImsCallSessionImplBase {
         } else {
             uri = "tel:" + callee;
         }
+        final boolean oir = oirRestricted(used);
         new Thread(() -> {
             if (!JoanSipUa.isRegistered()) {
                 failStart("not registered");
                 return;
             }
-            String resp = JoanSipUa.invite(uri);
+            String resp = JoanSipUa.invite(uri, false, oir);
             if (resp == null || !resp.startsWith("OK")) {
                 failStart(resp == null ? "invite failed" : resp);
                 return;
