@@ -385,8 +385,55 @@ predicates test resolve to:
 | 0x52 | USC (US Cellular) | Session-ID header required |
 | 0x5a | SPR (Sprint) | transport parameter ignored for reg binding |
 
-**None of them is China Mobile.** Every quirk in this mechanism targets a
-Japanese or US carrier.
+**None of the five `SIPFeatures` predicates targets China Mobile.**
+
+**Correction, from sweeping the whole binary rather than one class.** The
+statement above was originally written as "LG applies no hardcoded SIP
+quirk to China Mobile", which is wrong. `IsOperatorTargetFS` has **384
+call sites covering 47 operators**, and China Mobile has **10** of them:
+
+```
+SIPFeatures::IsTransportParameterIgnoredForIncomingRequestRouting   <- SIP
+AoSMngr::AoSBuilderFactory                 (selects CMCCAoSBuilder)
+DialingFactory::CreateDialingPlan          (matches target_scheme=tel)
+MediaServiceProfile::GetModemFeature
+Session::InitInstance, OperatorEnablerFactory::IsOperatorEnablerRequired,
+UCHelper::createComMsgHelper / ComBlock / ComFailure, UCFactory::createUCApp
+```
+
+Only the first is SIP behaviour, and it governs how an **incoming**
+request is routed -- whether a URI's `transport=` parameter is honoured
+-- not what an outgoing REGISTER contains. So the conclusion survives for
+the 404 specifically, but the general claim did not, and the method that
+produced it (reading one class) was the reason.
+
+Quirk counts are concentrated in LG's home and main markets: KT 43,
+SKT 40, TMO 34, LGU 34, MPCS 30, ATT 24, VZW 20, KDDI 14, DCM 12, TRF 12,
+SPR 11, ORG 11, **CMCC 10**.
+
+### AOSP replaced the whole mechanism with configuration
+
+LG hardcodes these against an operator enum. AOSP turns the same
+behaviours into carrier-config keys, and defaults several of them **on
+for everyone** rather than for the one carrier that forced the issue:
+
+| LG, per operator | AOSP key and default |
+| --- | --- |
+| `IsTransportParameter*Ignored*` (3 ops) | `ims.ignore_udp_transport_parameter_for_outgoing_request_bool` = **true** |
+| `IsHeaderSessionIdRequired` (USC) | `ims.support_sip_session_id_header_bool` = **true** |
+| `IsReferSubHeaderSupported` (SBM) | `imsvoice.support_conference_refer_subscribe_bool` = **true** |
+| `IsMultipleDialogUsagesRequired...` (DCM) | `ims.request_uri_validation_required_in_mid_dialog_bool` = **true** |
+
+That is the better design and the one joan follows: a carrier-scoped
+value, not a hardcoded operator id.
+
+**Where joan stands against those defaults.** It never emits or parses a
+`transport=` URI parameter at all, so it already behaves the way
+`ignore_udp_transport_parameter` prescribes -- by omission rather than by
+decision, which is worth knowing if that ever needs to change. It does
+**not** implement Session-ID (RFC 7989), which AOSP defaults to
+supported; that is a real gap, but it is dialog-scope and cannot bear on
+a REGISTER.
 
 This closes a hypothesis class rather than opening one: there is no
 hidden, code-level China Mobile SIP behaviour in LG's stack. Everything
