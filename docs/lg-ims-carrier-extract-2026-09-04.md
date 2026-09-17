@@ -411,6 +411,79 @@ Quirk counts are concentrated in LG's home and main markets: KT 43,
 SKT 40, TMO 34, LGU 34, MPCS 30, ATT 24, VZW 20, KDDI 14, DCM 12, TRF 12,
 SPR 11, ORG 11, **CMCC 10**.
 
+### LG's AoS and AOSP's Aos are the same codebase (2026-09-17)
+
+The single most useful structural fact found so far, and it was sitting
+in plain sight in both names.
+
+AOSP's ImsStack registration engine is
+`native/libimsstack/enabler/aos/registration/AosRegistration.cpp`. LG's
+binary carries `AoSRegistration`, and its CMCC subclass traces to
+`vendor/lge/apps/Ims/libims/imscore/Enabler/aos4/cmcc/registration/CMCCAoSRegistration.cpp`
+-- the path is in the binary's own trace strings.
+
+The method names are identical, not merely similar:
+`ProcessStartFailed_423`, `ProcessUpdateFailed_423`,
+`ProcessUpdateFailed_403`, `ProcessStartFailed_305`,
+`ProcessStartFailed_TxnTimeout`, `ProcessDefaultFlowRecovery_Start`,
+`ProcessReInitiate_Update`. All of these appear in AOSP's source and in
+LG's symbol table.
+
+**So AOSP's Apache-2.0 source is the readable form of LG's binary.** LG's
+is an older fork (`aos4`) that has methods AOSP no longer does --
+`UpdateUserIdentities` has no AOSP counterpart -- but for anything
+present in both, the source says what the disassembly means. That turns
+future work on this binary from decompilation into diffing, and it is
+worth using before reaching for Ghidra again.
+
+### The complete CMCC override surface
+
+1177 CMCC symbols across 30 classes. The registration specialisation,
+`CMCCAoSRegistration`, overrides exactly these:
+
+```
+ProcessStartFailed_423      ProcessUpdateFailed_423   ProcessUpdateFailed_403
+ProcessStartFailed_305      ProcessUpdateFailed_305   ProcessStartFailed_TxnTimeout
+ProcessDefaultFlowRecovery_Start / _Update
+ProcessFlowRecoveryWithNewPCSCF   RecoverPCSCF        ProcessReInitiate_Update
+ProcessRegEvent_REJECTED    IsRetryAfterValueFromPrevResponse
+CreateIPSecHelper           UpdateUserIdentities      GetSubscription
+Registration_Started / _Updated / _Removed            Timer_TimerExpired
+```
+
+Two conclusions follow, and both are negative results that close
+hypotheses rather than opening them.
+
+**There is no CMCC-specific identity derivation.** Across all 1177
+symbols, `UpdateUserIdentities` is the *only* one touching identity at
+all -- no IMPU builder, no IMPI builder, no domain or realm
+specialisation, nothing barred-identity related. CMCC uses the base
+class's derivation, which is the same derivation AOSP documents and joan
+implements. This was previously ruled out by comparing three
+implementations' outputs; it is now settled from the override surface
+itself.
+
+And what `UpdateUserIdentities` actually does, decompiled: when the card
+is **not** an ISIM, it copies the registered identity list into the
+card-parameter store, up to 8 entries from index 0x3b, gated on a trace
+that logs `UpdateUserIdentities :: ISIM (true|false)`. That is
+propagation *after* a successful registration -- the list it copies comes
+from the 200 OK -- so it cannot shape the REGISTER that earns the 200.
+
+**There is no CMCC 404 handling.** CMCC specialises 403, 423, 305 and
+transaction timeout. It does not specialise 404. A 404 on LG's own CMCC
+path takes the base class's default flow recovery, exactly as any other
+carrier's would.
+
+That is the closing argument on a long hypothesis class. joan's 404
+arrives on the protected REGISTER, after REG1 drew an `AKAv1-MD5`
+challenge -- so the network found the private identity, ran MAR against
+the HSS, and then rejected the registration. Every CMCC-specific
+behaviour in the vendor stack is now enumerated, and none of them changes
+what an outgoing REGISTER claims. There is no unimplemented CMCC quirk
+left to find in this binary: the remaining evidence has to come from the
+wire.
+
 ### AOSP replaced the whole mechanism with configuration
 
 LG hardcodes these against an operator enum. AOSP turns the same
