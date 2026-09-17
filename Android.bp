@@ -1,47 +1,29 @@
-// Build the IMS user agent in-tree instead of shipping a prebuilt blob.
+// AP-side IMS for LG V30 (joan). Java ImsService only.
+// SPDX-License-Identifier: Apache-2.0
 //
-// The sideload zip carries a static aarch64 binary because a recovery zip
-// has no other option. A ROM build should not: a reviewer needs to build
-// this from source, and the checked-in binary exists only for the
-// out-of-tree path.
-
-cc_binary {
-    name: "joan-ims-ua",
-    init_rc: ["root/system/etc/init/joan-ims.rc"],
-
-    srcs: [
-        "native/src/main.c",
-        "native/src/ua.c",
-        "native/src/sip.c",
-        "native/src/ctl.c",
-        "native/src/xfrm.c",
-        "native/src/config.c",
-        "native/src/secagree.c",
-        "native/src/md5.c",
-        "native/src/util.c",
-        "native/src/rtp.c",
-    ],
-    local_include_dirs: ["native/src"],
-
-    cflags: [
-        "-Wall",
-        "-Werror",
-        // Compiles out the unauthenticated loopback control listener. It
-        // exists only because a sideloaded install cannot ship the
-        // sepolicy that makes the authenticated unix socket reachable
-        // from the app. A ROM build ships that policy, so this must be 0.
-        "-DJOAN_IMS_BRINGUP_TCP_CTL=0",
-    ],
-
-    // Static in the zip only because recovery has no runtime linker to
-    // rely on. In-tree, link normally.
-    shared_libs: ["liblog"],
-}
+// This is the ONLY Android.bp that builds the stack. Drop the whole repo
+// in at vendor/lge/joan-ims/ and inherit joan-ims.mk from the device
+// makefile; see upstream/README.md.
+//
+// There used to be a second copy under upstream/ carrying these same
+// module names. Soong parses every Android.bp in the tree, so the two
+// could not coexist -- a tree containing both fails on duplicate module
+// names before any of it is built. The upstream/ copy also addressed its
+// sources as "../ims-service", which Soong rejects for escaping the
+// module directory. This file is that copy's design, at a path where it
+// works.
 
 android_app {
     name: "JoanIms",
     srcs: ["ims-service/src/**/*.java"],
     manifest: "ims-service/AndroidManifest.xml",
+
+    // system_ext, and the privapp-permissions prebuilt below must follow
+    // it. SystemConfig reads privapp allowlists per partition and applies
+    // them only to apps on that same partition, so an app on /system_ext
+    // whose allowlist sits in /system/etc/permissions does not get its
+    // privileged permissions -- which on a user build is fatal at boot.
+    system_ext_specific: true,
 
     // Needs BIND_IMS_SERVICE and the privileged phone-state permissions,
     // so it must be privileged and platform-signed.
@@ -54,6 +36,7 @@ android_app {
 
 prebuilt_etc {
     name: "privapp-permissions-org.joan.ims.xml",
+    system_ext_specific: true,
     sub_dir: "permissions",
     src: "permissions/org.joan.ims.xml",
     filename_from_src: true,
@@ -74,3 +57,12 @@ runtime_resource_overlay {
     certificate: "platform",
     product_specific: true,
 }
+
+// NOT built here: the native user agent under native/.
+//
+// It was the original out-of-tree UA and is superseded by the Java
+// ImsService above. The flashable zip does not ship it, and
+// scripts/update-binary actively removes /system/bin/joan-ims-ua as a
+// stale leftover -- so building it in-tree installed a daemon our own
+// installer deletes. The sources stay in the repo as history; they are
+// deliberately not wired into any ROM build.

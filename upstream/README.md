@@ -40,41 +40,74 @@ destination.
 
 ## Inherit
 
-Copy this directory to `vendor/lge/joan-ims` (or keep it as a git
-submodule). In `device/lge/joan/device.mk`:
+**The drop-in unit is the whole repository, not this directory.** Put it
+at `vendor/lge/joan-ims/` (a git submodule is fine). In
+`device/lge/joan/device.mk`:
 
 ```
 $(call inherit-product, vendor/lge/joan-ims/joan-ims.mk)
 ```
 
-`joan-ims.mk` expects the ImsService sources at `ims-service/` next to
-this makefile (this repo's layout). If you vendor only this folder,
-point `LOCAL_PATH` at a checkout that also contains `ims-service/` and
-`permissions/`.
+`joan-ims.mk` and `Android.bp` live at the **repo root**, and address
+`ims-service/`, `permissions/` and `rro/` as siblings. Copying only this
+folder cannot work: there is nothing in it to build.
 
 Inheriting this module covers part 1 only. You still have to apply
 `VOLTE-PLATFORM-SETUP.md` to your device tree and carrier config.
 
 ## Layout
 
-    Android.bp          JoanIms privileged app
-    joan-ims.mk         PRODUCT_PACKAGES + overlays + IMS feature xml
+    Android.bp          JoanIms app, privapp allowlist, JoanImsPhoneDefault RRO
+    joan-ims.mk         PRODUCT_PACKAGES + the IMS feature xml
+    ims-service/        the ImsService sources
+    permissions/        telephony.ims feature + privapp allowlist
     rro/                JoanImsPhoneDefault RRO: config_ims_mmtel_package
     rro-fw/             framework-res RRO: config_device_volte_available
-                        (part 2 term 1, for the out-of-tree path only —
-                        in a ROM build use a device-tree overlay instead)
-    permissions/        telephony.ims feature + privapp allowlist
+                        -- OUT-OF-TREE ONLY, do not build it in a ROM
+    upstream/           this documentation, plus the AGC helper scripts
 
-Only `Android.bp` and `joan-ims.mk` live in this directory. Everything
-they build — `ims-service/`, `permissions/`, `rro/`, `rro-fw/` — sits at
-the repo root, which is why both files refer to those paths with `../`.
+These two files used to be duplicated *in this directory*, addressing
+their sources as `../ims-service`. That copy has been removed, for two
+independent reasons: Soong rejects a source path that escapes the module
+directory, so it could never have built; and Soong parses every
+`Android.bp` in the tree, so a tree carrying both defined `JoanIms`,
+`privapp-permissions-org.joan.ims.xml` and `JoanImsPhoneDefault` twice
+and failed on duplicate module names before building anything at all.
+
+### What a ROM build drops, that only the zip needs
+
+- **`rro-fw/`** -- the zip ships `config_device_volte_available` as a
+  framework-res RRO because a flashable zip cannot edit a device tree.
+  In a ROM, set it in your own device-tree overlay and do **not** add
+  `rro-fw` to `PRODUCT_PACKAGES`. See `VOLTE-PLATFORM-SETUP.md`.
+- **`native/`** -- the original out-of-tree user agent, superseded by the
+  Java `ImsService`. `Android.bp` deliberately does not build it: the zip
+  does not ship it either, and `scripts/update-binary` removes
+  `/system/bin/joan-ims-ua` as a stale leftover, so building it in-tree
+  installed a daemon our own installer deletes.
+- **The recovery installer** (`scripts/update-binary`, `META-INF/`) and
+  the **Viettel APN merge** -- a ROM build carries its own
+  `apns-conf.xml` and should patch it in the device tree.
+- **`vendor_codeaurora_telephony/`** -- a local reference checkout, and
+  an orphaned gitlink with no `.gitmodules`, so a fresh clone gets it
+  empty. Nothing builds it. Leave it out of the tree you drop in; its
+  `Android.bp` files declare `ims-ext-common` and `qtiImsInCallUi`,
+  which would collide with LineageOS's own `vendor/codeaurora/telephony`.
+
+**What the ROM build gains, that the zip cannot have:** the AGC
+declaration in `audio_effects.xml` (below), and
+`config_device_volte_available` set properly rather than as an overlay.
 
 ## Confirmed working — part 1
 
 - `ImsService` / `MmTelFeature` registration, including AKA from the ISIM
   or from the USIM (TS 23.003) when the SIM has no ISIM application
 - 3GPP sec-agree and transport-mode ESP over `IpSecTransform`
-- REGISTER, INVITE/ACK/BYE, RTCP SR+SDES and receiver reports
+- REGISTER, INVITE/ACK/BYE, RTCP SR+SDES, and reception reports
+  carrying a real RFC 3550 report block -- fraction lost, cumulative
+  loss, interarrival jitter, extended highest sequence. Before
+  alpha26 every SR went out with RC=0, so the network could not see
+  what this stack received
 - AMR-WB and AMR-NB in both RFC 4867 framings, negotiated from a
   MediaCodec probe of what the ROM actually carries, with PCMU as the
   floor. Verified on a live carrier in one session: bandwidth-efficient
@@ -92,6 +125,16 @@ the repo root, which is why both files refer to those paths with `../`.
 - MO and MT calls with two-way audio, demonstrated on the development
   handset
 - Device-service binding via `config_ims_mmtel_package`
+- An adaptive jitter buffer, bounded so it cannot accumulate latency
+  it never gives back, with its own reception statistics. This is
+  the one part of the stack whose tuning constants are derived from
+  AOSP ImsMedia -- see `docs/upstream-references.md`
+- Packet-loss concealment: a gap is handed to the AMR decoder as an
+  FT=14 SPEECH_LOST frame so the codec conceals it, rather than
+  leaving a hole. Verified live at concealed=3 against lost=4
+- Inbound `telephone-event` recognised and not decoded as speech
+- Our own registration binding matched by `+sip.instance` rather
+  than by address, confirmed on-network with inst_match=true
 
 One caveat on the MO result: until 2026-09-14 the development handset
 read `config_device_volte_available = false` with no
