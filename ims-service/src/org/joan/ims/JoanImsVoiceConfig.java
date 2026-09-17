@@ -30,13 +30,25 @@ final class JoanImsVoiceConfig {
     final int asKbps;
     final int rsBps;
     final int rrBps;
+    /**
+     * The platform's own REGISTER expiry, seconds, or 0.
+     *
+     * <p>Read here so that a CarrierConfig update -- which a ROM or a
+     * carrier can ship without us -- outranks the values joan distilled
+     * from a 2017-era vendor snapshot. The snapshot is a fallback for
+     * networks the platform says nothing about, never an override.
+     */
+    final int regExpirySec;
+    /** {@code ImsVoice}'s preferred transport, or -1 if unset. */
+    final int preferredTransport;
     /** Where the values came from, for the trace. */
     final String source;
 
     private JoanImsVoiceConfig(boolean timerSupported, int sessionExpiresSec,
                                int minSeSec, int refresherType,
                                int refreshMethod, int asKbps, int rsBps,
-                               int rrBps, String source) {
+                               int rrBps, int regExpirySec,
+                               int preferredTransport, String source) {
         this.asKbps = asKbps;
         this.rsBps = rsBps;
         this.rrBps = rrBps;
@@ -45,6 +57,8 @@ final class JoanImsVoiceConfig {
         this.minSeSec = minSeSec;
         this.refresherType = refresherType;
         this.refreshMethod = refreshMethod;
+        this.regExpirySec = regExpirySec;
+        this.preferredTransport = preferredTransport;
         this.source = source;
     }
 
@@ -60,7 +74,7 @@ final class JoanImsVoiceConfig {
                 JoanSessionTimer.REFRESHER_UAC,
                 JoanSessionTimer.METHOD_UPDATE_PREFERRED,
                 DEFAULT_AS_KBPS, DEFAULT_RS_BPS, DEFAULT_RR_BPS,
-                why);
+                0, -1, why);
     }
 
     private static volatile JoanImsVoiceConfig sCached;
@@ -135,10 +149,16 @@ final class JoanImsVoiceConfig {
         int rr = cfg.getInt(
                 CarrierConfigManager.ImsVoice.KEY_AUDIO_RR_BANDWIDTH_BPS_INT,
                 d.rrBps);
+        int regExpiry = cfg.getInt(
+                CarrierConfigManager.Ims.KEY_REGISTRATION_EXPIRY_TIMER_SEC_INT,
+                0);
+        int transport = cfg.getInt(
+                CarrierConfigManager.Ims.KEY_SIP_PREFERRED_TRANSPORT_INT, -1);
         return new JoanImsVoiceConfig(supported,
                 JoanSessionTimer.offerExpires(expires, minSe),
                 JoanSessionTimer.minSe(minSe),
                 refresher, method, as, rs, rr,
+                regExpiry, transport,
                 anySet ? "carrier-config" : "carrier-config-unset");
     }
 

@@ -84,10 +84,37 @@ final class JoanCodecConfig {
             return fallback("empty");
         }
 
+        /* The stock-derived offer for this PLMN, if we hold one. Used
+         * two ways below: as the whole offer when Android's carrier
+         * config says nothing, and to fill a mode-set it never supplies. */
+        java.util.List<JoanSipBuilder.Capability> profileCodecs = null;
+        try {
+            android.telephony.TelephonyManager tm =
+                    ctx.getSystemService(android.telephony.TelephonyManager.class);
+            String mccMnc = tm == null ? null
+                    : tm.createForSubscriptionId(subId).getSimOperator();
+            if (mccMnc != null && mccMnc.length() >= 5) {
+                JoanCarrierProfile cp = JoanCarrierProfile.forNetwork(ctx,
+                        mccMnc.substring(0, 3), mccMnc.substring(3));
+                if (cp != null && !cp.codecs.isEmpty()) {
+                    profileCodecs = cp.codecs;
+                }
+            }
+        } catch (Throwable t) {
+            /* No profile is a normal state, not an error. */
+        }
+
         PersistableBundle types = cfg.getPersistableBundle(
                 CarrierConfigManager.ImsVoice
                         .KEY_AUDIO_CODEC_CAPABILITY_PAYLOAD_TYPES_BUNDLE);
         if (types == null || types.isEmpty()) {
+            /* Carrier config is silent. The stock-derived offer is a
+             * better answer than our fixed three-entry table, because it
+             * is this carrier's own list rather than a generic one. */
+            if (profileCodecs != null) {
+                JoanSipBuilder.applyCarrierCodecs(profileCodecs, 0, 0);
+                return memo("carrier-profile " + describe(profileCodecs));
+            }
             return fallback("carrier-silent");
         }
 
@@ -119,6 +146,15 @@ final class JoanCodecConfig {
             return fallback("carrier-no-amr");
         }
 
+        /* Android's carrier config has never once supplied an AMR
+         * mode-set on a network tested here -- the per-payload-type
+         * attribute bundles are empty or carry only the payload format.
+         * The stock media configuration does carry one, and it is
+         * carrier-specific: China Mobile asks for mode-set=8 on AMR-WB
+         * where T-Mobile asks for 0,1,2. Fill from there, and only where
+         * carrier config left a gap. */
+        fillModeSets(out, profileCodecs);
+
         JoanSipBuilder.applyCarrierCodecs(out, first(dtmfWb), first(dtmfNb));
 
         StringBuilder b = new StringBuilder("carrier-config ");
@@ -133,6 +169,78 @@ final class JoanCodecConfig {
         b.append(" te_wb=").append(first(dtmfWb))
                 .append(" te_nb=").append(first(dtmfNb));
         return memo(b.toString());
+    }
+
+    /**
+     * Take a mode-set from the carrier profile for any entry that carrier
+     * config left without one.
+     *
+     * <p>Matched on encoding name and framing, not on payload number: the
+     * two sources are independently maintained and disagree about numbers
+     * (LG puts T-Mobile's wideband telephone-event on 99, Android's config
+     * says 101), but they agree about what AMR-WB octet-aligned means.
+     */
+    private static void fillModeSets(
+            java.util.List<JoanSipBuilder.Capability> out,
+            java.util.List<JoanSipBuilder.Capability> profile) {
+        if (profile == null || profile.isEmpty()) {
+            return;
+        }
+        for (int i = 0; i < out.size(); i++) {
+            JoanSipBuilder.Capability c = out.get(i);
+            if (c.fmtp.indexOf("mode-set=") >= 0) {
+                continue;               /* carrier config already said */
+            }
+            boolean oct = c.fmtp.indexOf("octet-align=1") >= 0;
+            for (JoanSipBuilder.Capability p : profile) {
+                if (!p.name.equals(c.name) || p.rate != c.rate) {
+                    continue;
+                }
+                if ((p.fmtp.indexOf("octet-align=1") >= 0) != oct) {
+                    continue;
+                }
+                int ms = p.fmtp.indexOf("mode-set=");
+                if (ms < 0) {
+                    continue;
+                }
+                int end = p.fmtp.indexOf(';', ms);
+                String modes = end < 0 ? p.fmtp.substring(ms)
+                        : p.fmtp.substring(ms, end);
+                /* Rebuild rather than string-splice, so the fmtp keeps one
+                 * shape whichever source filled it. */
+                out.set(i, JoanSipBuilder.Capability.amr(
+                        c.name, c.rate, c.offerPt, oct,
+                        parseModes(modes.substring("mode-set=".length()))));
+                break;
+            }
+        }
+    }
+
+    private static int[] parseModes(String csv) {
+        String[] parts = csv.split(",");
+        int[] v = new int[parts.length];
+        int n = 0;
+        for (String s : parts) {
+            try {
+                v[n++] = Integer.parseInt(s.trim());
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return n == v.length ? v : null;
+    }
+
+    private static String describe(
+            java.util.List<JoanSipBuilder.Capability> caps) {
+        StringBuilder b = new StringBuilder();
+        for (JoanSipBuilder.Capability c : caps) {
+            if (b.length() > 0) {
+                b.append(',');
+            }
+            b.append(c.name).append('/').append(c.offerPt)
+                    .append('[').append(c.fmtp).append(']');
+        }
+        return b.toString();
     }
 
     private static void addAll(java.util.List<JoanSipBuilder.Capability> out,

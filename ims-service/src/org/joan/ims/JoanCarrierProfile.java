@@ -40,6 +40,15 @@ public final class JoanCarrierProfile {
     public final int tcpCriterionV6;
     /** The carrier's REGISTER Expires, seconds; 0 if not carried. */
     public final int regExpiration;
+    /**
+     * The carrier's ordered VoLTE audio offer, or empty.
+     *
+     * <p>From the stock media configuration, which is the only source
+     * that carries an AMR mode-set: Android's carrier config supplies
+     * payload types and framing on some networks and leaves the codec
+     * attribute bundles empty on every one tested so far.
+     */
+    public final java.util.List<JoanSipBuilder.Capability> codecs;
     public final String srcKey;
 
     private static volatile JoanCarrierProfile sCached;
@@ -51,6 +60,7 @@ public final class JoanCarrierProfile {
                                boolean use180Rpr, int offerResCode,
                                int tcpCriterionLen, int tcpCriterionV4,
                                int tcpCriterionV6, int regExpiration,
+                               java.util.List<JoanSipBuilder.Capability> codecs,
                                String srcKey) {
         this.confUri = confUri;
         this.referSub = referSub;
@@ -64,7 +74,52 @@ public final class JoanCarrierProfile {
         this.tcpCriterionV4 = tcpCriterionV4;
         this.tcpCriterionV6 = tcpCriterionV6;
         this.regExpiration = regExpiration;
+        this.codecs = codecs == null
+                ? java.util.Collections.<JoanSipBuilder.Capability>emptyList()
+                : java.util.Collections.unmodifiableList(codecs);
         this.srcKey = srcKey;
+    }
+
+    /**
+     * The carrier's audio offer, as capabilities the SIP builder can use.
+     *
+     * <p>Only AMR is taken. EVS appears in several carriers' lists and
+     * LineageOS 22 ships no EVS encoder, so offering it would name a codec
+     * this device cannot open -- the failure mode that makes a carrier
+     * pick it, the encoder fail, and the media layer fall back to PCMU
+     * while the peer keeps sending EVS. telephone-event is handled
+     * separately because it is not a speech codec.
+     */
+    private static java.util.List<JoanSipBuilder.Capability> parseCodecs(
+            org.json.JSONArray arr) {
+        if (arr == null) {
+            return null;
+        }
+        java.util.List<JoanSipBuilder.Capability> out =
+                new java.util.ArrayList<>();
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject c = arr.optJSONObject(i);
+            if (c == null || !"AMR".equalsIgnoreCase(c.optString("type"))) {
+                continue;
+            }
+            int pt = c.optInt("pt", -1);
+            int rate = c.optInt("rate", -1);
+            if (pt < 96 || pt > 127 || (rate != 8000 && rate != 16000)) {
+                continue;
+            }
+            org.json.JSONArray ms = c.optJSONArray("mode_set");
+            int[] modes = null;
+            if (ms != null && ms.length() > 0) {
+                modes = new int[ms.length()];
+                for (int k = 0; k < ms.length(); k++) {
+                    modes[k] = ms.optInt(k, -1);
+                }
+            }
+            out.add(JoanSipBuilder.Capability.amr(
+                    rate == 16000 ? "AMR-WB" : "AMR", rate, pt,
+                    c.optBoolean("octet_align", false), modes));
+        }
+        return out;
     }
 
     /** 3GPP defaults when nothing better is known. */
@@ -73,7 +128,7 @@ public final class JoanCarrierProfile {
                 "sip:mmtel@conf-factory.ims.mnc%s.mcc%s.3gppnetwork.org",
                 pad3(mnc), mcc);
         return new JoanCarrierProfile(factory, true, true, false,
-                2, 1, true, 183, -1, 0, 0, 0, "3gpp-default");
+                2, 1, true, 183, -1, 0, 0, 0, null, "3gpp-default");
     }
 
     private static String pad3(String mnc) {
@@ -187,6 +242,7 @@ public final class JoanCarrierProfile {
                         o.optInt("reg_tcp_criterion_v4", 0),
                         o.optInt("reg_tcp_criterion_v6", 0),
                         o.optInt("reg_expiration", 0),
+                        parseCodecs(o.optJSONArray("codecs")),
                         key);
             }
         } catch (Throwable t) {

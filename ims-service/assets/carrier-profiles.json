@@ -4,6 +4,52 @@
   "auth_max_count": 3,
   "carrier": "AIS",
   "cc": "TH",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -59,6 +105,40 @@
   "auth_max_count": 3,
   "carrier": "APT",
   "cc": "TW",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 104,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "pt": 105,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 0,
   "conf_sub_in_dialog": 0,
@@ -114,6 +194,47 @@
   "auth_max_count": 3,
   "carrier": "ARTL",
   "cc": "IN",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 111,
+    "rate": 16000,
+    "type": "EVS"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -169,6 +290,74 @@
   "auth_max_count": 3,
   "carrier": "ATT",
   "cc": "US",
+  "codecs": [
+   {
+    "pt": 125,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 115,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 116,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 105,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -224,6 +413,47 @@
   "auth_max_count": 3,
   "carrier": "AVE",
   "cc": "TR",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -279,6 +509,47 @@
   "auth_max_count": 3,
   "carrier": "BEE",
   "cc": "RU",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -334,6 +605,41 @@
   "auth_max_count": 3,
   "carrier": "BYT",
   "cc": "FR",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 100,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 101,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -389,6 +695,52 @@
   "auth_max_count": 3,
   "carrier": "CCM",
   "cc": "IL",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -444,6 +796,42 @@
   "auth_max_count": 3,
   "carrier": "CELC",
   "cc": "ZA",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -499,6 +887,52 @@
   "auth_max_count": 3,
   "carrier": "CHT",
   "cc": "TW",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -554,6 +988,74 @@
   "auth_max_count": 3,
   "carrier": "CLR",
   "cc": "AR",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -609,6 +1111,74 @@
   "auth_max_count": 3,
   "carrier": "CLR",
   "cc": "BR",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -664,6 +1234,74 @@
   "auth_max_count": 3,
   "carrier": "CLR",
   "cc": "CL",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -719,6 +1357,52 @@
   "auth_max_count": 3,
   "carrier": "CLR",
   "cc": "CO",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 110,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -774,6 +1458,69 @@
   "auth_max_count": 3,
   "carrier": "CLR",
   "cc": "CR",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -829,6 +1576,74 @@
   "auth_max_count": 3,
   "carrier": "CLR",
   "cc": "PE",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -884,6 +1699,69 @@
   "auth_max_count": 3,
   "carrier": "CLR",
   "cc": "SV",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -939,6 +1817,74 @@
   "auth_max_count": 3,
   "carrier": "CLR",
   "cc": "UY",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -994,6 +1940,65 @@
   "auth_max_count": 5,
   "carrier": "CMCC",
   "cc": "CN",
+  "codecs": [
+   {
+    "mode_set": [
+     8
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     8
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -1049,6 +2054,57 @@
   "auth_max_count": 3,
   "carrier": "CMHK",
   "cc": "HK",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -1104,6 +2160,74 @@
   "auth_max_count": 3,
   "carrier": "CNW",
   "cc": "PA",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -1159,6 +2283,69 @@
   "auth_max_count": 3,
   "carrier": "CSL",
   "cc": "HK",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -1214,6 +2401,68 @@
   "auth_max_count": 3,
   "carrier": "CTM",
   "cc": "MO",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -1269,6 +2518,74 @@
   "auth_max_count": 5,
   "carrier": "DCM",
   "cc": "JP",
+  "codecs": [
+   {
+    "pt": 108,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 101,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 102,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 103,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 104,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 105,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 0,
   "conf_sub_in_dialog": 0,
@@ -1324,6 +2641,47 @@
   "auth_max_count": 3,
   "carrier": "DIGI",
   "cc": "HU",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -1379,6 +2737,52 @@
   "auth_max_count": 5,
   "carrier": "DPAC",
   "cc": "US",
+  "codecs": [
+   {
+    "pt": 106,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 105,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "octet_align": true,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "pt": 99,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 101,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -1434,6 +2838,47 @@
   "auth_max_count": 3,
   "carrier": "DTAC",
   "cc": "TH",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -1489,6 +2934,57 @@
   "auth_max_count": 3,
   "carrier": "DTAG",
   "cc": "AT",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -1544,6 +3040,57 @@
   "auth_max_count": 3,
   "carrier": "DTAG",
   "cc": "CZ",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -1599,6 +3146,62 @@
   "auth_max_count": 3,
   "carrier": "DTAG",
   "cc": "DE",
+  "codecs": [
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -1654,6 +3257,57 @@
   "auth_max_count": 3,
   "carrier": "DTAG",
   "cc": "GR",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -1709,6 +3363,57 @@
   "auth_max_count": 3,
   "carrier": "DTAG",
   "cc": "HR",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -1764,6 +3469,57 @@
   "auth_max_count": 3,
   "carrier": "DTAG",
   "cc": "HU",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -1819,6 +3575,57 @@
   "auth_max_count": 3,
   "carrier": "DTAG",
   "cc": "ME",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -1874,6 +3681,57 @@
   "auth_max_count": 3,
   "carrier": "DTAG",
   "cc": "MK",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -1929,6 +3787,62 @@
   "auth_max_count": 3,
   "carrier": "DTAG",
   "cc": "NL",
+  "codecs": [
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -1984,6 +3898,62 @@
   "auth_max_count": 3,
   "carrier": "DTAG",
   "cc": "PL",
+  "codecs": [
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 104,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 110,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 102,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 108,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 105,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -2039,6 +4009,57 @@
   "auth_max_count": 3,
   "carrier": "DTAG",
   "cc": "RO",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -2094,6 +4115,62 @@
   "auth_max_count": 3,
   "carrier": "DTAG",
   "cc": "SK",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 110,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -2149,6 +4226,57 @@
   "auth_max_count": 3,
   "carrier": "DTAG",
   "cc": "TR",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -2204,6 +4332,47 @@
   "auth_max_count": 3,
   "carrier": "EEO",
   "cc": "GB",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -2259,6 +4428,42 @@
   "auth_max_count": 3,
   "carrier": "ELI",
   "cc": "FN",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -2314,6 +4519,74 @@
   "auth_max_count": 3,
   "carrier": "ENT",
   "cc": "CL",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -2369,6 +4642,52 @@
   "auth_max_count": 3,
   "carrier": "ENT",
   "cc": "PE",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -2424,6 +4743,69 @@
   "auth_max_count": 3,
   "carrier": "EST",
   "cc": "CA",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 101,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 99,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -2479,6 +4861,68 @@
   "auth_max_count": 3,
   "carrier": "FET",
   "cc": "TW",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -2534,6 +4978,69 @@
   "auth_max_count": 3,
   "carrier": "FRD",
   "cc": "CA",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "pt": 99,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 101,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -2589,6 +5096,47 @@
   "auth_max_count": 3,
   "carrier": "H3G",
   "cc": "AT",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -2644,6 +5192,47 @@
   "auth_max_count": 3,
   "carrier": "H3G",
   "cc": "GB",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -2699,6 +5288,74 @@
   "auth_max_count": 3,
   "carrier": "H3G",
   "cc": "HK",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 106,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -2754,6 +5411,47 @@
   "auth_max_count": 3,
   "carrier": "H3G",
   "cc": "IT",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -2809,6 +5507,47 @@
   "auth_max_count": 3,
   "carrier": "H3G",
   "cc": "SE",
+  "codecs": [
+   {
+    "pt": 97,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "octet_align": false,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 99,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 101,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 102,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 8000,
+    "type": "telephone-event"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -2864,6 +5603,67 @@
   "auth_max_count": 3,
   "carrier": "HOT",
   "cc": "IL",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -2919,6 +5719,47 @@
   "auth_max_count": 3,
   "carrier": "IDEA",
   "cc": "IN",
+  "codecs": [
+   {
+    "octet_align": true,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 111,
+    "rate": 16000,
+    "type": "EVS"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -2974,6 +5815,74 @@
   "auth_max_count": 5,
   "carrier": "KDDI",
   "cc": "JP",
+  "codecs": [
+   {
+    "pt": 97,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 99,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "pt": 100,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 101,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 102,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 103,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": true,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -3029,6 +5938,42 @@
   "auth_max_count": 3,
   "carrier": "KPN",
   "cc": "NL",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -3084,6 +6029,86 @@
   "auth_max_count": 4,
   "carrier": "KT",
   "cc": "KR",
+  "codecs": [
+   {
+    "pt": 110,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "pt": 99,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 101,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 0,
   "conf_sub_in_dialog": 0,
@@ -3139,6 +6164,94 @@
   "auth_max_count": 4,
   "carrier": "LGU",
   "cc": "KR",
+  "codecs": [
+   {
+    "pt": 110,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "pt": 107,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7
+    ],
+    "octet_align": true,
+    "pt": 96,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7
+    ],
+    "octet_align": false,
+    "pt": 98,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -3194,6 +6307,68 @@
   "auth_max_count": 3,
   "carrier": "MBK",
   "cc": "AT",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -3249,6 +6424,52 @@
   "auth_max_count": 3,
   "carrier": "MCI",
   "cc": "IR",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -3304,6 +6525,67 @@
   "auth_max_count": 3,
   "carrier": "MGF",
   "cc": "RU",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -3359,6 +6641,52 @@
   "auth_max_count": 3,
   "carrier": "MOB",
   "cc": "SL",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -3414,6 +6742,69 @@
   "auth_max_count": 3,
   "carrier": "MON",
   "cc": "SG",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 0,
   "conf_sub_in_dialog": 0,
@@ -3469,6 +6860,74 @@
   "auth_max_count": 3,
   "carrier": "MOV",
   "cc": "AR",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -3524,6 +6983,74 @@
   "auth_max_count": 3,
   "carrier": "MOV",
   "cc": "CL",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -3579,6 +7106,74 @@
   "auth_max_count": 3,
   "carrier": "MOV",
   "cc": "CO",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 110,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -3634,6 +7229,74 @@
   "auth_max_count": 3,
   "carrier": "MOV",
   "cc": "EC",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -3689,6 +7352,74 @@
   "auth_max_count": 3,
   "carrier": "MOV",
   "cc": "MX",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -3744,6 +7475,74 @@
   "auth_max_count": 3,
   "carrier": "MOV",
   "cc": "PA",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -3799,6 +7598,74 @@
   "auth_max_count": 3,
   "carrier": "MOV",
   "cc": "PE",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -3854,6 +7721,74 @@
   "auth_max_count": 3,
   "carrier": "MOV",
   "cc": "UY",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -3909,6 +7844,67 @@
   "auth_max_count": 3,
   "carrier": "MTN",
   "cc": "IR",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -3964,6 +7960,47 @@
   "auth_max_count": 3,
   "carrier": "MTN",
   "cc": "ZA",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -4019,6 +8056,41 @@
   "auth_max_count": 3,
   "carrier": "MTS",
   "cc": "RU",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 100,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 101,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -4074,6 +8146,52 @@
   "auth_max_count": 3,
   "carrier": "NJU",
   "cc": "PL",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 110,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -4129,6 +8247,67 @@
   "auth_max_count": 3,
   "carrier": "O2",
   "cc": "DE",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 0,
   "conf_sub_in_dialog": 0,
@@ -4239,6 +8418,62 @@
   "auth_max_count": 3,
   "carrier": "O2",
   "cc": "GB",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -4294,6 +8529,69 @@
   "auth_max_count": 3,
   "carrier": "OPT",
   "cc": "AU",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -4349,6 +8647,52 @@
   "auth_max_count": 3,
   "carrier": "ORG",
   "cc": "ES",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 116,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 107,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 118,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 96,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 111,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 110,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -4404,6 +8748,52 @@
   "auth_max_count": 3,
   "carrier": "ORG",
   "cc": "FR",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 110,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -4459,6 +8849,52 @@
   "auth_max_count": 3,
   "carrier": "ORG",
   "cc": "RO",
+  "codecs": [
+   {
+    "pt": 97,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 98,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 101,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 102,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 104,
+    "rate": 8000,
+    "type": "telephone-event"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 0,
   "conf_sub_in_dialog": 0,
@@ -4514,6 +8950,42 @@
   "auth_max_count": 3,
   "carrier": "ORG",
   "cc": "SK",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 101,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 102,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 104,
+    "rate": 8000,
+    "type": "telephone-event"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -4569,6 +9041,67 @@
   "auth_max_count": 3,
   "carrier": "ORI",
   "cc": "IL",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -4624,6 +9157,47 @@
   "auth_max_count": 3,
   "carrier": "P4P",
   "cc": "PL",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -4679,6 +9253,69 @@
   "auth_max_count": 3,
   "carrier": "PCCW",
   "cc": "HK",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -4734,6 +9371,67 @@
   "auth_max_count": 3,
   "carrier": "PCL",
   "cc": "IL",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -4789,6 +9487,42 @@
   "auth_max_count": 3,
   "carrier": "PLS",
   "cc": "PL",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -4844,6 +9578,69 @@
   "auth_max_count": 3,
   "carrier": "PSC",
   "cc": "BR",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -4899,6 +9696,74 @@
   "auth_max_count": 3,
   "carrier": "PSN",
   "cc": "AR",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -4954,6 +9819,47 @@
   "auth_max_count": 3,
   "carrier": "PXN",
   "cc": "BE",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 110,
+    "rate": 16000,
+    "type": "EVS"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -5009,6 +9915,64 @@
   "auth_max_count": 3,
   "carrier": "RGS",
   "cc": "CA",
+  "codecs": [
+   {
+    "pt": 127,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -5064,6 +10028,47 @@
   "auth_max_count": 3,
   "carrier": "RJIL",
   "cc": "IN",
+  "codecs": [
+   {
+    "octet_align": true,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -5119,6 +10124,52 @@
   "auth_max_count": 5,
   "carrier": "SBM",
   "cc": "JP",
+  "codecs": [
+   {
+    "pt": 106,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 105,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "octet_align": true,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "pt": 99,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 101,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -5174,6 +10225,56 @@
   "auth_max_count": 3,
   "carrier": "SFR",
   "cc": "FR",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 100,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 101,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -5229,6 +10330,56 @@
   "auth_max_count": 3,
   "carrier": "SFR",
   "cc": "RE",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 100,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 101,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -5284,6 +10435,69 @@
   "auth_max_count": 3,
   "carrier": "SHB",
   "cc": "SG",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 0,
   "conf_sub_in_dialog": 0,
@@ -5339,6 +10553,69 @@
   "auth_max_count": 3,
   "carrier": "SKC",
   "cc": "CA",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 101,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 99,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -5394,6 +10671,94 @@
   "auth_max_count": 4,
   "carrier": "SKT",
   "cc": "KR",
+  "codecs": [
+   {
+    "pt": 110,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -5449,6 +10814,72 @@
   "auth_max_count": 3,
   "carrier": "SMF",
   "cc": "ID",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -5504,6 +10935,74 @@
   "auth_max_count": 3,
   "carrier": "SMT",
   "cc": "HK",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 107,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -5559,6 +11058,52 @@
   "auth_max_count": 3,
   "carrier": "SPR",
   "cc": "US",
+  "codecs": [
+   {
+    "pt": 122,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "octet_align": false,
+    "pt": 104,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 110,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 102,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 108,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 105,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 101,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -5614,6 +11159,69 @@
   "auth_max_count": 3,
   "carrier": "STL",
   "cc": "SG",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -5669,6 +11277,57 @@
   "auth_max_count": 3,
   "carrier": "SUN",
   "cc": "SW",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -5724,6 +11383,52 @@
   "auth_max_count": 3,
   "carrier": "TCL",
   "cc": "MX",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -5779,6 +11484,52 @@
   "auth_max_count": 3,
   "carrier": "TEL",
   "cc": "AU",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -5834,6 +11585,52 @@
   "auth_max_count": 3,
   "carrier": "TELE",
   "cc": "BG",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 110,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -5889,6 +11686,67 @@
   "auth_max_count": 3,
   "carrier": "TELE",
   "cc": "HG",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -5944,6 +11802,42 @@
   "auth_max_count": 3,
   "carrier": "TELE2",
   "cc": "NL",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -6054,6 +11948,42 @@
   "auth_max_count": 3,
   "carrier": "TELE2",
   "cc": "SE",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -6109,6 +12039,42 @@
   "auth_max_count": 3,
   "carrier": "TELK",
   "cc": "ZA",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -6164,6 +12130,52 @@
   "auth_max_count": 3,
   "carrier": "TIM",
   "cc": "BR",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -6219,6 +12231,52 @@
   "auth_max_count": 3,
   "carrier": "TIM",
   "cc": "IT",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -6274,6 +12332,74 @@
   "auth_max_count": 3,
   "carrier": "TLS",
   "cc": "CA",
+  "codecs": [
+   {
+    "pt": 127,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "pt": 99,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 101,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -6329,6 +12455,74 @@
   "auth_max_count": 3,
   "carrier": "TMO",
   "cc": "US",
+  "codecs": [
+   {
+    "pt": 127,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "pt": 99,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 101,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -6384,6 +12578,47 @@
   "auth_max_count": 3,
   "carrier": "TRC",
   "cc": "TR",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -6439,6 +12674,68 @@
   "auth_max_count": 3,
   "carrier": "TSTR",
   "cc": "TW",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -6494,6 +12791,68 @@
   "auth_max_count": 3,
   "carrier": "TWM",
   "cc": "TW",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 0,
   "conf_sub_in_dialog": 0,
@@ -6549,6 +12908,74 @@
   "auth_max_count": 3,
   "carrier": "UNF",
   "cc": "MX",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -6604,6 +13031,47 @@
   "auth_max_count": 3,
   "carrier": "VDA",
   "cc": "AU",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -6659,6 +13127,47 @@
   "auth_max_count": 3,
   "carrier": "VDC",
   "cc": "ZA",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 107,
+    "rate": 16000,
+    "type": "EVS"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -6714,6 +13223,52 @@
   "auth_max_count": 3,
   "carrier": "VDF",
   "cc": "CH",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 110,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -6769,6 +13324,52 @@
   "auth_max_count": 3,
   "carrier": "VDF",
   "cc": "CZ",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 116,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 107,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 118,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 96,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 111,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 110,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 0,
   "conf_sub_in_dialog": 1,
@@ -6824,6 +13425,52 @@
   "auth_max_count": 3,
   "carrier": "VDF",
   "cc": "DE",
+  "codecs": [
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -6879,6 +13526,52 @@
   "auth_max_count": 3,
   "carrier": "VDF",
   "cc": "ES",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 110,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -6934,6 +13627,52 @@
   "auth_max_count": 3,
   "carrier": "VDF",
   "cc": "GB",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 110,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 0,
   "conf_sub_in_dialog": 0,
@@ -6989,6 +13728,52 @@
   "auth_max_count": 3,
   "carrier": "VDF",
   "cc": "HR",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -7044,6 +13829,52 @@
   "auth_max_count": 3,
   "carrier": "VDF",
   "cc": "HU",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 110,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -7099,6 +13930,47 @@
   "auth_max_count": 3,
   "carrier": "VDF",
   "cc": "IN",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 111,
+    "rate": 16000,
+    "type": "EVS"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -7154,6 +14026,52 @@
   "auth_max_count": 3,
   "carrier": "VDF",
   "cc": "IT",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 110,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -7209,6 +14127,52 @@
   "auth_max_count": 3,
   "carrier": "VDF",
   "cc": "NL",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 110,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -7264,6 +14228,47 @@
   "auth_max_count": 3,
   "carrier": "VDF",
   "cc": "TR",
+  "codecs": [
+   {
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 0,
@@ -7319,6 +14324,74 @@
   "auth_max_count": 3,
   "carrier": "VIV",
   "cc": "BR",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -7374,6 +14447,86 @@
   "auth_max_count": 3,
   "carrier": "VZW",
   "cc": "US",
+  "codecs": [
+   {
+    "pt": 115,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 109,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 104,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 110,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 102,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 108,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 106,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 105,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "telephone-event"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,
@@ -7429,6 +14582,74 @@
   "auth_max_count": 3,
   "carrier": "WOM",
   "cc": "CL",
+  "codecs": [
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": false,
+    "pt": 97,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     1,
+     2
+    ],
+    "octet_align": true,
+    "pt": 98,
+    "rate": 16000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": false,
+    "pt": 99,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "mode_set": [
+     0,
+     2,
+     4,
+     7
+    ],
+    "octet_align": true,
+    "pt": 100,
+    "rate": 8000,
+    "type": "AMR"
+   },
+   {
+    "pt": 101,
+    "rate": 16000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 102,
+    "rate": 8000,
+    "type": "telephone-event"
+   },
+   {
+    "pt": 103,
+    "rate": 16000,
+    "type": "EVS"
+   },
+   {
+    "pt": 100,
+    "rate": 8000,
+    "type": "NONE"
+   }
+  ],
   "compact_form": false,
   "conf_sub": 1,
   "conf_sub_in_dialog": 1,

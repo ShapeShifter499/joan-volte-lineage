@@ -99,6 +99,55 @@ can change it without us shipping anything.
 4. `CarrierConfigManager` values are read on the same driver pass and
    override where they exist.
 
+## Precedence: the platform always outranks the snapshot
+
+**A value the platform supplies must win over one joan distilled from a
+vendor snapshot.** The snapshot is a 2017-era extract; a `CarrierConfig`
+update ships with a ROM or from a carrier without us, and joan must not
+pin behaviour that has moved on.
+
+Verified on the bench handset (LineageOS 22.2, T-Mobile), the platform
+populates these and they **agree with the LG snapshot**:
+
+| platform key | device | LG profile |
+| --- | --- | --- |
+| `ims.registration_expiry_timer_sec_int` | 600000 | `reg_expiration` 600000 |
+| `ims.registration_retry_base_timer_millis_int` | 30000 | `reg_retry_base_time` 30 |
+| `ims.registration_retry_max_timer_millis_int` | 1800000 | `reg_retry_max_time` 1800 |
+| `ims.ipv4/ipv6_sip_mtu_size_cellular_int` | 1500 | -- |
+| `ims.sip_preferred_transport_int` | 2 = DYNAMIC_UDP_TCP | -- |
+
+That last one is worth noting: the platform's transport policy is
+"UDP, TCP when the message is large", which is exactly what joan does.
+
+So the order is **platform -> profile -> built-in**, and the code says so
+where it matters:
+
+- REGISTER expiry reads `ims.registration_expiry_timer_sec_int` first and
+  falls back to the profile's `reg_expiration`. The trace marks which
+  answered, `(platform)` or `(profile)`.
+- Codecs read `imsvoice.*` payload/framing first; the profile supplies
+  the offer only when carrier config is silent, and a **mode-set** only
+  where carrier config left a gap.
+
+**What LineageOS does not ship:** any AMR `mode-set`. Checked on the
+handset -- zero occurrences of `modeset` in the live carrier config, and
+zero in `CarrierConfig.apk`, which carries 35 carrier files and no
+`imsvoice` codec keys at all. So the mode-set can only come from the
+vendor snapshot today, and if a future ROM adds one, the gap-fill above
+stops applying by construction.
+
+**Where the payload numbers actually come from.** The device reports
+`amrwb=[97,98]`, `amrnb=[99,100]`, `dtmf=[101,102]`. These are **Android
+platform defaults, not T-Mobile's configuration**: `CarrierConfig.apk`
+defines no such keys and neither does AOSP's ImsStack asset, so the only
+remaining source is the framework's compiled-in defaults. They apply to
+every carrier on this ROM. LG's media config is therefore the only
+carrier-*specific* codec source we hold -- and it disagrees with the
+platform default on T-Mobile's wideband telephone-event (LG 99, platform
+101), which is a reminder that agreeing on AMR numbers was convention,
+not confirmation.
+
 ## Open divergences from AOSP's defaults
 
 Recorded, not yet acted on. Each needs a decision rather than a guess --

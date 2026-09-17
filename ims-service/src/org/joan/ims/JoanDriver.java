@@ -507,13 +507,22 @@ final class JoanDriver {
                                 cp.tcpCriterionLen,
                                 cp.tcpCriterionV4,
                                 cp.tcpCriterionV6);
+                        /* Platform first, vendor snapshot second. A
+                         * CarrierConfig update ships without us and must
+                         * win; the distilled profile only answers where
+                         * the platform is silent. */
+                        int platExpiry = JoanImsVoiceConfig
+                                .forSub(app, sub).regExpirySec;
                         JoanSipBuilder.setCarrierRegisterExpires(
-                                cp.regExpiration);
+                                platExpiry > 0 ? platExpiry
+                                        : cp.regExpiration);
                         String cs = mcc + "/" + mnc + " criterion="
                                 + cp.tcpCriterionLen
                                 + "/v4=" + cp.tcpCriterionV4
                                 + "/v6=" + cp.tcpCriterionV6
                                 + " expires=" + JoanSipBuilder.registerExpires()
+                                + (JoanImsVoiceConfig.forSub(app, sub)
+                                        .regExpirySec > 0 ? "(platform)" : "(profile)")
                                 + " src=" + cp.srcKey;
                         if (!cs.equals(sCarrierSummary)) {
                             sCarrierSummary = cs;

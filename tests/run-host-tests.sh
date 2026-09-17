@@ -52,6 +52,7 @@ javac -cp "$SDK_JAR" -d "$GATE_OUT" \
     "$JAVA_SRC/JoanImsVoiceConfig.java" \
     "$JAVA_SRC/JoanSessionTimer.java" \
     "$JAVA_SRC/JoanCodecConfig.java" \
+    "$JAVA_SRC/JoanCarrierProfile.java" \
     "$JAVA_SRC/JoanSipBuilder.java" \
     "$JAVA_SRC/JoanSipCrypto.java" \
     "$JAVA_SRC/JoanSecAgree.java" \

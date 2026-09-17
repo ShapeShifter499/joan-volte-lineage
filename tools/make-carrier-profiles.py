@@ -106,6 +106,47 @@ def coerce(v):
     return v
 
 
+
+def parse_codecs(media_path):
+    """The ordered VoLTE audio offer from a media XML, or []."""
+    if not media_path.exists():
+        return []
+    txt = media_path.read_text(encoding="utf-8", errors="replace")
+    m = re.search(r'<table id="lgims_com_media_audio_codec_volte">(.*?)</table>',
+                  txt, re.S)
+    if not m:
+        return []
+    raw = {}
+    for p in re.finditer(r'<param name="([^"]+)"[^>]*value="([^"]*)"', m.group(1)):
+        raw.setdefault(p.group(1).strip(), p.group(2))
+    out = []
+    for i in range(16):
+        ctype = raw.get(f"audiocodec_{i}_codec_type", "").strip()
+        if not ctype or ctype == "None":
+            continue
+        try:
+            pt = int(raw.get(f"audiocodec_{i}_payload_type", ""))
+            rate = int(raw.get(f"audiocodec_{i}_sampling_rate", ""))
+        except ValueError:
+            continue
+        # A static payload number for a dynamic codec is a mistake in the
+        # source, and offering it would put a codec where something else
+        # already means something on the wire.
+        if not (96 <= pt <= 127):
+            continue
+        entry = {"type": ctype, "pt": pt, "rate": rate}
+        oa = raw.get(f"AMR_{i}_octet_align", "").strip()
+        if ctype == "AMR":
+            entry["octet_align"] = oa == "1"
+            ms = raw.get(f"AMR_{i}_default_rtp_modeset", "").strip()
+            if ms:
+                try:
+                    entry["mode_set"] = [int(x) for x in ms.split(",") if x != ""]
+                except ValueError:
+                    pass
+        out.append(entry)
+    return out
+
 def main() -> int:
     cfg_dir = Path(sys.argv[1])
     out_path = Path(sys.argv[2])
@@ -134,6 +175,17 @@ def main() -> int:
                     prof[dst] = coerce(raw[src])
         if not prof:
             continue
+        # The sibling media XML carries the VoLTE audio offer: which
+        # codecs, on which payload types, in which AMR framing, with which
+        # mode-set. Android's own carrier config supplies payload types and
+        # framing on some networks but leaves the attribute bundles empty on
+        # others, and it never supplied a mode-set on any network tested, so
+        # this is the only source for that.
+        media = xml.with_name(xml.name.replace("configuration", "media", 1))
+        codecs = parse_codecs(media)
+        if codecs:
+            prof["codecs"] = codecs
+
         key = f"{carrier}.{cc}" + (f".{variant}" if variant else "")
         prof["carrier"] = carrier
         prof["cc"] = cc
