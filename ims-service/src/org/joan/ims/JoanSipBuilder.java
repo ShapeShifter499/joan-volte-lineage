@@ -51,6 +51,23 @@ final class JoanSipBuilder {
     static final String USER_AGENT = "joan-ims";
 
     private static volatile String sUaVersion;
+    /* Whether this carrier's stock profile sends a User-Agent at all.
+     * Default true: RFC 3261 20.41 encourages it and both reference
+     * stacks send one where configured. */
+    private static volatile boolean sSendUa = true;
+
+    /**
+     * Whether to send a User-Agent, from the carrier's own policy.
+     *
+     * <p>Of 136 shipped profiles, 62 configure a User-Agent and 74 leave
+     * it empty, so omitting the header is ordinary rather than odd --
+     * China Mobile is among those that get none. joan does not copy the
+     * vendor's string, only the decision to send one; our own value stays
+     * truthful either way.
+     */
+    static void setSendUserAgent(boolean on) {
+        sSendUa = on;
+    }
 
     /** Record our own version for the User-Agent string. */
     static void setUserAgentVersion(String version) {
@@ -59,6 +76,10 @@ final class JoanSipBuilder {
 
     static String userAgent() {
         return sUaVersion == null ? USER_AGENT : USER_AGENT + "/" + sUaVersion;
+    }
+
+    static boolean sendUserAgent() {
+        return sSendUa;
     }
 
     static final String ALLOW = "INVITE, ACK, CANCEL, BYE, UPDATE, OPTIONS, "
@@ -835,7 +856,9 @@ final class JoanSipBuilder {
                 .append("\r\n");
         a.append("Expires: ").append(registerExpires()).append("\r\n");
         a.append("Allow: ").append(ALLOW).append("\r\n");
-        a.append("User-Agent: ").append(userAgent()).append("\r\n");
+        if (sSendUa) {
+            a.append("User-Agent: ").append(userAgent()).append("\r\n");
+        }
         a.append("Supported: path, sec-agree\r\n");
         a.append("Require: sec-agree\r\n");
         a.append("Proxy-Require: sec-agree\r\n");
@@ -2376,7 +2399,9 @@ final class JoanSipBuilder {
         a.append("P-Preferred-Identity: <").append(aor).append(">\r\n");
         a.append("P-Access-Network-Info: ").append(pani).append("\r\n");
         a.append("Allow: ").append(ALLOW).append("\r\n");
-        a.append("User-Agent: ").append(userAgent()).append("\r\n");
+        if (sSendUa) {
+            a.append("User-Agent: ").append(userAgent()).append("\r\n");
+        }
         if (requireSecAgree) {
             a.append("Require: sec-agree\r\n");
             a.append("Proxy-Require: sec-agree\r\n");

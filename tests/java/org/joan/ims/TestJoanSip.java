@@ -656,6 +656,17 @@ public final class TestJoanSip {
         check(!ua.contains("lge") && !ua.contains("lg/")
                         && !ua.contains("t-mobile") && !ua.contains("volte-epdg"),
                 "and never imitates a vendor or carrier");
+        /* Carrier policy gates the header. 74 of 136 shipped profiles
+         * send no User-Agent, China Mobile among them, so omitting it is
+         * the ordinary case and not a special one. */
+        JoanSipBuilder.setSendUserAgent(false);
+        check(!JoanSipBuilder.buildRegister(id, txn, 1, null, null)
+                        .contains("User-Agent"),
+                "a carrier whose profile sends no User-Agent gets none");
+        JoanSipBuilder.setSendUserAgent(true);
+        check(JoanSipBuilder.buildRegister(id, txn, 1, null, null)
+                        .contains("User-Agent: joan-ims"),
+                "and one whose profile sends it gets ours");
         JoanSipBuilder.setUserAgentVersion(null);
         /* No dangling separator where the tags used to be: the Contact
          * must end at the instance-id's closing quote. */

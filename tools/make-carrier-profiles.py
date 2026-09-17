@@ -23,6 +23,14 @@ TABLES = {
         "common_sip_features": "sip_features",
         "common_compact_form": "compact_form",
     },
+    "lgims_com_sip": {
+        # Whether this carrier's stock profile sends a User-Agent at all.
+        # 87 of 169 leave the format empty and 82 set one, so omitting the
+        # header is ordinary rather than unusual. China Mobile is among
+        # those that get none. joan does not copy the vendor's string --
+        # only whether a User-Agent is sent.
+        "header_info_useragent_fmt": "user_agent_fmt",
+    },
     "lgims_aosreg": {
         # per-profile params use <name> without the aos_reg_N_ prefix;
         # we keep profile 0 (normal) only for brevity.

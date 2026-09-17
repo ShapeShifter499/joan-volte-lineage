@@ -517,6 +517,7 @@ final class JoanDriver {
                                 pv.sipMtuV4, pv.sipMtuV6);
                         int platExpiry = pv.regExpirySec;
                         JoanSipBuilder.setCarrierPcscfPort(cp.pcscfPort);
+                        JoanSipBuilder.setSendUserAgent(cp.sendUserAgent);
                         JoanSipBuilder.setCarrierRegisterExpires(
                                 platExpiry > 0 ? platExpiry
                                         : cp.regExpiration);
@@ -528,6 +529,8 @@ final class JoanDriver {
                                 + (JoanImsVoiceConfig.forSub(app, sub)
                                         .regExpirySec > 0 ? "(platform)" : "(profile)")
                                 + " pcscf_port=" + JoanSipBuilder.pcscfSipPort()
+                                + " ua=" + (JoanSipBuilder.sendUserAgent()
+                                        ? "yes" : "no")
                                 + " src=" + cp.srcKey;
                         if (!cs.equals(sCarrierSummary)) {
                             sCarrierSummary = cs;
