@@ -115,14 +115,46 @@ agree, and joan was the only one hardcoding
 `+g.3gpp.icsi-ref=...mmtel;audio` onto every carrier's REGISTER. alpha28
 makes ours switchable and withholds it for CMCC.
 
-The library carries both `urn:gsma:imei:` and `urn:uuid:`, the same
-instance-id family. **Not settled here:** whether LG's IMEI URN ends in
-the spare digit `0` or the IMEI's check digit. It is built with string
-operations rather than a format string and no dedicated symbol surfaced,
-so answering it means disassembling around the `urn:gsma:imei:`
-reference. The marginal value is low -- AOSP's `SipUrnHelper.cpp` is
-explicit, cites TS 23.003 13.8 and RFC 7254, and appends a literal `'0'`
--- so LG would be corroboration, not new information.
+### The IMEI URN ends in a literal '0' here too (disassembled)
+
+`SIPURNHelper::GetURN(int, int, bool)` at `0x7ec338`. The single
+reference to `"urn:gsma:imei:"` is at `0x7ec434`; the construction that
+follows is unambiguous:
+
+```asm
+add  x1, x1, #0xfaa          ; "urn:gsma:imei:"
+bl   AString::Append(char*)
+...                          ; zero-pad to 14 digits (cmp w8,#0xd loop)
+bl   AString::GetSubStr(0, 8)   ; TAC
+bl   AString::Append
+mov  w1, #0x2d                  ; '-'
+bl   AString::Append(char)
+bl   AString::GetSubStr(8, 6)   ; SNR
+bl   AString::Append
+mov  w1, #0x2d                  ; '-'
+bl   AString::Append(char)
+orr  w1, wzr, #0x30             ; <-- literal '0'
+bl   AString::Append(char)
+```
+
+`orr w1, wzr, #0x30` loads ASCII `'0'` and appends it as the final
+character. **LG appends the spare digit, not the IMEI's check digit** --
+the same as AOSP's `SipUrnHelper.cpp`. The branch below it
+(`GetSubStr(0, 14)` then `IMSSHA1_Initialize`) is the named-UUID
+fallback, and `"urn:uuid:"` is the very next string in `.rodata` at
+`+0xfb9`, matching AOSP's structure as well.
+
+So two independent shipping implementations and TS 23.003 13.8 / RFC 7254
+all agree, and joan was alone in sending the check digit there through
+alpha26. alpha28 corrects it.
+
+Method, since the host toolchain fights this: `/usr/bin/objdump` is
+x86-only here and fails with "can't disassemble for architecture
+UNKNOWN"; use `aarch64-linux-gnu-objdump`. Map a `.rodata` file offset to
+a vaddr with the section header (`vaddr 0xfa3ea0` <- `file 0xe1eea0`),
+then grep the disassembly for the `adrp`/`add` pair -- objdump prints the
+page without an `0x` prefix, so match `adrp.*, fcc000` and then
+`add.*#0xfaa`.
 
 **Not on this bench:** any US998 ROM image. `firmware-lge-joan-blobs/
 us998/` holds only `ath10k` Wi-Fi firmware, and the V300L Pie KDZ that
