@@ -69,28 +69,29 @@ loopback control socket.
 > Caller ID is the asserted number; Dialer can still overlay a matching
 > contact.
 
-## Current tester build: v0.4.0-alpha28
+## Current tester build: v0.4.0-alpha33
 
-`v0.4.0-alpha28` (versionCode 36) is the current tester zip. It is a
-prerelease: offline suites passed (574 host checks, 260 UA checks); it
-is **not** a live-carrier qualifier. Sideload
-`joan-volte-recovery.zip` from the GitHub release, reboot, then confirm
-the `build` row below reads `0.4.0-alpha28 (36)`.
+`v0.4.0-alpha33` (versionCode 43) is the current tester zip, a
+prerelease: 673 host checks and the UA, registration, discovery, merge,
+xfrm and carrier suites pass, and it registers on T-Mobile 310-260 on
+the bench handset. That is not a live-carrier qualifier for anyone else.
 
-alpha27 built the audio offer from the carrier's own codec
-configuration -- each codec offered in both AMR framings, on the
-carrier's payload numbers -- and alpha28 corrects the REGISTER's
-`+sip.instance` for every carrier. **The instance-id change affects
-everyone**, not just China Mobile: it was wrong in its last character
-against TS 23.003 13.8, and networks that accepted it were being
-lenient.
+Sideload `joan-volte-recovery.zip`, reboot, then confirm:
 
-**If you are testing China Mobile (46000 / 46002 / 46004 / 46007 /
-46008): this build changes two things that might fix your `reg2=404`,
-and adds a diagnostic that will tell us what you actually sent.** Read
-the section below before flashing so you know what to look for.
+```
+adb shell content query --uri content://org.joan.ims.state/state | grep key=build
+→ 0.4.0-alpha33 (43)
+```
 
-## China Mobile: what we know, and what alpha28 tries
+Check that row, **not** `dumpsys package`, which serves a stale version
+on this device indefinitely.
+
+**`joan-volte-uninstall.zip` ships with the release.** Flash it to take
+the ImsService, permissions file and overlays back off and return the
+handset to stock LineageOS behaviour. If a build makes things worse,
+that is the way back — flash it first, then tell us what happened.
+
+## China Mobile: what we know, and what alpha33 tries
 
 A tester on 46002 reaches REG2 and is answered:
 
@@ -102,71 +103,90 @@ req_domain="ims.mnc002.mcc460.3gppnetwork.org"
 
 Everything before that works: REG1 is answered 401, the AKA runs against
 the USIM, IPsec is applied (`spi_in=exact apply_out=ok in=ok`), and the
-authenticated REGISTER goes out over TCP to the protected port. Their
-S-CSCF then returns 404 with a Warning naming an internal error. It is
-consistent -- retries at +50 s, +5 min and +15 min, and across reboots,
-all return exactly the same thing.
+authenticated REGISTER goes out **over TCP** to the protected port.
+Their S-CSCF then returns 404 with a Warning naming an *internal* error.
+Consistent across retries at +50 s, +5 min and +15 min, and across
+reboots.
 
-**Three facts rule out the obvious explanations.**
+**Read that Warning carefully.** A 404 normally means the HSS did not
+recognise the subscriber, but `399 ... "Server Internal Error"` says
+their own node failed while processing a request it had already
+authenticated. That is a different problem from "user unknown", and it
+is why the identity hypotheses below are dead ends rather than leads.
+
+**Four facts rule out the obvious explanations.**
 
 - **The line is provisioned.** The same SIM does VoLTE on a stock
-  handset. This is not an unregistered subscriber.
-- **The same handset and build registers on China Telecom (46011)**, to
+  handset, on the home network. Not an unregistered subscriber.
+- **The same handset and build registers on China Telecom (46011)** to
   `reg2=200 OK`, with a USIM that has no ISIM and an identity derived
-  from the IMSI. So our identity derivation, sec-agree, IPsec and REG2
-  all work on a Chinese network. Something is specific to CMCC.
-- **The domain we use is correct.** 3GPP TS 23.003, AOSP's ImsStack,
-  rust-rcs-core, and the CMCC carrier config in LineageOS's own OnePlus
-  device trees all agree the domain derives from the SIM's own MNC. AOSP
-  ImsStack contains **no** China, CMCC or MCC-460 special-casing at all.
-  The `mnc000` theory is retired and should stay retired.
+  from the IMSI. Identity derivation, sec-agree, IPsec and REG2 all work
+  on a Chinese network. Something is specific to CMCC.
+- **The domain is correct.** TS 23.003, AOSP's ImsStack, rust-rcs-core
+  and the CMCC config in LineageOS's own OnePlus device trees all derive
+  it from the SIM's MNC. The `mnc000` theory is retired and stays
+  retired.
+- **There is no CMCC quirk we are failing to implement.** LG's
+  `libims.lge.so` has been fully mined: 1177 China Mobile symbols, all
+  15 `CMCCAoSRegistration` overrides decompiled. Not one of them changes
+  what an outgoing REGISTER claims, and `UpdateUserIdentities` — the
+  only symbol in the entire binary that touches identity — runs *after*
+  a successful registration.
 
-**What alpha28 changes**, both from reading AOSP's ImsStack at
-`android-17.0.0_r1`:
+### Correction: alpha28 withheld the MMTEL feature tags, and that was backwards
 
-- **The `+sip.instance` was malformed.** AOSP's `SipUrnHelper.cpp`, citing
-  TS 23.003 13.8 and RFC 7254, builds `tac(8)-snr(6)-0` with a literal
-  spare digit. We were sending the IMEI's *check* digit as the last
-  character. A registrar uses the instance-id to construct GRUUs when it
-  creates the binding -- which happens at REG2, not at the REG1
-  challenge -- so a validator that rejects it there would fault exactly
-  where this fails.
-- **The MMTEL feature tags are withheld for CMCC.** AOSP does not
-  hardcode them: `RegContact.cpp` builds the REGISTER Contact from
-  `piServiceConfig->GetFeatureTags()`, so they are carrier configuration
-  and a carrier listing none gets none. We sent
-  `+g.3gpp.icsi-ref=...mmtel;audio` to everyone. Scoped to CMCC only;
-  every other carrier's REGISTER is byte-identical to alpha27.
+alpha28 stopped sending `+g.3gpp.icsi-ref=...mmtel;audio` to China
+Mobile, on the theory that a carrier listing no feature tags should get
+none. **That was wrong and is reverted.** LG's own CMCC configuration
+puts the MMTEL tag literally in its `tContactH` template, and its
+`header_info_feature_tags` is `0x03000208` against T-Mobile's
+`0x01000208` — China Mobile asks for *more* tags, not fewer. alpha33
+sends them, as every other carrier does.
 
-**Both are hypotheses.** The honest counter-argument is that REG1 carries
-the same Contact and is answered 401, so their S-CSCF parses it at least
-once. The reason to try anyway is that a registrar validates and *stores*
-the Contact when it creates a binding, which is REG2.
+### What alpha33 changes
 
-**What to send back, whether or not it works.** The trace now records
-`reg2_hdrs=` -- the header *names* of the REGISTER we actually sent, with
-repeats counted -- and `reg_tags=none` confirming the CMCC scoping took.
-Header names only; values are never logged, so no identities, no AKA
-response, no SPIs. Until now the only way to know what a tester's build
-sent was to read our source, which says what the code *can* send rather
-than what it did.
+- **`P-Preferred-Identity` is no longer sent in the REGISTER.** RFC 3325
+  9.1 excludes it from REGISTER; we were sending it to everyone. A core
+  that validates strictly is entitled to object.
+- **The `+sip.instance` is well-formed.** TS 23.003 13.8 and RFC 7254
+  put a spare `0` in the last position; we were sending the IMEI's check
+  digit. A registrar builds GRUUs from the instance-id when it *creates*
+  the binding, which is REG2 — exactly where this fails.
+- **The protected TCP socket closes with RST, not FIN.** LG's own China
+  Mobile remedy: `CMCCAoSIPSecHelper::InitIPSec` sets `CONFIG_I_LINGER`
+  with the linger value zeroed and does nothing else. Under sec-agree
+  both ends are fixed, so every protected connection reuses one 4-tuple
+  and a lingering `TIME_WAIT` makes the next `connect()` fail.
+- **`Retry-After` is honoured on a REGISTER rejection.** It previously
+  applied only to a 503 on an INVITE, so a network asking us to wait an
+  hour was retried in sixty seconds.
 
-Also worth knowing, and deliberately **not** implemented: LG's stack sets
-a CMCC-specific `SetIPv6Delay` of 4000 ms, where we register 11 ms after
-the IPv6 network appears. That is a real divergence, but it does not
-explain this failure -- retries minutes later on a bearer that stayed up
-return the identical 404 -- so it is recorded rather than shipped as a
-guess.
+The REGISTER transport is unchanged for China Mobile in practice: the
+criterion is now computed from the MTU rather than read from a vendor
+snapshot, but on a 1500-byte bearer that is 1300 either way.
 
-**What to test first, in this order.** alpha25 changes the headers on
-every INVITE and the SDP on *every answer*, not just the new features,
-so a core that dislikes any of it fails the call outright rather than
-failing the new thing:
+### What to send back, whether or not it works
 
-1. place a call each way and confirm two-way audio;
-2. then DTMF into an IVR, hold from the far end, and a long call
-   (over 15 minutes) for the session-timer refresh;
-3. then check the uplink level in the trace.
+The trace now carries three fields that say *why* a transport was
+chosen, not only which one:
+
+```
+reg1_crit=<n>  tpt_pol=<n>  plmn=<realm:NNNNNN | sim:NNNNNN | none>
+```
+
+Read `plmn=` first: `none` means no carrier-specific logic ran at all,
+and `sim:46002` is the expected value. `reg2_hdrs=` records the header
+*names* of the REGISTER actually sent, with repeats counted — names
+only, never values, so no identities, no AKA response, no SPIs.
+
+`docs/cmcc-wiring-and-trace-playbook.md` maps each possible trace shape
+to what it means and what to do next.
+
+Also recorded and deliberately **not** shipped: LG sets a CMCC-specific
+`SetIPv6Delay` of 4000 ms where we register 11 ms after the IPv6 network
+appears. A real divergence, but it does not explain a failure that
+repeats identically minutes later on a bearer that stayed up, so it is
+written down rather than guessed at.
 
 ### New in alpha26
 
@@ -562,6 +582,12 @@ system`, and that is not something the zip can work around.
    recovery asks).
 3. Reboot to system.
 
+**To remove it, sideload `joan-volte-uninstall.zip` from the same
+release.** It takes the ImsService, the permissions file and the
+overlays back off and returns the handset to stock LineageOS behaviour.
+Flash it before reporting a regression, so you know whether what you are
+seeing is ours.
+
 **The zip is unsigned, and recovery says so in two ways that both look
 like failure.** It prompts on the handset and you must accept the bypass
 there -- an `adb sideload` driven from a host will sit and wait for that
@@ -674,8 +700,24 @@ It is **not** installed.
 ## Carrier support
 
 No compiled-in realm or cipher. Realm comes from the SIM (ISIM domain /
-IMPI suffix); P-CSCF from IMS PCO; ESP from `Security-Server`. It has
-so far been exercised on one live IMS core.
+IMPI suffix); P-CSCF from IMS PCO; ESP from `Security-Server`.
+
+Per-carrier behaviour comes from `ims-service/assets/`: 294 PLMNs map to
+136 carrier profiles distilled from a vendor stack's own configuration —
+P-CSCF port, REGISTER expiry, codec offers and framing, IPsec
+algorithms, feature tags. A platform `CarrierConfigManager` value always
+wins over a profile value, because a carrier or a ROM can update the
+former without us. `docs/carrier-configuration-architecture.md` sets out
+the precedence rule and where each tier's data comes from.
+
+**The home PLMN is resolved from the SIM, not by parsing the realm.**
+Carriers brand their IMS domain freely — T-Mobile's ISIM gives
+`msg.pc.t-mobile.com`, which carries no MCC or MNC — so anything keyed
+on realm parsing silently skips them.
+
+Exercised on live cores: T-Mobile US (310-260) registers and calls;
+China Telecom (46011) registers; China Mobile (46002) is the open
+failure described above.
 
 ## Not in this zip
 
