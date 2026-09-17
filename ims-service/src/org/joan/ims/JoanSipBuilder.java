@@ -275,6 +275,77 @@ final class JoanSipBuilder {
         return b.length() == 0 ? "none" : b.toString();
     }
 
+    /**
+     * The host a REGISTER redirect points at, or null.
+     *
+     * <p>RFC 3261 s21.3.4: a 305 Use Proxy names the proxy in Contact,
+     * and 301/302 name where to register instead. LG carries a
+     * CMCC-specific {@code ProcessStartFailed_305} for exactly this, so
+     * it is a real condition on that network rather than a theoretical
+     * one.
+     *
+     * <p>Returns the HOST only -- never the user part. A P-CSCF address
+     * is a network node, logged on the same footing as a realm; the user
+     * part of a Contact in a redirect can carry a subscriber identity and
+     * must not reach a trace.
+     */
+    static String redirectHost(String reply) {
+        if (reply == null) {
+            return null;
+        }
+        int i = reply.indexOf("\r\n");
+        if (i < 0) {
+            return null;
+        }
+        for (String line : reply.substring(i + 2).split("\r\n", -1)) {
+            if (line.isEmpty()) {
+                break;                       /* headers end */
+            }
+            String low = line.toLowerCase(java.util.Locale.ROOT);
+            if (!low.startsWith("contact:") && !low.startsWith("m:")) {
+                continue;
+            }
+            int sip = low.indexOf("sip:");
+            if (sip < 0) {
+                sip = low.indexOf("sips:");
+                if (sip < 0) {
+                    continue;
+                }
+            }
+            String uri = line.substring(low.indexOf(':', sip) + 1);
+            /* Stop at whatever ends the URI. */
+            int end = uri.length();
+            for (int k = 0; k < uri.length(); k++) {
+                char c = uri.charAt(k);
+                if (c == '>' || c == ';' || c == ',' || c == ' ') {
+                    end = k;
+                    break;
+                }
+            }
+            uri = uri.substring(0, end);
+            /* Drop any user@ part before looking at the host. */
+            int at = uri.lastIndexOf('@');
+            if (at >= 0) {
+                uri = uri.substring(at + 1);
+            }
+            /* Strip a port, bracket-aware so IPv6 survives. */
+            if (uri.startsWith("[")) {
+                int close = uri.indexOf(']');
+                if (close > 0) {
+                    uri = uri.substring(1, close);
+                }
+            } else {
+                int colon = uri.indexOf(':');
+                if (colon > 0) {
+                    uri = uri.substring(0, colon);
+                }
+            }
+            uri = uri.trim();
+            return uri.isEmpty() ? null : uri;
+        }
+        return null;
+    }
+
     static String imeiInstance(String imei) {
         StringBuilder digits = new StringBuilder();
         if (imei != null) {

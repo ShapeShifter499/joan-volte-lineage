@@ -27,6 +27,7 @@ public final class TestJoanSip {
         testRegInfo();
         testJitterBuffer();
         testCarrierCodecs();
+        testRegisterRedirect();
         testRegisterShape();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
@@ -647,6 +648,46 @@ public final class TestJoanSip {
         check("none".equals(JoanSipBuilder.headerShape(null))
                         && "none".equals(JoanSipBuilder.headerShape("")),
                 "headerShape survives an empty message");
+    }
+
+    /** REGISTER redirects: RFC 3261 s21.3.4, and never leak the user part. */
+    private static void testRegisterRedirect() {
+        String r305 = "SIP/2.0 305 Use Proxy\r\n"
+                + "Via: SIP/2.0/UDP [2001:db8::2]:5060\r\n"
+                + "To: <sip:+8613800000000@ims.mnc002.mcc460.3gppnetwork.org>\r\n"
+                + "Contact: <sip:[2001:db8:abcd::9]:5060;lr>\r\n"
+                + "\r\n";
+        check("2001:db8:abcd::9".equals(JoanSipBuilder.redirectHost(r305)),
+                "305 Use Proxy: IPv6 proxy host is read, brackets stripped");
+
+        check("10.1.2.3".equals(JoanSipBuilder.redirectHost(
+                        "SIP/2.0 302 Moved\r\nContact: <sip:10.1.2.3:5060>\r\n\r\n")),
+                "302: IPv4 host with a port");
+        check("pcscf.example.net".equals(JoanSipBuilder.redirectHost(
+                        "SIP/2.0 301 Moved\r\nContact: <sip:pcscf.example.net>\r\n\r\n")),
+                "301: an FQDN is read too");
+        check("proxy.example.net".equals(JoanSipBuilder.redirectHost(
+                        "SIP/2.0 305 Use Proxy\r\nm: <sips:proxy.example.net:5061>\r\n\r\n")),
+                "compact form 'm:' and sips: are both accepted");
+
+        /* The whole point of returning host-only. A Contact in a redirect
+         * can carry a subscriber identity; it must never reach a trace. */
+        String withUser = "SIP/2.0 305 Use Proxy\r\n"
+                + "Contact: <sip:+8613800000000@2001:db8::9>\r\n\r\n";
+        String got = JoanSipBuilder.redirectHost(withUser);
+        check(got != null && got.indexOf("8613800000000") < 0
+                        && got.indexOf('@') < 0,
+                "the user part of a redirect Contact is never returned");
+
+        check(JoanSipBuilder.redirectHost(
+                        "SIP/2.0 404 Not Found\r\nWarning: 399 x \"y\"\r\n\r\n") == null,
+                "a reply with no Contact yields no host");
+        check(JoanSipBuilder.redirectHost(null) == null
+                        && JoanSipBuilder.redirectHost("") == null,
+                "redirectHost survives a null or empty reply");
+        check(JoanSipBuilder.redirectHost(
+                        "SIP/2.0 305 Use Proxy\r\nContact: *\r\n\r\n") == null,
+                "a Contact with no URI yields no host");
     }
 
     private static void testInvite() {

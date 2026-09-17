@@ -275,6 +275,7 @@ final class JoanAppRegister {
         int perTry = n.pcscfs.size() > 1
                 ? REG1_TIMEOUT_MS / 2 : REG1_TIMEOUT_MS;
         int tried = 0;
+        boolean redirected = false;
         String last = null;
         for (InetAddress cand : n.pcscfs) {
             tried++;
@@ -283,6 +284,30 @@ final class JoanAppRegister {
                 return sb + "FAIL: superseded by network/state change";
             }
             String one = tryPcscf(ctx, n, id, pani, cand, perTry, epoch);
+            /* Follow a Use Proxy once, to the node the core named.
+             *
+             * Only an IP literal: resolving an FQDN here would put a
+             * blocking DNS lookup in the registration path, and a core
+             * that redirects to a name we cannot reach is no better off
+             * than one we never followed. Once per attempt, and never to
+             * an address already in the candidate list, because a core
+             * that redirects in a cycle would otherwise spin. */
+            String rHost = redirectHostOf(one);
+            if (rHost != null && !redirected) {
+                java.net.InetAddress extra = literalAddress(rHost);
+                if (extra != null && !n.pcscfs.contains(extra)) {
+                    redirected = true;
+                    String two = tryPcscf(ctx, n, id, pani, extra, perTry,
+                            epoch);
+                    JoanTrace.note("app register redirect_try "
+                            + (two == null ? "FAIL: no usable reply" : two));
+                    if (two != null && two.indexOf(" OK") >= 0) {
+                        sb.append("pcscf_tried=").append(tried)
+                                .append(" redirected=1 ");
+                        return sb.append(two).toString();
+                    }
+                }
+            }
             // Keep each candidate's sanitized result, not only the last one.
             // No IPs, subscriber identity, raw SIP, or AKA key material.
             JoanTrace.note("app register pcscf_try=" + tried + " "
@@ -367,6 +392,51 @@ final class JoanAppRegister {
 
     static final RegSeries REG_SERIES = new RegSeries();
 
+    /** The redirect host a tryPcscf() result reported, or null. */
+    private static String redirectHostOf(String result) {
+        if (result == null) {
+            return null;
+        }
+        int i = result.indexOf("redirect_host=");
+        if (i < 0) {
+            return null;
+        }
+        String rest = result.substring(i + "redirect_host=".length());
+        int end = rest.indexOf(' ');
+        String h = (end < 0 ? rest : rest.substring(0, end)).trim();
+        return h.isEmpty() ? null : h;
+    }
+
+    /**
+     * Parse an IP literal, without DNS. Returns null for a name, which is
+     * deliberate: {@code InetAddress.getByName} would resolve it, and a
+     * lookup on this path blocks registration behind the network's DNS.
+     */
+    private static java.net.InetAddress literalAddress(String host) {
+        if (host == null || host.isEmpty()) {
+            return null;
+        }
+        boolean looksNumeric = host.indexOf(':') >= 0;
+        if (!looksNumeric) {
+            looksNumeric = true;
+            for (int i = 0; i < host.length(); i++) {
+                char c = host.charAt(i);
+                if ((c < '0' || c > '9') && c != '.') {
+                    looksNumeric = false;
+                    break;
+                }
+            }
+        }
+        if (!looksNumeric) {
+            return null;
+        }
+        try {
+            return java.net.InetAddress.getByName(host);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     private static String tryPcscf(Context ctx, Net n, Id id, String pani,
                                    InetAddress pcscf, int reg1TimeoutMs,
                                    long epoch) {
@@ -448,6 +518,17 @@ final class JoanAppRegister {
             return sb + "FAIL: reg1 mismatch";
         }
         sb.append("reg1=").append(p1.status).append(' ');
+        if (p1.status >= 300 && p1.status < 400) {
+            /* RFC 3261 s21.3.4. LG carries a CMCC-specific
+             * ProcessStartFailed_305, so a Use Proxy on REGISTER is a real
+             * condition on that network; we used to call it
+             * "reg1 unexpected" and drop the address the core handed us. */
+            String to = JoanSipBuilder.redirectHost(r1);
+            if (to != null) {
+                sb.append("redirect_host=").append(to).append(' ');
+            }
+            return sb + "FAIL: reg1 redirect";
+        }
         if (p1.status != 401) {
             return sb + "FAIL: reg1 unexpected";
         }
@@ -795,6 +876,12 @@ final class JoanAppRegister {
                 return sb + "FAIL: superseded by network/state change";
             }
             sb.append("reg2=").append(p2.status);
+            if (p2.status >= 300 && p2.status < 400) {
+                String to = JoanSipBuilder.redirectHost(r2);
+                if (to != null) {
+                    sb.append(" redirect_host=").append(to);
+                }
+            }
             if (p2.status >= 300) {
                 /* A rejected protected REGISTER: say WHICH identity the
                  * core refused. Warning/Reason carry the core's own text
