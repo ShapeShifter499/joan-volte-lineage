@@ -99,7 +99,36 @@ can change it without us shipping anything.
 4. `CarrierConfigManager` values are read on the same driver pass and
    override where they exist.
 
-## Precedence: the platform always outranks the snapshot
+## Precedence, in order
+
+Lance's rule, and the one the code follows:
+
+1. **Configuration LineageOS or a carrier can update** -- `CarrierConfigManager`.
+   If a key exists here it wins, because it can change without us shipping.
+2. **What the network, SIM or APN tells us** -- the ISIM, the P-CSCF list
+   from PCO, the peer's own SDP answer. Negotiated facts beat stored ones.
+3. **Sane defaults with the best chance of working** -- and "permissive"
+   usually beats "specific". An absent AMR mode-set means *every* mode is
+   allowed (RFC 4867 4.3.1), so omitting it is a better default than
+   narrowing to a value from a 2017 snapshot.
+4. **The vendor snapshot** -- only where nothing above answers, and never
+   injected into something a higher tier already supplied.
+
+Applied, this changed two things that had been built the other way round:
+
+- **The AMR mode-set is no longer filled from the snapshot into a
+  platform-supplied offer.** The platform owns that list; a snapshot value
+  injected into it both narrows the offer and pins behaviour a
+  CarrierConfig update should be able to move. The snapshot's mode-set is
+  used only when the *whole* offer came from the snapshot, which is the
+  carrier-silent case.
+- **The SIP MTU now comes from `ims.ipv4/ipv6_sip_mtu_size_cellular_int`
+  in preference to the link MTU.** Those are updatable keys and are
+  populated on this handset (1500/1500); the link MTU is whatever the
+  bearer produced. RFC 3261 18.1.1 wants the path MTU, and this is the
+  closest the platform will state it.
+
+## Where the platform outranks the snapshot
 
 **A value the platform supplies must win over one joan distilled from a
 vendor snapshot.** The snapshot is a 2017-era extract; a `CarrierConfig`

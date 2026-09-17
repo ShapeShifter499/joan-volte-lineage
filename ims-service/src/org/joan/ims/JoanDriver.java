@@ -511,8 +511,12 @@ final class JoanDriver {
                          * CarrierConfig update ships without us and must
                          * win; the distilled profile only answers where
                          * the platform is silent. */
-                        int platExpiry = JoanImsVoiceConfig
-                                .forSub(app, sub).regExpirySec;
+                        JoanImsVoiceConfig pv =
+                                JoanImsVoiceConfig.forSub(app, sub);
+                        JoanSipBuilder.setPlatformSipMtu(
+                                pv.sipMtuV4, pv.sipMtuV6);
+                        int platExpiry = pv.regExpirySec;
+                        JoanSipBuilder.setCarrierPcscfPort(cp.pcscfPort);
                         JoanSipBuilder.setCarrierRegisterExpires(
                                 platExpiry > 0 ? platExpiry
                                         : cp.regExpiration);
@@ -523,6 +527,7 @@ final class JoanDriver {
                                 + " expires=" + JoanSipBuilder.registerExpires()
                                 + (JoanImsVoiceConfig.forSub(app, sub)
                                         .regExpirySec > 0 ? "(platform)" : "(profile)")
+                                + " pcscf_port=" + JoanSipBuilder.pcscfSipPort()
                                 + " src=" + cp.srcKey;
                         if (!cs.equals(sCarrierSummary)) {
                             sCarrierSummary = cs;

@@ -37,7 +37,53 @@ final class JoanSipBuilder {
      */
     static final String ALLOW = "INVITE, ACK, CANCEL, BYE, UPDATE, OPTIONS, "
             + "REFER, SUBSCRIBE, NOTIFY, PRACK";
+    /** The 3GPP default unprotected P-CSCF port. */
     static final int PCSCF_SIP_PORT = 5060;
+
+    /* The carrier's own unprotected P-CSCF port, 0 = use the default. */
+    private static volatile int sProfilePcscfPort;
+
+    /**
+     * Adopt a carrier's P-CSCF port.
+     *
+     * <p>135 of 136 profiles say 5060 and KT Korea (45002, 45008) says
+     * 5080. joan hardcoded 5060, so on that one network the initial
+     * REGISTER went to a port nothing was listening on -- a silent
+     * timeout indistinguishable from a network that simply did not
+     * answer.
+     */
+    static void setCarrierPcscfPort(int port) {
+        sProfilePcscfPort = (port > 0 && port <= 65535) ? port : 0;
+    }
+
+    /** The unprotected P-CSCF port to use. */
+    static int pcscfSipPort() {
+        return sProfilePcscfPort > 0 ? sProfilePcscfPort : PCSCF_SIP_PORT;
+    }
+
+    /* The platform's SIP MTU per family, 0 = unset. */
+    private static volatile int sPlatMtuV4;
+    private static volatile int sPlatMtuV6;
+
+    /**
+     * Adopt the platform's SIP MTU.
+     *
+     * <p>Preferred over the link MTU wherever it is set, because it is a
+     * carrier-config key a ROM or a carrier can update without us, while
+     * the link MTU is whatever the bearer happened to come up with.
+     * RFC 3261 18.1.1 wants the path MTU, and this is the closest thing
+     * the platform will tell us.
+     */
+    static void setPlatformSipMtu(int v4, int v6) {
+        sPlatMtuV4 = v4 > 0 ? v4 : 0;
+        sPlatMtuV6 = v6 > 0 ? v6 : 0;
+    }
+
+    /** The MTU to reason about: platform first, then the link's. */
+    static int effectiveMtu(int linkMtu, boolean ipv6) {
+        int plat = ipv6 ? sPlatMtuV6 : sPlatMtuV4;
+        return plat > 0 ? plat : linkMtu;
+    }
 
     static final class Params {
         final long spiC;
@@ -486,8 +532,9 @@ final class JoanSipBuilder {
         if (!ipv6) {
             return false;
         }
-        if (mtu > 0) {
-            return messageLen + udpOverhead(true) + 200 > mtu;
+        int useMtu = effectiveMtu(mtu, true);
+        if (useMtu > 0) {
+            return messageLen + udpOverhead(true) + 200 > useMtu;
         }
         return messageLen > 1300;
     }

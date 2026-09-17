@@ -47,6 +47,30 @@ check(prof["CMCC.CN"].get("tcp_criterion_len") == 1300,
 check(prof["TMO.US.NAO"].get("tcp_criterion_len") == 1200,
       "TMO.US.NAO carries T-Mobile's 1200 (joan overrides it to stay UDP)")
 
+# Routing: the unprotected P-CSCF port is not 5060 everywhere.
+kt = prof.get("KT.KR", {})
+check(kt.get("pcscf_port") == 5080,
+      f"KT.KR keeps its 5080 P-CSCF port ({kt.get('pcscf_port')})")
+check(pmap.get("45002") == "KT.KR" and pmap.get("45008") == "KT.KR",
+      "KT Korea's PLMNs resolve to KT.KR")
+off = sorted({v.get("pcscf_port") for v in prof.values()
+              if v.get("pcscf_port") not in (5060, None)})
+check(off == [5080], f"5080 is the only non-default P-CSCF port ({off})")
+
+# Encryption: joan offers aes-cbc and null. No carrier may require
+# something outside that set, or registration there cannot protect.
+OURS_E = {1, 4}
+bad_e = []
+for k, v in prof.items():
+    m = v.get("ipsec_algs")
+    if not isinstance(m, int):
+        continue
+    enc = {b for b in (1, 2, 4) if (m >> 16) & b}
+    if enc and not (enc & OURS_E):
+        bad_e.append(k)
+check(not bad_e,
+      f"every carrier allows an encryption alg joan offers (bad: {bad_e[:4]})")
+
 print(f"carrier asset tests: {'FAIL %d' % fail if fail else 'all passed'}")
 sys.exit(1 if fail else 0)
 PY

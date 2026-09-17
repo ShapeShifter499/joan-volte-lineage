@@ -769,6 +769,20 @@ public final class TestJoanSip {
                         .contains("Expires: 3600"),
                 "a carrier asking for 3600 gets 3600");
         JoanSipBuilder.setCarrierRegisterExpires(0);
+
+        /* Platform SIP MTU outranks the link MTU: it is an updatable
+         * carrier-config key, the link MTU is whatever the bearer gave. */
+        JoanSipBuilder.setPlatformSipMtu(0, 0);
+        check(JoanSipBuilder.effectiveMtu(1500, true) == 1500,
+                "with no platform MTU the link MTU is used");
+        JoanSipBuilder.setPlatformSipMtu(1400, 1200);
+        check(JoanSipBuilder.effectiveMtu(1500, true) == 1200,
+                "the platform IPv6 SIP MTU wins over the link MTU");
+        check(JoanSipBuilder.effectiveMtu(1500, false) == 1400,
+                "and the IPv4 one is used for IPv4");
+        JoanSipBuilder.setPlatformSipMtu(0, 0);
+        check(JoanSipBuilder.effectiveMtu(0, true) == 0,
+                "neither set means no MTU to reason about");
     }
 
     private static void testInvite() {

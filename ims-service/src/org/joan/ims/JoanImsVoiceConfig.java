@@ -41,6 +41,16 @@ final class JoanImsVoiceConfig {
     final int regExpirySec;
     /** {@code ImsVoice}'s preferred transport, or -1 if unset. */
     final int preferredTransport;
+    /**
+     * The platform's SIP MTU per family, or 0.
+     *
+     * <p>Preferred over the link MTU: it is a carrier-config key a ROM or
+     * carrier can update, where the link MTU is whatever the bearer came
+     * up with, and RFC 3261 18.1.1 wants the path MTU rather than the
+     * interface's.
+     */
+    final int sipMtuV4;
+    final int sipMtuV6;
     /** Where the values came from, for the trace. */
     final String source;
 
@@ -48,7 +58,8 @@ final class JoanImsVoiceConfig {
                                int minSeSec, int refresherType,
                                int refreshMethod, int asKbps, int rsBps,
                                int rrBps, int regExpirySec,
-                               int preferredTransport, String source) {
+                               int preferredTransport, int sipMtuV4,
+                               int sipMtuV6, String source) {
         this.asKbps = asKbps;
         this.rsBps = rsBps;
         this.rrBps = rrBps;
@@ -59,6 +70,8 @@ final class JoanImsVoiceConfig {
         this.refreshMethod = refreshMethod;
         this.regExpirySec = regExpirySec;
         this.preferredTransport = preferredTransport;
+        this.sipMtuV4 = sipMtuV4;
+        this.sipMtuV6 = sipMtuV6;
         this.source = source;
     }
 
@@ -74,7 +87,7 @@ final class JoanImsVoiceConfig {
                 JoanSessionTimer.REFRESHER_UAC,
                 JoanSessionTimer.METHOD_UPDATE_PREFERRED,
                 DEFAULT_AS_KBPS, DEFAULT_RS_BPS, DEFAULT_RR_BPS,
-                0, -1, why);
+                0, -1, 0, 0, why);
     }
 
     private static volatile JoanImsVoiceConfig sCached;
@@ -159,6 +172,10 @@ final class JoanImsVoiceConfig {
                 JoanSessionTimer.minSe(minSe),
                 refresher, method, as, rs, rr,
                 regExpiry, transport,
+                cfg.getInt(CarrierConfigManager.Ims
+                        .KEY_IPV4_SIP_MTU_SIZE_CELLULAR_INT, 0),
+                cfg.getInt(CarrierConfigManager.Ims
+                        .KEY_IPV6_SIP_MTU_SIZE_CELLULAR_INT, 0),
                 anySet ? "carrier-config" : "carrier-config-unset");
     }
 

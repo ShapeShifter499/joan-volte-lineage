@@ -49,6 +49,8 @@ public final class JoanCarrierProfile {
      * attribute bundles empty on every one tested so far.
      */
     public final java.util.List<JoanSipBuilder.Capability> codecs;
+    /** The carrier's unprotected P-CSCF port, or 0. */
+    public final int pcscfPort;
     public final String srcKey;
 
     private static volatile JoanCarrierProfile sCached;
@@ -61,7 +63,7 @@ public final class JoanCarrierProfile {
                                int tcpCriterionLen, int tcpCriterionV4,
                                int tcpCriterionV6, int regExpiration,
                                java.util.List<JoanSipBuilder.Capability> codecs,
-                               String srcKey) {
+                               int pcscfPort, String srcKey) {
         this.confUri = confUri;
         this.referSub = referSub;
         this.confSub = confSub;
@@ -77,6 +79,7 @@ public final class JoanCarrierProfile {
         this.codecs = codecs == null
                 ? java.util.Collections.<JoanSipBuilder.Capability>emptyList()
                 : java.util.Collections.unmodifiableList(codecs);
+        this.pcscfPort = pcscfPort;
         this.srcKey = srcKey;
     }
 
@@ -128,7 +131,7 @@ public final class JoanCarrierProfile {
                 "sip:mmtel@conf-factory.ims.mnc%s.mcc%s.3gppnetwork.org",
                 pad3(mnc), mcc);
         return new JoanCarrierProfile(factory, true, true, false,
-                2, 1, true, 183, -1, 0, 0, 0, null, "3gpp-default");
+                2, 1, true, 183, -1, 0, 0, 0, null, 0, "3gpp-default");
     }
 
     private static String pad3(String mnc) {
@@ -243,6 +246,7 @@ public final class JoanCarrierProfile {
                         o.optInt("reg_tcp_criterion_v6", 0),
                         o.optInt("reg_expiration", 0),
                         parseCodecs(o.optJSONArray("codecs")),
+                        o.optInt("pcscf_port", 0),
                         key);
             }
         } catch (Throwable t) {

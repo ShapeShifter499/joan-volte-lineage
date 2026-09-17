@@ -1136,7 +1136,7 @@ final class JoanAppRegister {
             socket = source.open();
             phase = "send";
             JoanRegTransport.UdpResult r = JoanRegTransport.sendRecvUdp(
-                    socket, null, pcscf, JoanSipBuilder.PCSCF_SIP_PORT,
+                    socket, null, pcscf, JoanSipBuilder.pcscfSipPort(),
                     packet, timeoutMs, identity, stats);
             String result = r.reply == null
                     ? "reg1_result=timeout FAIL: reg1 no matching final"
@@ -1167,7 +1167,7 @@ final class JoanAppRegister {
         try {
             JoanRegTransport.TcpResult tr = JoanRegTransport.sendRecvTcp(
                     n.network, n.local, JoanSipBuilder.REG1_PORT, pcscf,
-                    JoanSipBuilder.PCSCF_SIP_PORT, packet, timeoutMs,
+                    JoanSipBuilder.pcscfSipPort(), packet, timeoutMs,
                     null, null, null, identity);
             closeQuietly(tr.keep);
             return new Reg1Result(tr.reply,

@@ -146,14 +146,18 @@ final class JoanCodecConfig {
             return fallback("carrier-no-amr");
         }
 
-        /* Android's carrier config has never once supplied an AMR
-         * mode-set on a network tested here -- the per-payload-type
-         * attribute bundles are empty or carry only the payload format.
-         * The stock media configuration does carry one, and it is
-         * carrier-specific: China Mobile asks for mode-set=8 on AMR-WB
-         * where T-Mobile asks for 0,1,2. Fill from there, and only where
-         * carrier config left a gap. */
-        fillModeSets(out, profileCodecs);
+        /* Deliberately NOT filling a mode-set from the vendor snapshot
+         * here.
+         *
+         * The platform gave us this offer, so the platform owns it. A
+         * 2017-era extract must not be injected into a list a
+         * CarrierConfig update can change underneath us, and an absent
+         * mode-set is the more permissive offer: RFC 4867 4.3.1 says a
+         * missing mode-set means every mode is allowed, which is the
+         * best-chance-of-working default rather than a narrower claim
+         * sourced from a snapshot. The snapshot's mode-set is used only
+         * when the whole offer came from the snapshot -- see the
+         * carrier-silent path above. */
 
         JoanSipBuilder.applyCarrierCodecs(out, first(dtmfWb), first(dtmfNb));
 
@@ -171,65 +175,7 @@ final class JoanCodecConfig {
         return memo(b.toString());
     }
 
-    /**
-     * Take a mode-set from the carrier profile for any entry that carrier
-     * config left without one.
-     *
-     * <p>Matched on encoding name and framing, not on payload number: the
-     * two sources are independently maintained and disagree about numbers
-     * (LG puts T-Mobile's wideband telephone-event on 99, Android's config
-     * says 101), but they agree about what AMR-WB octet-aligned means.
-     */
-    private static void fillModeSets(
-            java.util.List<JoanSipBuilder.Capability> out,
-            java.util.List<JoanSipBuilder.Capability> profile) {
-        if (profile == null || profile.isEmpty()) {
-            return;
-        }
-        for (int i = 0; i < out.size(); i++) {
-            JoanSipBuilder.Capability c = out.get(i);
-            if (c.fmtp.indexOf("mode-set=") >= 0) {
-                continue;               /* carrier config already said */
-            }
-            boolean oct = c.fmtp.indexOf("octet-align=1") >= 0;
-            for (JoanSipBuilder.Capability p : profile) {
-                if (!p.name.equals(c.name) || p.rate != c.rate) {
-                    continue;
-                }
-                if ((p.fmtp.indexOf("octet-align=1") >= 0) != oct) {
-                    continue;
-                }
-                int ms = p.fmtp.indexOf("mode-set=");
-                if (ms < 0) {
-                    continue;
-                }
-                int end = p.fmtp.indexOf(';', ms);
-                String modes = end < 0 ? p.fmtp.substring(ms)
-                        : p.fmtp.substring(ms, end);
-                /* Rebuild rather than string-splice, so the fmtp keeps one
-                 * shape whichever source filled it. */
-                out.set(i, JoanSipBuilder.Capability.amr(
-                        c.name, c.rate, c.offerPt, oct,
-                        parseModes(modes.substring("mode-set=".length()))));
-                break;
-            }
-        }
-    }
-
-    private static int[] parseModes(String csv) {
-        String[] parts = csv.split(",");
-        int[] v = new int[parts.length];
-        int n = 0;
-        for (String s : parts) {
-            try {
-                v[n++] = Integer.parseInt(s.trim());
-            } catch (NumberFormatException e) {
-                return null;
-            }
-        }
-        return n == v.length ? v : null;
-    }
-
+    /** A codec list as the trace renders it. Names and numbers only. */
     private static String describe(
             java.util.List<JoanSipBuilder.Capability> caps) {
         StringBuilder b = new StringBuilder();
