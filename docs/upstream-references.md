@@ -254,6 +254,59 @@ from reading them rather than from RFC 4733 alone:
 
 Their default duration (200 ms) and volume (10) are the values we use.
 
+### Jitter buffer, reception statistics and concealment (alpha26)
+
+**This is the one place in this port where numeric parameters, and not
+only behaviour, come from AOSP.** It is called out separately because
+the rule at the top of this file -- reference only, nothing copied --
+needs qualifying here. No ImsMedia source was copied, and none is
+shipped; the algorithm in `JoanJitter.java` was written against the
+behaviour of ImsMedia's `JitterNetworkAnalyser` and `AudioJitterBuffer`,
+and the **tuning constants are theirs**:
+
+| constant | value | what it governs |
+| --- | --- | --- |
+| `MAX_HISTORY` | 150 | jitter samples retained |
+| `PACKET_INTERVAL_MS` | 20 | nominal frame period |
+| `INCREASE_THRESHOLD_MS` | 200 | how fast the buffer may grow |
+| `DECREASE_THRESHOLD_MS` | 2000 | how slowly it may shrink |
+| `DECREASE_STEP` | 2 | frames dropped per shrink |
+| `ROUNDUP_MARGIN_MS` | 10 | rounding margin on the target |
+| `ALLOWABLE_ERROR_MS` | 10 | slack before the fill is judged late |
+| `DROP_WINDOW_MS` | 5000 | window over which drops are counted |
+| `RESET_THRESHOLD_DTX` / `_NO_DTX` | 80 / 35 | when to give up and resync |
+
+Both are Apache-2.0, the same licence as this repo, so the derivation is
+licence-compatible; it is recorded here because it is a derivation rather
+than a reading.
+
+What is **not** theirs, and was written here: the queue itself, the
+`depth + SLACK` ceiling, and the time-based fill. The last two exist
+because of failures that reading AOSP did not prevent -- an offer-one /
+play-one loop can never drain a fill backlog, so an unbounded buffer sat
+on 180 ms permanently; and trimming at exactly `depth` tore a frame out
+of a clean stream, which is why `SLACK` is 3 rather than 0. A
+count-based fill was written first and discarded before it shipped,
+because reading AOSP showed it would stall on loss during the fill.
+
+**Concealment: AOSP does less than expected, and that changed the
+design.** `IAudioPlayerNode` hands a gap straight to the decoder --
+`onDataFrame(nullptr, 0, NO_DATA, false, 0)` -- rather than synthesising
+anything. The only reconstruction ImsMedia performs itself is EVS
+channel-aware redundancy. An attenuated-repeat concealer was about to be
+written here; reading the file first replaced it with the AMR analogue,
+`JoanAmr.lostFrame()` emitting an FT=14 `SPEECH_LOST` frame so the codec
+conceals. Verified on a live call at `concealed=3` against `lost=4`,
+with the decoder accepting the frame rather than erroring.
+
+**Reception reports** are RFC 3550 6.4.1 and needed no borrowing, but
+they are the reason the rest exists: every SR this stack sent before
+alpha26 carried RC=0, so `loss=0% jitter=0` in the trace was the peer's
+report about our uplink and said nothing about our own reception. Once
+computed, the downlink proved to have been lossy and jittery on nearly
+every call. The lesson generalises past this port: a statistic that has
+never been computed reads exactly like a statistic that is zero.
+
 ## AOSP framework IMS (outside `packages/modules`)
 
 `packages/modules` carries exactly two IMS repos, ImsStack and ImsMedia,
@@ -361,9 +414,12 @@ is `sharedUserId="android.uid.phone"` plus `certificate: "platform"`,
 which the flashable zip cannot satisfy on a release-keys ROM -- so the
 zip cannot SHIP the service. It can still USE one a ROM provides:
 `USE_IMSMEDIA` is `signature|privileged`, and we are already a
-privileged app with an allowlist. The jitter buffer we lack entirely is
-the part worth porting first, because it is the only thing that helps a
-zip install on a stock ROM.
+privileged app with an allowlist. The jitter buffer we lacked entirely
+was the part worth porting first, because it is the only thing that
+helps a zip install on a stock ROM. **That was done in alpha26** -- see
+"Jitter buffer, reception statistics and concealment" above, which is
+the one place in this port where numeric parameters, not just
+behaviour, are taken from AOSP.
 
 ## LG IMS (reverse engineered)
 
@@ -372,3 +428,21 @@ zip install on a stock ROM.
 - Used as: carrier-behaviour facts (TCP criterion lengths, per-carrier
   config values) transcribed into our own profile format.
 - Boundary, unchanged: extract-only, no LG code or blobs shipped.
+
+## Other sources
+
+- **3GPP specifications.** TS 23.003 (identity derivation), 24.229,
+  24.147, 31.102, 31.103, 33.203. Normative text, consulted directly.
+  The RFCs implemented are listed in `docs/implementation-inventory.md`.
+- **LineageOS device trees.** The China Mobile MNC set
+  (`000, 002, 004, 007, 008`) in `JoanCarrierProfile` was confirmed
+  against the CMCC carrier configuration shipped in LineageOS's own
+  OnePlus device trees, after an earlier guess had been wrong in a way
+  that gave China Mobile's profile to Unicom and Telecom subscribers.
+  Used as corroboration of a fact, not as a source of code.
+- **rust-rcs-core.** Consulted (with AOSP ImsStack and TS 23.003) on
+  whether any IMS implementation carries a China Mobile identity quirk
+  for the `reg2=404`. The finding was negative -- all agree the domain
+  derives from the SIM's own MNC -- which retired the `mnc000`
+  hypothesis. Reference only.
+- **LG IMS**, reverse engineered: see the section below.

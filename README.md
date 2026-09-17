@@ -571,6 +571,12 @@ LineageOS 22 inherit: `upstream/` (`joan-ims.mk` + `Android.bp`).
 
 **What the zip contains and what each piece does:**
 [`docs/zip-contents-and-how-it-works.md`](docs/zip-contents-and-how-it-works.md)
+
+**What the stack implements, and which spec each piece answers to:**
+[`docs/implementation-inventory.md`](docs/implementation-inventory.md)
+
+**What was consulted, derived, or reverse engineered, and from where:**
+[`docs/upstream-references.md`](docs/upstream-references.md)
 — every file in the flashable zip, the four conditions that must all hold
 before VoLTE is admitted, what the installer does and why, and what uninstall
 reverses.
