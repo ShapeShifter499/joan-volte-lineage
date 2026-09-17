@@ -952,13 +952,64 @@ final class JoanSipBuilder {
      * Joan's 310-260 UDP exception remains explicit Joan policy, not
      * stock {@code AdjustTcpCriterionPerMtu}.
      */
+    /**
+     * Which source answered "what PLMN is this", and with what.
+     *
+     * <p>Exists because the outcome cannot distinguish the two paths:
+     * T-Mobile stays on UDP whether the exception ran or whether the
+     * realm simply failed to parse, and for a long time it was the
+     * second while every trace read like the first. The trace has to
+     * name the branch, not the result.
+     *
+     * @return {@code realm:310260}, {@code sim:310260}, or {@code none}
+     */
+    static String plmnSource(String realm) {
+        int mcc = plmnOf(realm);
+        if (mcc != -1) {
+            return "realm:" + mcc + String.format("%03d", mncOf(realm));
+        }
+        if (sProfileMcc > 0) {
+            return "sim:" + sProfileMcc + String.format("%03d", sProfileMnc);
+        }
+        return "none";
+    }
+
     static boolean preferTcp(String realm, int messageLen, int mtu,
                              boolean ipv6) {
+        /* The home PLMN, from the realm when it is in 3GPP form and from
+         * the SIM otherwise.
+         *
+         * Reading it from the realm alone was wrong, and wrong in a way
+         * that hid itself: T-Mobile's ISIM gives the realm as
+         * "msg.pc.t-mobile.com", a branded domain with no MCC or MNC in
+         * it, so plmnOf() returned -1 and this method answered "never
+         * flip transport" on its very first line. Every PLMN-scoped
+         * transport decision was dead on that carrier -- including the
+         * T-Mobile exception below, which has never once executed for
+         * the carrier it names. The bench read as "UDP, as intended"
+         * for exactly the wrong reason.
+         *
+         * Measured on the handset, 2026-09-17: reg1_crit=1300 tpt_pol=2
+         * plmn_ok=0. The criterion and the platform policy were both
+         * computed correctly and neither was ever consulted.
+         *
+         * Any carrier that brands its IMS domain rather than using
+         * ims.mncXXX.mccYYY.3gppnetwork.org lands here, so the fix is
+         * the SIM's own MCC/MNC, which the driver already pushes through
+         * setCarrierTransport() for the profile lookup. A realm is a
+         * network's name for itself; the SIM is the authority on which
+         * network it is. */
         int mcc = plmnOf(realm);
-        if (mcc == -1) {
-            return false; /* non-3GPP realm: never flip transport */
+        int mnc = mcc == -1 ? -1 : mncOf(realm);
+        if (mcc == -1 && sProfileMcc > 0) {
+            mcc = sProfileMcc;
+            mnc = sProfileMnc;
         }
-        if (mcc == 310 && mncOf(realm) == 260) {
+        if (mcc == -1) {
+            /* No PLMN from either source: not a carrier realm at all. */
+            return false;
+        }
+        if (mcc == 310 && mnc == 260) {
             /* Kept ahead of everything, and it is the one piece of
              * policy here that is not the reference stack's. This
              * handset registers on T-Mobile over UDP and flipping it to

@@ -840,8 +840,27 @@ public final class TestJoanSip {
                 + "taken as the criterion directly (AOSP's asymmetry)");
         JoanSipBuilder.setPlatformSipMtu(0, 0);
 
+        /* A branded IMS domain still belongs to a carrier. T-Mobile's
+         * ISIM hands out "msg.pc.t-mobile.com", which carries no MCC or
+         * MNC, so the realm alone said "not a carrier" and every
+         * PLMN-scoped transport decision was skipped on the one network
+         * this project can test. Measured on the handset as plmn_ok=0.
+         * The SIM's own PLMN, which the driver already pushes, is the
+         * authority. */
+        JoanSipBuilder.setCarrierTransport(310, 260, 1300, 0, 0);
+        check(!JoanSipBuilder.preferTcp("msg.pc.t-mobile.com", 9000, 1500,
+                        false),
+                "a branded realm resolves through the SIM PLMN, so the "
+                + "T-Mobile exception finally applies to T-Mobile");
+        JoanSipBuilder.setCarrierTransport(234, 1, 1300, 0, 0);
+        check(JoanSipBuilder.preferTcp("ims.example-carrier.net", 1400, 1500,
+                        false),
+                "and another carrier's branded realm gets the criterion "
+                + "instead of being skipped entirely");
+        JoanSipBuilder.setCarrierTransport(-1, -1, -1, 0, 0);
         check(!JoanSipBuilder.preferTcp("ims.example.net", 9000, 1500, false),
-                "a non-3GPP realm never flips transport");
+                "with no SIM PLMN either, a non-carrier realm still never "
+                + "flips transport");
 
         /* REGISTER Expires. Both carriers joan can test want 600000, so
          * this must not change them; 43 of 136 profiles want otherwise. */

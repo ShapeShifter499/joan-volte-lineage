@@ -466,6 +466,18 @@ final class JoanAppRegister {
                 .append(JoanSipBuilder.udpOverhead(ipv6)).append(' ');
         boolean tcpReg1 = JoanSipBuilder.preferTcp(id.realm, reg1Udp.length(),
                 n.mtu, ipv6);
+        /* Why that transport was chosen. Without these three the trace
+         * says "udp" and gives no way to tell whether the criterion was
+         * not exceeded, the platform asked for UDP, or the realm failed
+         * to parse as a PLMN -- which are three different bugs. The
+         * China Mobile tester needs this more than we do. */
+        sb.append("reg1_crit=")
+                .append(JoanSipBuilder.registerTcpCriterion(n.mtu, ipv6))
+                .append(" tpt_pol=")
+                .append(JoanSipBuilder.platformPreferredTransport())
+                .append(" plmn=")
+                .append(JoanSipBuilder.plmnSource(id.realm))
+                .append(' ');
         Reg1Result first;
         /* The identity the reply is matched against must be the message
          * that actually went out: buildRegister() re-rolls txn.branch on
