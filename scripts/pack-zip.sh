@@ -40,7 +40,7 @@ APKDIR=ims-service/build/apk
 mkdir -p "$APKDIR"
 cp ims-service/AndroidManifest.xml "$APKDIR/"
 python3 - "$ROOT" "$BT" <<'PYEOF'
-import os, subprocess, sys, zipfile
+import os, subprocess, sys, time, zipfile
 
 root, bt = sys.argv[1], sys.argv[2]
 base = os.path.join(root, 'ims-service', 'build')
@@ -57,8 +57,25 @@ subprocess.run([os.path.join(bt, 'aapt2'), 'link',
                 '-A', os.path.join(root, 'ims-service', 'assets')],
                check=True, env={**os.environ})
 
+# Append classes.dex with a FIXED entry timestamp.
+#
+# ZipFile.write() takes the entry's date_time from the file's mtime, and
+# d8 regenerates classes.dex on every build -- so the apk's bytes changed
+# on every run even when not one source line had. That defeated the md5
+# check the README asks testers to perform, and it is why the two RROs
+# (plain aapt2 link + apksigner, no append step) rebuilt byte-identically
+# while the app apk did not.
+#
+# SOURCE_DATE_EPOCH is honoured if set; otherwise 1980-01-01, which is the
+# earliest timestamp the zip format can represent.
+epoch = int(os.environ.get('SOURCE_DATE_EPOCH', '315532800'))
+entry = zipfile.ZipInfo('classes.dex', date_time=time.gmtime(epoch)[:6])
+entry.compress_type = zipfile.ZIP_DEFLATED
+entry.external_attr = 0o644 << 16
+with open(os.path.join(base, 'dex', 'classes.dex'), 'rb') as dexf:
+    dexbytes = dexf.read()
 with zipfile.ZipFile(unsigned, 'a', zipfile.ZIP_DEFLATED) as z:
-    z.write(os.path.join(base, 'dex', 'classes.dex'), 'classes.dex')
+    z.writestr(entry, dexbytes)
 
 ks = os.path.join(root, 'ims-service', 'build', 'keystore', 'joan-dev.jks')
 if not os.path.exists(ks):
@@ -117,7 +134,7 @@ INSTALLED_SIZE=$(stat -c%s ims-service/build/joan-ims.apk)
 [ "$INSTALLED_SIZE" -gt 5000 ] || { echo "apk too small"; exit 1; }
 mkdir -p out
 python3 - "$ROOT" <<'PYEOF2'
-import os, sys, zipfile
+import os, sys, time, zipfile
 
 root = sys.argv[1]
 out = os.path.join(root, 'out', 'joan-volte-recovery.zip')
@@ -145,13 +162,25 @@ files = {
         'scripts/merge-viettel-apns.sh'),
 }
 os.makedirs(os.path.dirname(out), exist_ok=True)
+# Fixed entry timestamps, for the same reason as the apk's classes.dex:
+# writestr() with a plain string arcname stamps the entry with
+# time.time(), so this zip's bytes changed on every build. Testers are
+# asked to verify it by md5, which only means something if the same
+# source produces the same bytes.
+epoch = int(os.environ.get('SOURCE_DATE_EPOCH', '315532800'))
+stamp = time.gmtime(epoch)[:6]
 with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
     for arc, p in files.items():
         if p is None:
             continue
         data = open(p, 'rb').read()
         assert len(data) > 30, f'{arc} too small ({len(data)})'
-        z.writestr(arc, data)
+        entry = zipfile.ZipInfo(arc, date_time=stamp)
+        entry.compress_type = zipfile.ZIP_DEFLATED
+        # update-binary must stay executable inside the zip.
+        entry.external_attr = ((0o755 if arc.endswith(('update-binary', '.sh'))
+                                else 0o644) << 16)
+        z.writestr(entry, data)
 print('zip:', os.path.getsize(out), 'bytes ->', out)
 PYEOF2
 

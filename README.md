@@ -564,6 +564,24 @@ Needs a JDK, Android SDK (`build-tools` + `platforms/android-36`), and
 ./scripts/pack-cleanup-zip.sh      # -> out/joan-volte-uninstall.zip
 ```
 
+**The zip build is reproducible**: the same sources and toolchain produce
+byte-identical output, so an md5 is worth quoting. Check it with
+
+```sh
+./scripts/pack-zip.sh && md5sum out/joan-volte-recovery.zip
+./scripts/pack-zip.sh && md5sum out/joan-volte-recovery.zip   # same md5
+```
+
+It was not, before this was fixed. `zipfile.writestr()` with a plain
+string name stamps each entry with `time.time()`, and `ZipFile.write()`
+takes the entry time from the file's mtime -- and d8 regenerates
+`classes.dex` on every build. So the apk and the outer zip both changed
+bytes on every run while the compiled code did not: `classes.dex` itself
+was byte-identical throughout. Every entry now carries a fixed
+timestamp, honouring `SOURCE_DATE_EPOCH` if it is set. Releases from
+`v0.4.0-alpha26` and earlier were built before the fix and do not
+reproduce.
+
 App sources: `ims-service/` (see `app/README.md`).
 LineageOS 22 inherit: `upstream/` (`joan-ims.mk` + `Android.bp`).
 
