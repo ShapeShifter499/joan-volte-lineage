@@ -475,8 +475,21 @@ final class JoanDriver {
         {
             String mccMnc = safeSimOperator(tm);
             if (mccMnc != null && mccMnc.length() >= 5) {
-                JoanRegistration.setOperator(
-                        mccMnc.substring(0, 3), mccMnc.substring(3));
+                String mcc = mccMnc.substring(0, 3);
+                String mnc = mccMnc.substring(3);
+                JoanRegistration.setOperator(mcc, mnc);
+                /* China Mobile answers an authenticated REGISTER carrying
+                 * our MMTEL feature tags with 404 "Server Internal Error",
+                 * on a line that registers on a stock handset. AOSP takes
+                 * these tags from carrier configuration rather than
+                 * hardcoding them, so sending none is a shape AOSP already
+                 * has. Scoped to CMCC; everyone else is unchanged. */
+                boolean tags = !JoanCarrierProfile.isCmcc(mcc, mnc);
+                if (tags != JoanSipBuilder.registerContactTags()) {
+                    JoanSipBuilder.setRegisterContactTags(tags);
+                    JoanTrace.note("register contact tags="
+                            + (tags ? "mmtel" : "none (CMCC)"));
+                }
             }
         }
         if (impi == null || !impi.contains("@")) {

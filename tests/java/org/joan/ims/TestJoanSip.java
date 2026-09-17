@@ -27,6 +27,7 @@ public final class TestJoanSip {
         testRegInfo();
         testJitterBuffer();
         testCarrierCodecs();
+        testRegisterShape();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -569,6 +570,83 @@ public final class TestJoanSip {
                 "ipsec-3gpp;alg=hmac-sha-1-96", 40000, "3GPP-E-UTRAN-FDD");
         check(inv4.contains("a=rtpmap:96 AMR-WB/16000/1"),
                 "null carrier list restores the built-in profile");
+    }
+
+    /**
+     * The REGISTER's instance-id, its optional Contact tags, and the
+     * identity-free header shape used to diagnose them.
+     */
+    private static void testRegisterShape() {
+        /* TS 23.003 13.8 / RFC 7254, as AOSP SipUrnHelper.cpp builds it:
+         * tac(8) "-" snr(6) "-" spare, and the spare is a literal 0. We
+         * used to emit the IMEI's check digit as the last character. */
+        check("12345678-901234-0".equals(
+                        JoanSipBuilder.imeiInstance("123456789012345")),
+                "instance-id spare digit is 0, not the check digit");
+        check("12345678-901234-0".equals(
+                        JoanSipBuilder.imeiInstance("12345678901234")),
+                "a 14-digit IMEI gets the same spare digit");
+        check("12345678-901234-0".equals(
+                        JoanSipBuilder.imeiInstance("12-345678 901234/5")),
+                "punctuation in the IMEI is ignored");
+        check("00000000-000000-0".equals(JoanSipBuilder.imeiInstance("123")),
+                "too few digits falls back, visibly");
+        check("00000000-000000-0".equals(JoanSipBuilder.imeiInstance(null)),
+                "a null IMEI does not throw");
+
+        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                "user@ims.example.net", "sip:+15555550100@ims.example.net",
+                "ims.example.net", "2001:db8::2", 25000, 26000,
+                "123456789012345");
+        JoanSipBuilder.Params mine = new JoanSipBuilder.Params(
+                1111, 2222, 25000, 26000);
+        JoanSipBuilder.Txn txn = new JoanSipBuilder.Txn(mine,
+                new java.security.SecureRandom());
+
+        JoanSipBuilder.setRegisterContactTags(true);
+        String withTags = JoanSipBuilder.buildRegister(id, txn, 1, null, null);
+        check(withTags.contains("+sip.instance=\"<urn:gsma:imei:"
+                        + "12345678-901234-0>\""),
+                "REGISTER carries the AOSP-shaped instance-id");
+        check(withTags.contains("+g.3gpp.icsi-ref="),
+                "MMTEL tags present by default");
+
+        JoanSipBuilder.setRegisterContactTags(false);
+        String noTags = JoanSipBuilder.buildRegister(id, txn, 1, null, null);
+        check(!noTags.contains("+g.3gpp.icsi-ref="),
+                "MMTEL tags can be withheld, for CMCC");
+        check(!noTags.contains(";audio"),
+                "and the audio tag goes with them");
+        check(noTags.contains("+sip.instance=\"<urn:gsma:imei:"),
+                "but the instance-id always stays: it identifies the binding");
+        /* No dangling separator where the tags used to be: the Contact
+         * must end at the instance-id's closing quote. */
+        check(noTags.contains(">\"\r\n"),
+                "Contact ends cleanly when the tags are withheld");
+        check(!noTags.contains(";;") && !noTags.contains(";\r\n"),
+                "no empty parameter left behind");
+        JoanSipBuilder.setRegisterContactTags(true);
+
+        /* headerShape: names, counts, no values. */
+        String msg = "REGISTER sip:ims.example.net SIP/2.0\r\n"
+                + "Via: SIP/2.0/UDP [2001:db8::2]:5060;branch=z9hG4bKsecret\r\n"
+                + "Via: SIP/2.0/TCP [2001:db8::3]:5060\r\n"
+                + "From: <sip:+15555550100@ims.example.net>;tag=abc\r\n"
+                + "Authorization: Digest response=\"deadbeef\"\r\n"
+                + "Contact: <sip:a@b>\r\n"
+                + " ;expires=600\r\n"
+                + "\r\n";
+        String shape = JoanSipBuilder.headerShape(msg);
+        check(shape.contains("Viax2"), "repeated headers are counted");
+        check(shape.contains("Authorization"), "header names are reported");
+        check(!shape.contains("deadbeef") && !shape.contains("5555550100")
+                        && !shape.contains("z9hG4bK"),
+                "header VALUES never appear -- no identities, no credentials");
+        check(!shape.contains("expires"),
+                "a folded continuation line is not read as a header");
+        check("none".equals(JoanSipBuilder.headerShape(null))
+                        && "none".equals(JoanSipBuilder.headerShape("")),
+                "headerShape survives an empty message");
     }
 
     private static void testInvite() {
@@ -2240,8 +2318,14 @@ public final class TestJoanSip {
     }
 
     private static void testImei() {
-        check("12345678-901234-5".equals(
+        /* Was "12345678-901234-5", asserting the IMEI's check digit as the
+         * last character. That was wrong: TS 23.003 13.8 / RFC 7254 put a
+         * SPARE digit there, and AOSP's SipUrnHelper.cpp appends a literal
+         * '0'. The old expectation is kept in this comment because it is
+         * what shipped to every tester up to alpha26. Fuller coverage is
+         * in testRegisterShape(). */
+        check("12345678-901234-0".equals(
                 JoanSipBuilder.imeiInstance("123456789012345")),
-                "imei instance 15 digits");
+                "imei instance 15 digits ends in the spare digit 0");
     }
 }

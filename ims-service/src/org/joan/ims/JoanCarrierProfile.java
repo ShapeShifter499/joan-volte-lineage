@@ -159,6 +159,12 @@ public final class JoanCarrierProfile {
      * US carriers keyed by MCC only where stock keys them by brand;
      * these are the LG profile families, not a PLMN database.
      */
+    /** True for a China Mobile PLMN, by the confirmed MNC set. */
+    static boolean isCmcc(String mcc, String mnc) {
+        return "460".equals(mcc) && mnc != null
+                && CMCC_MNCS.contains(pad3(mnc));
+    }
+
     static String carrierKey(String mcc, String mnc) {
         // T-Mobile family (US): MCC 310-316 across the merged TMUS/Sprint
         // network; stock keys all of these profiles as TMO.US.NAO.

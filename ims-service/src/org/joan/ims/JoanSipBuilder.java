@@ -192,6 +192,89 @@ final class JoanSipBuilder {
         return JoanSecAgree.cartesianClientValue(m);
     }
 
+    /**
+     * The MMTEL feature tags we add to the REGISTER Contact.
+     *
+     * <p>AOSP does not hardcode these. {@code RegContact.cpp} builds the
+     * REGISTER Contact by iterating {@code
+     * piServiceConfig->GetFeatureTags()}, so which tags appear -- if any
+     * -- is carrier configuration, and a carrier that lists none gets
+     * none. We sent this string to every carrier unconditionally.
+     */
+    static final String REG_CONTACT_TAGS =
+            ";+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\";audio";
+
+    private static volatile boolean sRegContactTags = true;
+
+    /**
+     * Whether to advertise the MMTEL feature tags in the REGISTER Contact.
+     *
+     * <p>Off for China Mobile: their S-CSCF answers an otherwise correct
+     * authenticated REGISTER with 404 and {@code Warning: 399 ...
+     * "Server Internal Error"}, on a subscription that registers fine on a
+     * stock handset, and these tags are the most substantial thing we send
+     * that AOSP would only send if the carrier asked for it. The
+     * {@code +sip.instance} is NOT covered by this: it is required of the
+     * UE and identifies the binding.
+     */
+    static void setRegisterContactTags(boolean on) {
+        sRegContactTags = on;
+    }
+
+    static boolean registerContactTags() {
+        return sRegContactTags;
+    }
+
+    /**
+     * The header NAMES of a SIP message, in order, for the trace.
+     *
+     * <p>Names only, never values: a header name says what shape we sent,
+     * which is what a "Server Internal Error" from a core needs, while the
+     * values carry the subscriber's identities, the AKA response and the
+     * IPsec SPIs. A repeated name is counted rather than repeated.
+     *
+     * <p>This exists because the CMCC 404 could only be reasoned about
+     * from the source, which tells you what the code CAN send, not what
+     * this build on this handset DID send.
+     */
+    static String headerShape(String msg) {
+        if (msg == null || msg.isEmpty()) {
+            return "none";
+        }
+        java.util.LinkedHashMap<String, Integer> seen =
+                new java.util.LinkedHashMap<>();
+        int i = msg.indexOf("\r\n");
+        if (i < 0) {
+            return "none";
+        }
+        for (String line : msg.substring(i + 2).split("\r\n", -1)) {
+            if (line.isEmpty()) {
+                break;                      /* end of headers */
+            }
+            if (line.charAt(0) == ' ' || line.charAt(0) == '\t') {
+                continue;                   /* folded continuation */
+            }
+            int c = line.indexOf(':');
+            if (c <= 0) {
+                continue;
+            }
+            String name = line.substring(0, c).trim();
+            Integer had = seen.get(name);
+            seen.put(name, had == null ? 1 : had + 1);
+        }
+        StringBuilder b = new StringBuilder();
+        for (java.util.Map.Entry<String, Integer> e : seen.entrySet()) {
+            if (b.length() > 0) {
+                b.append(',');
+            }
+            b.append(e.getKey());
+            if (e.getValue() > 1) {
+                b.append('x').append(e.getValue());
+            }
+        }
+        return b.length() == 0 ? "none" : b.toString();
+    }
+
     static String imeiInstance(String imei) {
         StringBuilder digits = new StringBuilder();
         if (imei != null) {
@@ -203,10 +286,24 @@ final class JoanSipBuilder {
             }
         }
         if (digits.length() >= 14) {
-            char last = digits.length() > 14 ? digits.charAt(14) : '0';
+            /* TS 23.003 13.8 / RFC 7254: tac(8) "-" snr(6) "-" spare(1),
+             * and the spare digit is a literal 0 -- NOT the IMEI's check
+             * digit. AOSP's SipUrnHelper.cpp appends '0' unconditionally
+             * and every one of its test vectors ends "-0".
+             *
+             * We used to put digit 15, the check digit, here. T-Mobile
+             * accepted it, which proves only that T-Mobile is lenient: a
+             * core that validates the instance-id against the IMEI it
+             * learned at attach sees a URN that does not match. */
             return digits.substring(0, 8) + "-" + digits.substring(8, 14)
-                    + "-" + last;
+                    + "-0";
         }
+        /* No usable IMEI. AOSP falls back to a named urn:uuid: here; we do
+         * not, because the instance-id must be STABLE -- it is how the
+         * network and our own reg-event matching identify this binding --
+         * and there is no stable UUID source here that survives a
+         * reinstall. This device always has an IMEI; the zeros form is a
+         * visible placeholder rather than a plausible-looking wrong one. */
         return "00000000-000000-0";
     }
 
@@ -508,8 +605,9 @@ final class JoanSipBuilder {
                 .append(contactHost).append(':').append(id.contactPort)
                 .append(">;+sip.instance=\"<urn:gsma:imei:")
                 .append(imeiInstance(id.imei))
-                .append(">\";+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\""
-                        + ";audio\r\n");
+                .append(">\"")
+                .append(sRegContactTags ? REG_CONTACT_TAGS : "")
+                .append("\r\n");
         a.append("Expires: 600000\r\n");
         a.append("Allow: ").append(ALLOW).append("\r\n");
         a.append("Supported: path, sec-agree\r\n");

@@ -698,7 +698,13 @@ final class JoanAppRegister {
                         || JoanSipBuilder.preferTcp(realm, reg2Udp.length(),
                         n.mtu, ipv6Reg2);
                 sb.append("reg2len=").append(reg2Udp.length())
-                        .append(" reg2_mtu=").append(n.mtu).append(' ');
+                        .append(" reg2_mtu=").append(n.mtu)
+                        .append(" reg2_hdrs=").append(
+                                JoanSipBuilder.headerShape(reg2Udp))
+                        .append(" reg_tags=").append(
+                                JoanSipBuilder.registerContactTags()
+                                        ? "mmtel" : "none")
+                        .append(' ');
                 if (!tcpReg2) {
                     sb.append("reg2send=").append(mine.portC).append("->")
                             .append(pcscfSec.portS).append(" tpt=udp ");
