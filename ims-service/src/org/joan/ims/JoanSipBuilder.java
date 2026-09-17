@@ -446,7 +446,7 @@ final class JoanSipBuilder {
      * select TCP under GLOBAL 4096.
      */
     static boolean preferProtectedTcp(String realm, int messageLen) {
-        int criterion = tcpCriterionFor(realm);
+        int criterion = tcpCriterionFor(realm, false);
         return criterion > 0 && messageLen > criterion;
     }
 
@@ -476,7 +476,7 @@ final class JoanSipBuilder {
      */
     static boolean preferTcp(String realm, int messageLen, int mtu,
                              boolean ipv6) {
-        int criterion = tcpCriterionFor(realm);
+        int criterion = tcpCriterionFor(realm, ipv6);
         if (criterion <= 0) {
             return false;
         }
@@ -517,9 +517,45 @@ final class JoanSipBuilder {
      * profile lives in an asset that needs a Context.
      */
     static void setCarrierTcpCriterion(int mcc, int mnc, int criterion) {
+        setCarrierTransport(mcc, mnc, criterion, 0, 0);
+    }
+
+    /* Per-transport-family criteria. 0 means "no per-family value, use the
+     * common one", which is how the stock configuration spells it. */
+    private static volatile int sProfileCritV4;
+    private static volatile int sProfileCritV6;
+
+    /**
+     * Adopt a carrier's transport criteria: the common one plus the
+     * per-family overrides. 108 of the 136 profiles carry an IPv6-specific
+     * value of 1080 that joan previously had no way to use.
+     */
+    static void setCarrierTransport(int mcc, int mnc, int criterion,
+                                    int critV4, int critV6) {
         sProfileMcc = mcc;
         sProfileMnc = mnc;
         sProfileCriterion = criterion;
+        sProfileCritV4 = critV4;
+        sProfileCritV6 = critV6;
+    }
+
+    /* The carrier's REGISTER Expires. 0 = use ours. */
+    private static volatile int sProfileRegExpires;
+
+    /**
+     * Adopt a carrier's {@code reg_expiration}.
+     *
+     * <p>600000 for most, but 43 of 136 profiles ask for 3600 or 7200.
+     * Asking for an expiry a carrier does not grant is not fatal -- the
+     * 200 OK carries what it actually gave -- but it is one more way our
+     * REGISTER differs from what the network expects to see.
+     */
+    static void setCarrierRegisterExpires(int seconds) {
+        sProfileRegExpires = seconds > 0 ? seconds : 0;
+    }
+
+    static int registerExpires() {
+        return sProfileRegExpires > 0 ? sProfileRegExpires : 600000;
     }
 
     /** CMCC's MNCs. China Mobile is not one PLMN. */
@@ -528,7 +564,7 @@ final class JoanSipBuilder {
                 || mnc == 7 || mnc == 8);
     }
 
-    private static int tcpCriterionFor(String realm) {
+    private static int tcpCriterionFor(String realm, boolean ipv6) {
         int mcc = plmnOf(realm);
         int mnc = mncOf(realm);
         if (mcc == -1) {
@@ -543,7 +579,10 @@ final class JoanSipBuilder {
         }
         if (sProfileCriterion >= 0 && mcc == sProfileMcc
                 && mnc == sProfileMnc) {
-            return sProfileCriterion;
+            /* A per-family value wins over the common one; 0 is how the
+             * stock configuration spells "no per-family value". */
+            int perFamily = ipv6 ? sProfileCritV6 : sProfileCritV4;
+            return perFamily > 0 ? perFamily : sProfileCriterion;
         }
         if (isCmccPlmn(mcc, mnc)) {
             /* CMCC common_tcp_criterion_len. Was mnc==0 only, which gave
@@ -721,7 +760,7 @@ final class JoanSipBuilder {
                 .append(">\"")
                 .append(sRegContactTags ? REG_CONTACT_TAGS : "")
                 .append("\r\n");
-        a.append("Expires: 600000\r\n");
+        a.append("Expires: ").append(registerExpires()).append("\r\n");
         a.append("Allow: ").append(ALLOW).append("\r\n");
         a.append("Supported: path, sec-agree\r\n");
         a.append("Require: sec-agree\r\n");

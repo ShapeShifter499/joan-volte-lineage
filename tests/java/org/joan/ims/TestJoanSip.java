@@ -731,6 +731,44 @@ public final class TestJoanSip {
                 "a non-3GPP realm never flips transport");
 
         JoanSipBuilder.setCarrierTcpCriterion(-1, -1, -1);
+
+        /* Per-family criteria. 108 of 136 profiles carry an IPv6 value of
+         * 1080; joan had no way to use one until now. */
+        JoanSipBuilder.setCarrierTransport(460, 2, 1300, 0, 1080);
+        check(JoanSipBuilder.preferTcp(cmcc2, 1100, 1500, true),
+                "the IPv6 per-family criterion is used over the common one");
+        check(!JoanSipBuilder.preferTcp(cmcc2, 1100, 1500, false),
+                "and IPv4 still uses the common one");
+        JoanSipBuilder.setCarrierTransport(460, 2, 1300, 900, 0);
+        check(JoanSipBuilder.preferTcp(cmcc2, 1000, 1500, false),
+                "an IPv4 per-family criterion is used for IPv4");
+        /* v6 is 0 here, so IPv6 must fall back to the common 1300:
+         * above it flips, below it does not. */
+        check(JoanSipBuilder.preferTcp(cmcc2, 1400, 1500, true),
+                "IPv6 falls back to the common value when v6 is 0");
+        check(!JoanSipBuilder.preferTcp(cmcc2, 1000, 1500, true),
+                "and that fallback is a real threshold, not always-true");
+        JoanSipBuilder.setCarrierTransport(-1, -1, -1, 0, 0);
+
+        /* REGISTER Expires. Both carriers joan can test want 600000, so
+         * this must not change them; 43 of 136 profiles want otherwise. */
+        JoanSipBuilder.Id id2 = new JoanSipBuilder.Id(
+                "user@ims.example.net", "sip:+15555550100@ims.example.net",
+                "ims.example.net", "2001:db8::2", 25000, 26000,
+                "123456789012345");
+        JoanSipBuilder.Params mine2 = new JoanSipBuilder.Params(
+                1111, 2222, 25000, 26000);
+        JoanSipBuilder.Txn txn2 = new JoanSipBuilder.Txn(mine2,
+                new java.security.SecureRandom());
+        JoanSipBuilder.setCarrierRegisterExpires(0);
+        check(JoanSipBuilder.buildRegister(id2, txn2, 1, null, null)
+                        .contains("Expires: 600000"),
+                "no carrier value keeps joan's 600000");
+        JoanSipBuilder.setCarrierRegisterExpires(3600);
+        check(JoanSipBuilder.buildRegister(id2, txn2, 1, null, null)
+                        .contains("Expires: 3600"),
+                "a carrier asking for 3600 gets 3600");
+        JoanSipBuilder.setCarrierRegisterExpires(0);
     }
 
     private static void testInvite() {

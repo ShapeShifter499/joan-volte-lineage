@@ -35,6 +35,11 @@ public final class JoanCarrierProfile {
      * profile did not carry one.
      */
     public final int tcpCriterionLen;
+    /** Per-transport-family criteria; 0 means "use the common one". */
+    public final int tcpCriterionV4;
+    public final int tcpCriterionV6;
+    /** The carrier's REGISTER Expires, seconds; 0 if not carried. */
+    public final int regExpiration;
     public final String srcKey;
 
     private static volatile JoanCarrierProfile sCached;
@@ -44,7 +49,9 @@ public final class JoanCarrierProfile {
                                boolean confSub, boolean confSubInDialog,
                                int maxSessions, int cwType,
                                boolean use180Rpr, int offerResCode,
-                               int tcpCriterionLen, String srcKey) {
+                               int tcpCriterionLen, int tcpCriterionV4,
+                               int tcpCriterionV6, int regExpiration,
+                               String srcKey) {
         this.confUri = confUri;
         this.referSub = referSub;
         this.confSub = confSub;
@@ -54,6 +61,9 @@ public final class JoanCarrierProfile {
         this.use180Rpr = use180Rpr;
         this.offerResCode = offerResCode;
         this.tcpCriterionLen = tcpCriterionLen;
+        this.tcpCriterionV4 = tcpCriterionV4;
+        this.tcpCriterionV6 = tcpCriterionV6;
+        this.regExpiration = regExpiration;
         this.srcKey = srcKey;
     }
 
@@ -63,7 +73,7 @@ public final class JoanCarrierProfile {
                 "sip:mmtel@conf-factory.ims.mnc%s.mcc%s.3gppnetwork.org",
                 pad3(mnc), mcc);
         return new JoanCarrierProfile(factory, true, true, false,
-                2, 1, true, 183, -1, "3gpp-default");
+                2, 1, true, 183, -1, 0, 0, 0, "3gpp-default");
     }
 
     private static String pad3(String mnc) {
@@ -174,6 +184,9 @@ public final class JoanCarrierProfile {
                         o.optBoolean("use_180_rpr", true),
                         o.optInt("offer_res_code", 183),
                         o.optInt("tcp_criterion_len", -1),
+                        o.optInt("reg_tcp_criterion_v4", 0),
+                        o.optInt("reg_tcp_criterion_v6", 0),
+                        o.optInt("reg_expiration", 0),
                         key);
             }
         } catch (Throwable t) {

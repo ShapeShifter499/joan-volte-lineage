@@ -501,12 +501,19 @@ final class JoanDriver {
                         JoanCarrierProfile.forNetwork(app, mcc, mnc);
                 if (cp != null && cp.tcpCriterionLen >= 0) {
                     try {
-                        JoanSipBuilder.setCarrierTcpCriterion(
+                        JoanSipBuilder.setCarrierTransport(
                                 Integer.parseInt(mcc),
                                 Integer.parseInt(mnc),
-                                cp.tcpCriterionLen);
+                                cp.tcpCriterionLen,
+                                cp.tcpCriterionV4,
+                                cp.tcpCriterionV6);
+                        JoanSipBuilder.setCarrierRegisterExpires(
+                                cp.regExpiration);
                         String cs = mcc + "/" + mnc + " criterion="
                                 + cp.tcpCriterionLen
+                                + "/v4=" + cp.tcpCriterionV4
+                                + "/v6=" + cp.tcpCriterionV6
+                                + " expires=" + JoanSipBuilder.registerExpires()
                                 + " src=" + cp.srcKey;
                         if (!cs.equals(sCarrierSummary)) {
                             sCarrierSummary = cs;
