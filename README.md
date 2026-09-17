@@ -28,9 +28,11 @@ loopback control socket.
 > Two things the zip *cannot* do, which a ROM build can, so they are the
 > reason to prefer the source:
 >
-> - **The AGC declaration in `audio_effects.xml`.** Measured worth about
->   +7 dB of uplink speech level. `/vendor` and `/odm` are both full on
->   this device and refuse the write, so the zip skips it and says so.
+> - **The AGC declaration in `audio_effects.xml`.** joan ships
+>   `libaudiopreprocessing.so` but never declares it, so the uplink runs
+>   unconditioned. How much declaring it helps is not established -- an
+>   earlier +7 dB measurement was withdrawn. `/vendor` and `/odm` are both
+>   full on this device and refuse the write, so the zip skips it and says so.
 >   In a device tree it is two lines and every nightly carries it.
 > - **`config_device_volte_available`.** The zip ships it as an RRO
 >   because it has no other choice; a ROM build sets it in the device
@@ -67,13 +69,16 @@ loopback control socket.
 > Caller ID is the asserted number; Dialer can still overlay a matching
 > contact.
 
-## Current tester build: v0.4.0-alpha25
+## Current tester build: v0.4.0-alpha26
 
-`v0.4.0-alpha25` (versionCode 33) is the current tester zip. It is a
-prerelease: offline suites passed (474 host checks, 241 UA checks); it
+`v0.4.0-alpha26` (versionCode 34) is the current tester zip. It is a
+prerelease: offline suites passed (543 host checks, 260 UA checks); it
 is **not** a live-carrier qualifier. Sideload
 `joan-volte-recovery.zip` from the GitHub release, reboot, then confirm
-the `build` row below reads `0.4.0-alpha25 (33)`.
+the `build` row below reads `0.4.0-alpha26 (34)`.
+
+Unlike alpha25, the headline changes here are on the **receive** path
+and were exercised on live calls in both directions before release.
 
 **If you are testing CMCC (46002): this build does not fix the
 `reg2=404`, but it is worth flashing for what it will tell us.**
@@ -108,6 +113,48 @@ failing the new thing:
    (over 15 minutes) for the session-timer refresh;
 3. then check the uplink level in the trace.
 
+### New in alpha26
+
+All of this is receive-path work, and the trigger was a measurement. The
+`loss=0% jitter=0` this stack had been printing for months is the
+**peer's** report about **our uplink** -- not our own reception. Once we
+started computing our own RFC 3550 statistics, the downlink turned out to
+have been lossy and jittery on nearly every call: interarrival jitter
+174--229 ticks (about 11--14 ms), with lost packets throughout. It had
+simply never been measured.
+
+- **An adaptive jitter buffer**, with its constants taken from AOSP's
+  `JitterNetworkAnalyser` rather than invented. It is bounded at
+  `depth + SLACK`, so it cannot accumulate latency it never gives back --
+  an earlier version sat on 180 ms permanently, because an
+  offer-one/play-one loop can never drain a fill backlog.
+- **RTCP reception reports (RFC 3550).** Every SR now carries a real
+  report block: fraction lost, cumulative loss, interarrival jitter,
+  extended highest sequence. The network can finally see what we receive,
+  which is what lets it adapt the bearer. Before this, every SR we sent
+  had RC=0.
+- **Packet-loss concealment.** A gap is handed to the AMR decoder as an
+  FT=14 `SPEECH_LOST` frame so the codec conceals it, rather than writing
+  nothing and leaving a hole in the audio. This is what AOSP's ImsMedia
+  does -- `IAudioPlayerNode` hands the gap to the codec and does not
+  synthesise audio itself. Verified on a live call: `concealed=3` against
+  `lost=4`, with no decoder rejection.
+- **Inbound `telephone-event` is no longer decoded as speech.** DTMF from
+  the far end was being fed to the AMR decoder as though it were audio.
+- **Our own registration binding is matched by `+sip.instance`**, not by
+  address, so a reg-event NOTIFY listing several contacts is read
+  correctly.
+- **The AGC declaration is no longer in the zip at all**, and the
+  installer no longer touches `/vendor`. An earlier version could abort an
+  entire flash trying to mount it. See [`upstream/`](upstream/README.md)
+  to re-enable AGC in a ROM build.
+
+New trace fields on `media dl stopped`: `rx{depth= queued= jitter= lost=
+reordered= late= trimmed=}` and `concealed=`. Note that `late=` and
+`trimmed=` are different things -- a packet that arrived too late to be
+played, versus one dropped to hold the buffer's latency ceiling. They
+used to be conflated in a single counter.
+
 ### New in alpha25
 
 - **DTMF** as RFC 4733 telephone-events, negotiated at the chosen
@@ -122,8 +169,9 @@ failing the new thing:
   bearer from what we asked for rather than its own default.
 - **The AGC declaration is NOT in this zip.** joan ships
   libaudiopreprocessing.so but never declares it, so the uplink runs
-  unconditioned -- measured about 16 dB below the downlink, and worth
-  roughly +7 dB of speech level when fixed.
+  unconditioned -- measured about 16 dB below the downlink. How much
+  declaring it actually helps is **not** established; an earlier +7 dB
+  claim was withdrawn (see below).
 
   It cannot be delivered by a flashable zip: `/vendor` on this device
   has 335 free blocks and refuses the write, which is exactly why
@@ -530,6 +578,41 @@ so far been exercised on one live IMS core.
 - **SMS / MMS over IMS.** Not implemented and no longer advertised, so
   the core keeps delivering SMS over CS/SGs, which works and owes nothing
   to this app. MMS rides the data APN and is likewise unaffected.
+- **Visual voicemail.** Not provided by this app, and investigated on
+  2026-09-16 because activation fails on T-Mobile (310-260) with
+  "Can't activate visual voicemail". **It is not caused by this stack.**
+  The AOSP Dialer sends its own `//VVM Activate` SMS to the carrier's
+  VVM shortcode and waits for a STATUS SMS; when none arrives before the
+  timeout it writes `configuration_state = 4`
+  (`CONFIGURATION_STATE_FAILED`) and shows that banner, which is AOSP's
+  scripted advice to call Customer Service. On the handset here, both
+  `data_channel_state` and `notification_channel_state` read `0` (OK) --
+  only the activation step failed.
+
+  Everything the ROM needs is present and correct: the carrier config
+  carries the full CVVM block (`vvm_type_cvvm`, the shortcode, port,
+  `//VVM` prefix), LineageOS's Dialer ships
+  `com.android.voicemail.impl.OmtpService`, it is both the default and
+  the system dialer, and the carrier's own VVM app is not installed to
+  shadow it. Inbound SMS works. Crucially, this stack never advertises
+  `+g.3gpp.smsip` -- only `+g.3gpp.icsi-ref=...mmtel` -- so it does not
+  ask the network to route SMS over IMS and cannot be swallowing the
+  reply. Dial-in voicemail and the MWI notification are unaffected.
+
+  To check it on your own handset, read the row the Dialer persists:
+
+  ```sh
+  adb root
+  adb shell sqlite3 -readonly \
+    /data/user/0/com.android.providers.contacts/databases/calllog.db \
+    '.mode line' 'select * from voicemail_status;'
+  ```
+
+  One thing remains unverified here: whether **outbound** SMS works on
+  this handset at all. The message database holds 28 received messages
+  and no sent ones, which is equally consistent with "never texted from
+  this phone". If your outbound SMS works and VVM still fails this way,
+  the activation is the carrier declining to provision the line.
 - **Conference merge.** Implemented as a network-hosted focus INVITE +
   REFER / Replaces flow and offline-tested. Not live-carrier qualified.
   Do not treat Dialer merge as proven on your network until you try it.
