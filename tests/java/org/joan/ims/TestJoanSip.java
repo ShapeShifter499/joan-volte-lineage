@@ -26,6 +26,7 @@ public final class TestJoanSip {
         testSessionBandwidth();
         testRegInfo();
         testJitterBuffer();
+        testCarrierCodecs();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -484,6 +485,90 @@ public final class TestJoanSip {
                 "TMUS never leaves UDP even on IPv6/small MTU");
         check(!JoanSipBuilder.preferTcp(null, 1630, 0, true),
                 "non-3GPP realm never flips REG1 to TCP");
+    }
+
+    /**
+     * The carrier's own codec offer: payload numbers, one entry per
+     * framing, and mode-set.
+     */
+    private static void testCarrierCodecs() {
+        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                "user@ims.example.net", "sip:+15555550100@ims.example.net",
+                "ims.example.net", "2001:db8::2", 25000, 26000,
+                "123456789012345");
+
+        /* Exactly what T-Mobile 310-260 publishes: each codec twice, the
+         * bandwidth-efficient entry first, telephone-event on 101/102. */
+        java.util.List<JoanSipBuilder.Capability> tmo =
+                new java.util.ArrayList<>();
+        tmo.add(JoanSipBuilder.Capability.amr("AMR-WB", 16000, 97, false, null));
+        tmo.add(JoanSipBuilder.Capability.amr("AMR-WB", 16000, 98, true, null));
+        tmo.add(JoanSipBuilder.Capability.amr("AMR", 8000, 99, false, null));
+        tmo.add(JoanSipBuilder.Capability.amr("AMR", 8000, 100, true, null));
+        JoanSipBuilder.restrictProfile(
+                java.util.Arrays.asList("AMR-WB", "AMR"));
+        JoanSipBuilder.applyCarrierCodecs(tmo, 101, 102);
+
+        String inv = JoanSipBuilder.buildInvite(id, new JoanSipBuilder.Dialog(),
+                "tel:+15555550999", "<sip:[2001:db8::1]:5060;lr>",
+                "ipsec-3gpp;alg=hmac-sha-1-96", 40000, "3GPP-E-UTRAN-FDD");
+
+        check(inv.contains("a=rtpmap:97 AMR-WB/16000/1"),
+                "carrier AMR-WB payload type is offered");
+        check(inv.contains("a=fmtp:97 octet-align=0;mode-change-capability=2"),
+                "bandwidth-efficient entry says octet-align=0");
+        check(inv.contains("a=fmtp:98 octet-align=1;mode-change-capability=2"),
+                "octet-aligned entry says octet-align=1");
+        check(inv.contains("a=rtpmap:99 AMR/8000/1"),
+                "carrier AMR-NB payload type is offered");
+        check(inv.contains("a=rtpmap:101 telephone-event/16000"),
+                "carrier wideband telephone-event payload type");
+        check(inv.contains("a=rtpmap:102 telephone-event/8000"),
+                "carrier narrowband telephone-event payload type");
+        /* The whole point: the network gets to choose the framing. */
+        check(inv.contains("octet-align=0") && inv.contains("octet-align=1"),
+                "both framings offered, so a BE network need not fall to PCMU");
+        /* PCMU is never in carrier config and must still be the floor. */
+        check(inv.contains("a=rtpmap:0 PCMU/8000"),
+                "PCMU floor survives a carrier codec list");
+
+        /* A mode-set, which T-Mobile does not set but others do. */
+        java.util.List<JoanSipBuilder.Capability> ms =
+                new java.util.ArrayList<>();
+        ms.add(JoanSipBuilder.Capability.amr("AMR-WB", 16000, 96, true,
+                new int[] {0, 1, 2}));
+        JoanSipBuilder.applyCarrierCodecs(ms, 0, 0);
+        String inv2 = JoanSipBuilder.buildInvite(id, new JoanSipBuilder.Dialog(),
+                "tel:+15555550999", "<sip:[2001:db8::1]:5060;lr>",
+                "ipsec-3gpp;alg=hmac-sha-1-96", 40000, "3GPP-E-UTRAN-FDD");
+        check(inv2.contains("mode-set=0,1,2"), "carrier mode-set is offered");
+        check(!inv2.contains("a=rtpmap:99 "),
+                "a replaced carrier list does not leak the previous one");
+        /* teWbPt=0 means "carrier said nothing"; keep the defaults. */
+        check(inv2.contains("a=rtpmap:100 telephone-event/16000"),
+                "a zero telephone-event payload type keeps the default");
+
+        /* The probe still wins: a ROM without AMR-WB must not offer it
+         * however loudly carrier config asks. */
+        JoanSipBuilder.restrictProfile(java.util.Arrays.asList("AMR"));
+        JoanSipBuilder.applyCarrierCodecs(tmo, 101, 102);
+        String inv3 = JoanSipBuilder.buildInvite(id, new JoanSipBuilder.Dialog(),
+                "tel:+15555550999", "<sip:[2001:db8::1]:5060;lr>",
+                "ipsec-3gpp;alg=hmac-sha-1-96", 40000, "3GPP-E-UTRAN-FDD");
+        check(!inv3.contains("AMR-WB"),
+                "probe still vetoes a codec the ROM cannot run");
+        check(inv3.contains("a=rtpmap:99 AMR/8000/1"),
+                "and keeps the one it can");
+
+        /* Back to the built-in table for every later test. */
+        JoanSipBuilder.applyCarrierCodecs(null, 0, 0);
+        JoanSipBuilder.restrictProfile(
+                java.util.Arrays.asList("AMR-WB", "AMR"));
+        String inv4 = JoanSipBuilder.buildInvite(id, new JoanSipBuilder.Dialog(),
+                "tel:+15555550999", "<sip:[2001:db8::1]:5060;lr>",
+                "ipsec-3gpp;alg=hmac-sha-1-96", 40000, "3GPP-E-UTRAN-FDD");
+        check(inv4.contains("a=rtpmap:96 AMR-WB/16000/1"),
+                "null carrier list restores the built-in profile");
     }
 
     private static void testInvite() {

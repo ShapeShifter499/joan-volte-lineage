@@ -1330,6 +1330,32 @@ final class JoanSipBuilder {
             this.needsOctetAlign = needsOctetAlign;
         }
 
+        /**
+         * An AMR-family capability with carrier-chosen framing and
+         * mode-set, rendering both into the fmtp we will offer.
+         *
+         * <p>octet-align is always written, including {@code =0}. It
+         * defaults to 0 when absent, so writing it costs one parameter and
+         * removes any question of what a silent offer meant -- which is
+         * the ambiguity that had AMR entries skipped and PCMU taken.
+         */
+        static Capability amr(String name, int rate, int pt,
+                              boolean octetAligned, int[] modeSet) {
+            StringBuilder f = new StringBuilder("octet-align=")
+                    .append(octetAligned ? '1' : '0');
+            if (modeSet != null && modeSet.length > 0) {
+                f.append(";mode-set=");
+                for (int i = 0; i < modeSet.length; i++) {
+                    if (i > 0) {
+                        f.append(',');
+                    }
+                    f.append(modeSet[i]);
+                }
+            }
+            f.append(";mode-change-capability=2");
+            return new Capability(name, rate, pt, f.toString(), true);
+        }
+
         /** TRUE for AMR-WB, FALSE for AMR-NB, null for anything else. */
         Boolean amrWideband() {
             if ("AMR-WB".equalsIgnoreCase(name)) {
@@ -1371,8 +1397,80 @@ final class JoanSipBuilder {
      */
     private static volatile java.util.List<Capability> sProfile = CAPABILITIES;
 
+    /**
+     * The carrier's own codec list, when it publishes one, or null.
+     *
+     * <p>Kept apart from the MediaCodec probe because the two answer
+     * different questions -- what the network wants offered, and what this
+     * ROM can actually run -- and the offer needs both. Folding them into
+     * one field meant whichever was applied last won, and carrier config
+     * is rebuilt at times unrelated to when the codecs are probed.
+     */
+    private static volatile java.util.List<Capability> sCarrier;
+    /** Encoding names the device can run; null until probed. */
+    private static volatile java.util.Set<String> sAvailable;
+
     static java.util.List<Capability> profile() {
         return sProfile;
+    }
+
+    /**
+     * Compose the offer from the carrier's list (or ours) and the probe.
+     *
+     * <p>PCMU is appended rather than required of the carrier: carrier
+     * config describes the VoLTE codecs, never G.711, and a profile with
+     * nothing in it is a UA that can neither call nor answer.
+     */
+    private static void recomputeProfile() {
+        java.util.List<Capability> base = sCarrier;
+        if (base == null) {
+            base = CAPABILITIES;
+        }
+        java.util.Set<String> avail = sAvailable;
+        java.util.List<Capability> keep = new java.util.ArrayList<>();
+        boolean havePcmu = false;
+        for (Capability c : base) {
+            if (c.amrWideband() == null) {
+                keep.add(c);
+                havePcmu |= "PCMU".equalsIgnoreCase(c.name);
+                continue;
+            }
+            if (avail == null || avail.contains(c.name)) {
+                keep.add(c);
+            }
+        }
+        if (!havePcmu) {
+            for (Capability c : CAPABILITIES) {
+                if ("PCMU".equalsIgnoreCase(c.name)) {
+                    keep.add(c);
+                    break;
+                }
+            }
+        }
+        sProfile = java.util.Collections.unmodifiableList(keep);
+    }
+
+    /**
+     * Adopt the carrier's audio codec offer: payload numbers, framing and
+     * mode-set per entry, and the telephone-event payload types.
+     *
+     * <p>Pass null to fall back to {@link #CAPABILITIES}. The probe still
+     * applies on top, so a carrier asking for a codec this ROM cannot open
+     * is not offered it.
+     */
+    static void applyCarrierCodecs(java.util.List<Capability> carrier,
+                                   int teWbPt, int teNbPt) {
+        sCarrier = (carrier == null || carrier.isEmpty()) ? null
+                : java.util.Collections.unmodifiableList(
+                        new java.util.ArrayList<>(carrier));
+        /* Fall back to OUR defaults, not to whatever the last carrier
+         * asked for. These are carrier-scoped: a carrier that publishes
+         * codecs but no telephone-event types would otherwise inherit the
+         * previous carrier's numbers on a SIM swap, and nothing in the
+         * offer would show where they came from. */
+        sTeWbPt = teWbPt > 0 ? teWbPt : TE_PT_WB;
+        sTeNbPt = teNbPt > 0 ? teNbPt : TE_PT_NB;
+        recomputeProfile();
     }
 
     /**
@@ -1382,13 +1480,8 @@ final class JoanSipBuilder {
      * every capability would leave a UA that can neither call nor answer.
      */
     static void restrictProfile(java.util.Collection<String> availableNames) {
-        java.util.List<Capability> keep = new java.util.ArrayList<>();
-        for (Capability c : CAPABILITIES) {
-            if (c.amrWideband() == null || availableNames.contains(c.name)) {
-                keep.add(c);
-            }
-        }
-        sProfile = java.util.Collections.unmodifiableList(keep);
+        sAvailable = new java.util.HashSet<>(availableNames);
+        recomputeProfile();
     }
 
     /**
@@ -1586,6 +1679,12 @@ final class JoanSipBuilder {
     /** telephone-event payload types we offer, by clock rate. */
     static final int TE_PT_WB = 100;
     static final int TE_PT_NB = 101;
+
+    /* Live telephone-event payload types. Defaults above; a carrier that
+     * publishes its own (T-Mobile asks for 101/102) replaces them, because
+     * our defaults collide with codecs in that carrier's own map. */
+    private static volatile int sTeWbPt = TE_PT_WB;
+    private static volatile int sTeNbPt = TE_PT_NB;
     static final String TE_NAME = "telephone-event";
 
     /**
@@ -1652,16 +1751,16 @@ final class JoanSipBuilder {
             }
         }
         if (wb) {
-            m.append(' ').append(TE_PT_WB);
-            attrs.append("a=rtpmap:").append(TE_PT_WB).append(' ')
+            m.append(' ').append(sTeWbPt);
+            attrs.append("a=rtpmap:").append(sTeWbPt).append(' ')
                     .append(TE_NAME).append("/16000\r\n")
-                    .append("a=fmtp:").append(TE_PT_WB).append(" 0-15\r\n");
+                    .append("a=fmtp:").append(sTeWbPt).append(" 0-15\r\n");
         }
         if (nb) {
-            m.append(' ').append(TE_PT_NB);
-            attrs.append("a=rtpmap:").append(TE_PT_NB).append(' ')
+            m.append(' ').append(sTeNbPt);
+            attrs.append("a=rtpmap:").append(sTeNbPt).append(' ')
                     .append(TE_NAME).append("/8000\r\n")
-                    .append("a=fmtp:").append(TE_PT_NB).append(" 0-15\r\n");
+                    .append("a=fmtp:").append(sTeNbPt).append(" 0-15\r\n");
         }
         return m.append("\r\n").append(attrs).toString();
     }

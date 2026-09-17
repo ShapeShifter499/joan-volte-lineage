@@ -564,6 +564,12 @@ final class JoanDriver {
             sSeSummary = sum;
             JoanTrace.note("session timer config " + sum);
         }
+        /* Same pass, same reason: the carrier's codec offer arrives with
+         * the rest of carrier config, after the SIM settles. */
+        String codecs = JoanCodecConfig.apply(app, sub);
+        if (!codecs.isEmpty()) {
+            JoanTrace.note("codec offer " + codecs);
+        }
     }
 
     private static void ensureImsRequest(ConnectivityManager cm) {

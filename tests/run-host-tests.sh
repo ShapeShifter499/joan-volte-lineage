@@ -48,5 +48,10 @@ javac -cp "$SDK_JAR" -d "$GATE_OUT" \
     "$JAVA_SRC/JoanVolteCarrierGate.java" \
     "$JAVA_SRC/JoanImsVoiceConfig.java" \
     "$JAVA_SRC/JoanSessionTimer.java" \
+    "$JAVA_SRC/JoanCodecConfig.java" \
+    "$JAVA_SRC/JoanSipBuilder.java" \
+    "$JAVA_SRC/JoanSipCrypto.java" \
+    "$JAVA_SRC/JoanSecAgree.java" \
+    "$JAVA_SRC/JoanAmr.java" \
     "$JAVA_TEST/org/joan/ims/TestJoanVolteCarrierGate.java"
 exec java -cp "$GATE_OUT:$SDK_JAR" org.joan.ims.TestJoanVolteCarrierGate

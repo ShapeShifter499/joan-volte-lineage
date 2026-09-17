@@ -118,6 +118,7 @@ final class JoanVolteCarrierGate {
                      * would keep a call refreshing on an interval the
                      * carrier no longer asks for. */
                     JoanImsVoiceConfig.invalidate();
+                    JoanCodecConfig.invalidate();
                     try {
                         TelephonyManager tm0 = app.getSystemService(
                                 TelephonyManager.class);
