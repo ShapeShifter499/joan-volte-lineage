@@ -484,6 +484,56 @@ what an outgoing REGISTER claims. There is no unimplemented CMCC quirk
 left to find in this binary: the remaining evidence has to come from the
 wire.
 
+### CMCC's one IPsec override is SO_LINGER(0), and it explains the TCP failure
+
+`CMCCAoSRegistration::CreateIPSecHelper` builds a `CMCCAoSIPSecHelper`
+rather than the base helper, and that subclass overrides exactly one
+method. Decompiled, `CMCCAoSIPSecHelper::InitIPSec` does one thing:
+
+```c
+iVar2 = ...GetSlotId();
+plVar4 = SIPFactory::GetRTConfigHelper(iVar2);
+SIPRTConfig::SocketOption::SocketOption(aSStack_c8);
+local_c0 = 0;                          /* linger value zeroed */
+plVar4->SetConfig(3, aSStack_c8);
+```
+
+Config id 3 resolves against AOSP's `SipRtConfig.h` enum -- `CONFIG_I_BASE`
+0, `CONFIG_I_LOG_MASK` 1, `CONFIG_I_REUSEADDR` 2, **`CONFIG_I_LINGER` 3**.
+So China Mobile's entire IPsec specialisation is **`SO_LINGER` with a
+linger time of 0**: close the SIP socket with a TCP RST rather than a
+FIN, leaving no `TIME_WAIT` behind.
+
+**Why that matters, and why it is not a cosmetic tweak.** Under RFC 3329
+sec-agree both ends of the protected connection are fixed: the UE's
+`port_uc` and the P-CSCF's `port_ps` are negotiated once, in the
+Security-Client/Security-Server exchange, and cannot be varied. Every
+protected TCP connection therefore reuses the **exact same 4-tuple**. A
+previous connection still in `TIME_WAIT` makes the next `connect()`
+fail -- and `SO_REUSEADDR`, which joan already set, does not help: it
+permits *binding* over a `TIME_WAIT` socket, not completing a connection
+whose full 4-tuple is still held.
+
+That is `TcpFail.CONNECT`. Which is what the China Mobile field trace
+shows, immediately before the UDP fallback that draws the 404.
+
+**Adopted**, and deliberately wider than LG's scoping. LG puts it in a
+China Mobile subclass because that is the carrier whose network drove
+it; joan sets it on every protected TCP socket, because the fixed-4-tuple
+problem belongs to sec-agree rather than to any carrier, and a carrier
+joan cannot test is the worst possible place to put a scope. No
+configuration key anywhere supplies this -- it is a runtime socket option
+in the engine, not a carrier-config value -- so there is nothing to make
+switchable.
+
+**What this does and does not claim.** It explains the TCP connect
+failure mechanically. It does **not** explain the 404, which arrives on
+the UDP fallback afterwards. If the connect now succeeds, the protected
+REGISTER goes over TCP as China Mobile's own configuration asks, and the
+404 either follows it there or does not -- and either answer is worth
+more than the current trace, because it separates the transport failure
+from the registration failure for the first time.
+
 ### AOSP replaced the whole mechanism with configuration
 
 LG hardcodes these against an operator enum. AOSP turns the same

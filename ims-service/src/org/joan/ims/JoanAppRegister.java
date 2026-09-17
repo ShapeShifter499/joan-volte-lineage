@@ -1734,6 +1734,32 @@ final class JoanAppRegister {
             Socket sock = new Socket();
             try {
                 sock.setReuseAddress(true);
+                /* Close with RST instead of FIN, so this socket never
+                 * leaves a TIME_WAIT behind.
+                 *
+                 * SO_REUSEADDR above lets us BIND over a TIME_WAIT
+                 * socket, and that is not the problem here. Under
+                 * RFC 3329 sec-agree both ends of the protected
+                 * connection are fixed -- our port_uc and the P-CSCF's
+                 * port_ps are negotiated once and cannot be varied --
+                 * so every protected TCP connection reuses the exact
+                 * same 4-tuple. A previous one still in TIME_WAIT makes
+                 * the next connect() fail, which is a
+                 * TcpFail.CONNECT, which is what the China Mobile field
+                 * trace shows before it falls back to UDP.
+                 *
+                 * This is LG's own remedy, read out of its binary:
+                 * CMCCAoSIPSecHelper::InitIPSec does exactly one thing,
+                 * SetConfig(CONFIG_I_LINGER, option) with the linger
+                 * value zeroed -- id 3 in SipRtConfig.h's enum. LG scopes
+                 * it to China Mobile because that is the carrier whose
+                 * network drove it. joan applies it to every protected
+                 * TCP socket instead, because the fixed-4-tuple problem
+                 * belongs to sec-agree rather than to a carrier, and a
+                 * carrier joan cannot test is a bad place to put a
+                 * scope. No configuration key anywhere supplies this,
+                 * so there is nothing to make switchable. */
+                sock.setSoLinger(true, 0);
                 /* Bounded per-read slices so the deadline holds to ~2 s. */
                 sock.setSoTimeout(Math.max(1, Math.min(2000, timeoutMs)));
                 try {
