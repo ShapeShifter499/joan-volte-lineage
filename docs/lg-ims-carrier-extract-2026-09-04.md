@@ -202,6 +202,50 @@ next. Its assembly is dominated by TraceService calls with the real work
 behind vtable dispatch, so it needs Ghidra decompilation rather than
 objdump.
 
+### CMCCAoSRegistration::UpdateUserIdentities, decompiled (2026-09-16)
+
+Ghidra 11.4.3 headless, JDK 21 (11.4 will not run on the JDK 17 also
+installed here). The function branches on whether the card has an ISIM,
+and LG's own log line names the branch:
+
+```
+"[%s:%d] [%s] UpdateUserIdentities :: ISIM (%s)"     // "true" / "false"
+"[%s:%d] Do not update the IMPU (%s); ISIM supports"
+```
+
+In the **no-ISIM** branch it walks an `AStringArray` and writes up to
+eight entries into parameter slots `i + 0x3b`:
+
+```c
+if (((hasISIM & 1) == 0) && (count > 0)) {
+    do {
+        pAVar10 = AStringArray::GetElementAt(list, i);
+        plVar5->vtable[0x10](plVar5, i + 0x3b, str);   // CP_I_IMPU_0 + i
+        if (7 < i) break;
+    } while (i < count);
+}
+```
+
+`CP_I_IMPU_0` is in the string table, so the slots are IMPU_0..IMPU_7.
+
+**The negative result is the useful part.** The list comes from
+`AoSSubscriber::GetTemporaryIMPU(AStringArray&, bool)`, and that function
+calls `ImsIdentity::CreateTemporaryPublicUserId` and
+`CreateTemporaryPrivateUserId` -- the **standard TS 23.003 derivation,
+the same one joan already performs**. LG is not deriving a different or
+CMCC-specific identity. The override exists to populate the stack's
+internal IMPU slots for a USIM-only card, work an ISIM would otherwise
+do; it does not change what goes in To/From on the wire.
+
+So the "CMCC expects a different IMPU form" idea, which this function
+looked like it was going to support, does **not** hold up. Identity
+derivation is now confirmed identical between joan, AOSP ImsStack and
+LG's shipping binary. Attention for the 404 belongs elsewhere in REG2.
+
+Ghidra note: `-import` runs full analysis once (slow on this 18 MB
+binary); afterwards `-process <name> -noanalysis` reuses the project and
+returns in seconds, which is how the second function was read.
+
 ## Hardware still required
 
 CMCC SIM: `last_register` with `tpt=tcp` then `reg2=200`, or
