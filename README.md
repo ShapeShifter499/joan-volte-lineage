@@ -507,6 +507,31 @@ system`, and that is not something the zip can work around.
    recovery asks).
 3. Reboot to system.
 
+**The zip is unsigned, and recovery says so in two ways that both look
+like failure.** It prompts on the handset and you must accept the bypass
+there -- an `adb sideload` driven from a host will sit and wait for that
+tap, so this step cannot be fully remote. Afterwards
+`/data/cache/recovery/last_log` records `error: 21` and result `1` for
+the package even when the install succeeded completely; `21` is
+recovery's signature-verification code, not a report from our installer.
+Our installer's own verdict is the last line it prints on screen --
+`Done. Reboot system.`, or an `ERROR:` line naming the check that
+failed. That text goes to recovery's display and is **not** kept in
+`last_log` or `last_install`, so read it on the handset.
+
+**Check the install by the trace build row, not by `dumpsys`.** These
+files are written by recovery, whose clock is wrong, so they land with a
+2017 timestamp. That is older than PackageManager's package cache, which
+therefore may not invalidate: `dumpsys package org.joan.ims` can keep
+reporting the *previous* `versionName` indefinitely while the correct
+APK is installed and running. What is trustworthy:
+
+```sh
+adb shell 'grep -o "build=[^ ]* ([0-9]*)" \
+  /data/user_de/0/org.joan.ims/files/joan-trace.log | tail -1'
+adb shell md5sum /system/priv-app/JoanIms/JoanIms.apk   # vs the built apk
+```
+
 The zip installs:
 
 - `/system/priv-app/JoanIms/JoanIms.apk`
