@@ -304,6 +304,58 @@ Placeholder subscriber values are templates (`1234567890`), but their
 URI where T-Mobile's is `sip:`, matching `target_scheme=tel` and
 `number_format=local`.
 
+### CMCC deltas vs joan: complete status (2026-09-16)
+
+Everything LG configures differently for China Mobile, with what joan
+already does. The point of the table is that most of it is **already
+covered**, so the remaining rows are the short list worth testing.
+
+| LG CMCC setting | joan status |
+| --- | --- |
+| `common_tcp_criterion_len` 1300 | **done** -- implemented since alpha9 |
+| `reg_methods` / `allow_methods` include OPTIONS | **done** -- `ALLOW` carries OPTIONS and `JoanSipUa` answers it |
+| `session_st_refresher` local (UE refreshes) | **done** -- `REFRESHER_UAC` |
+| `tContactH` carries `+g.3gpp.icsi-ref` mmtel | **done** -- and alpha28's withholding of it was reverted |
+| `home_network_domain_name` empty (derive) | **done** -- we derive per TS 23.003 |
+| `authentication_max_count` 5 (vs TMO 3) | joan allows one AKA resync; not obviously a factor |
+| `bUse180RPR` 0, `session_sdp_non_rpr` false | joan answers PRACK but never requires 180rel |
+| `LGE_FEATURE_GRUU` 0, `MULTIPLE_REGISTRATION` 0 | joan advertises neither `gruu` nor `outbound`; **but sends `+sip.instance` unconditionally** |
+| `LGE_FEATURE_AUTH_SIP_DIGEST` 1 | **not implemented** -- joan does AKA only |
+| `ipsec_spi_3gpp` false, `ipsec_algs` 0x00070003 | unknown semantics; their 404 came back **over** the SA, so IPsec demonstrably works |
+| `target_scheme` tel, `number_format` local | affects INVITE targets, not REGISTER |
+| `aos_reg_0_features` 0x00000A04 | bits 9+11 beyond the decoder's vocabulary -- see below |
+
+**Feature bitmask decoding.** `AoSRegistration::FeatureToString()` is a
+trace helper that names only four bits:
+
+```
+bit 0  0x00000001  FEATURE_SUBSCRIPTION
+bit 1  0x00000002  FEATURE_IPSEC
+bit 2  0x00000004  FEATURE_TRM
+bit 3  0x00000008  FEATURE_TRM_BLOCK
+```
+
+So TMO `0x004` and CMCC `0xA04` both decode to `FEATURE_TRM`, and CMCC's
+extra bits 9 and 11 have no trace name. 61 sites in the binary bit-test
+those positions, too many to attribute without knowing which act on this
+field, so the semantics are **unresolved** and recorded as such rather
+than guessed.
+
+**`+sip.instance` is conditionally omitted, but not on GRUU.**
+`SetContactHeader` (0x7ebe00) contains a loop that skips a Contact
+parameter equal to `"+sip.instance"`. The guard resolves to
+`RegStateTracker::IsWithinTrustDomain`, not `IsGRUUConfigured` -- inside
+that block `*param_2 == false` already holds, so both branches of the
+GRUU test yield the same value. **LG's GRUU=0 for CMCC does not make it
+drop the instance-id.** Worth stating plainly because the config flag
+makes the opposite look obvious.
+
+**The one real capability gap is `LGE_FEATURE_AUTH_SIP_DIGEST`.** China
+Mobile is configured for SIP Digest where T-Mobile is not, and joan
+implements AKA only. The failing tester is challenged with `AKAv1-MD5`
+and answers it, so Digest is not what that network asked of them -- but
+it is the only row in this table naming something joan cannot do at all.
+
 ## Hardware still required
 
 CMCC SIM: `last_register` with `tpt=tcp` then `reg2=200`, or
