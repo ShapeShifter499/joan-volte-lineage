@@ -161,6 +161,47 @@ us998/` holds only `ath10k` Wi-Fi firmware, and the V300L Pie KDZ that
 the sections above were written from is no longer on disk. The H932
 image serves the same purpose: same stack, same `CMCCAoS*` classes.
 
+### What LG's CMCC registration class actually specialises (2026-09-16)
+
+90 `CMCCAoS*` symbols in `libims.lge.so`. The source path leaks from a
+trace string: `vendor/lge/apps/Ims/libims/imscore/Enabler/aos4/cmcc/
+registration/CMCCAoSRegistration.cpp`.
+
+`CMCCAoSRegistration` overrides, among others:
+
+```
+ProcessStartFailed_305          ProcessStartFailed_TxnTimeout
+RecoverPCSCF                    ProcessFlowRecoveryWithNewPCSCF
+ProcessDefaultFlowRecovery_Start/_Update
+UpdateUserIdentities            ProcessRegEvent_REJECTED
+IsRetryAfterValueFromPrevResponse
+```
+
+**The cluster is about proxy and flow recovery, not identity encoding.**
+In LG's view the CMCC quirk is where to send the REGISTER and what to do
+when a transaction dies, which is consistent with the other CMCC finding
+already recorded here (`pcscf_n=2`, only the first tried) and with the
+4000 ms `SetIPv6Delay`.
+
+**There is no CMCC 404 handler.** The only per-status overrides in
+`CMCCAoSRegistration` are 305 and TxnTimeout; `ProcessStartFailed_403_404`
+exists in the binary but belongs to **`INRJILAoSRegistration`** -- Reliance
+Jio, not China Mobile. Read carefully: the symbol is easy to mistake for a
+general one. So a 404 on CMCC REGISTER falls through to LG's generic
+handler, which suggests a correctly-formed REGISTER does not normally
+draw one there.
+
+**A real gap it exposes on our side:** LG needs a CMCC-specific
+`ProcessStartFailed_305` -- SIP 305 Use Proxy, on REGISTER. joan handles
+3xx only for INVITE (`JoanSipUa`); `JoanAppRegister` has no redirect
+handling at all. That is not the current 404 -- the tester's trace shows
+no 305 -- but it is a hole on exactly the network LG needed it for.
+
+`UpdateUserIdentities` is CMCC-overridden and is the one worth reading
+next. Its assembly is dominated by TraceService calls with the real work
+behind vtable dispatch, so it needs Ghidra decompilation rather than
+objdump.
+
 ## Hardware still required
 
 CMCC SIM: `last_register` with `tpt=tcp` then `reg2=200`, or
