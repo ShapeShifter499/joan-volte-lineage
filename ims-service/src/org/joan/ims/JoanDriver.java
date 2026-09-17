@@ -45,6 +45,10 @@ final class JoanDriver {
     /** Failed REGISTER backoff range. */
     private static final long REG_RETRY_MIN_MS = 60_000L;
     private static final long REG_RETRY_MAX_MS = 15 * 60_000L;
+    /* Ceiling on a network-supplied Retry-After. The header is honoured
+     * as given below this; the clamp only stops a malformed or hostile
+     * value from parking registration for a day. */
+    private static final long REG_RETRY_RETRY_AFTER_MAX_MS = 30 * 60_000L;
 
     private static String sLastState = "";
     /* The full REGISTER summary, surfaced by JoanStateProvider. The trace
@@ -275,11 +279,32 @@ final class JoanDriver {
                     logState("registration failed; one IP-version flip "
                             + "retry due (stock parity)");
                 }
-                logState("app REGISTER failed; backoff "
-                        + (sRegisterBackoffMs / 1000) + "s");
-                Thread.sleep(sRegisterBackoffMs);
-                sRegisterBackoffMs = Math.min(REG_RETRY_MAX_MS,
-                        sRegisterBackoffMs * 2);
+                /* A Retry-After on the rejection outranks our own
+                 * backoff. Both reference stacks treat it as the
+                 * governing delay -- AOSP's flow recovery branches on
+                 * it citing IR.92, LG's China Mobile override reads it
+                 * first and computes a wait only when it is absent --
+                 * and RFC 3261 10.3 asks the same. joan honoured it on
+                 * a 503 to an INVITE and nowhere else, so a network
+                 * that said "wait an hour" was retried in a minute,
+                 * which is how a client earns a refusal.
+                 *
+                 * The doubling is left alone on such a cycle: the
+                 * network named the interval, so there is nothing for
+                 * an exponential to discover. */
+                long asked = JoanAppRegister.retryAfterMs(sLastRegister);
+                long waitMs = sRegisterBackoffMs;
+                if (asked > 0L) {
+                    waitMs = Math.min(asked, REG_RETRY_RETRY_AFTER_MAX_MS);
+                    logState("app REGISTER failed; network asked for "
+                            + (waitMs / 1000) + "s");
+                } else {
+                    logState("app REGISTER failed; backoff "
+                            + (sRegisterBackoffMs / 1000) + "s");
+                    sRegisterBackoffMs = Math.min(REG_RETRY_MAX_MS,
+                            sRegisterBackoffMs * 2);
+                }
+                Thread.sleep(waitMs);
                 continue;
             } catch (InterruptedException ie) {
                 // A receiver/provider/service poke woke us after a user/radio

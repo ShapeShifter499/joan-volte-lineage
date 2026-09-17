@@ -470,10 +470,12 @@ that logs `UpdateUserIdentities :: ISIM (true|false)`. That is
 propagation *after* a successful registration -- the list it copies comes
 from the 200 OK -- so it cannot shape the REGISTER that earns the 200.
 
-**There is no CMCC 404 handling.** CMCC specialises 403, 423, 305 and
-transaction timeout. It does not specialise 404. A 404 on LG's own CMCC
-path takes the base class's default flow recovery, exactly as any other
-carrier's would.
+**There is no CMCC 404 handler by name.** CMCC specialises 403, 423,
+305 and transaction timeout, and there is no `ProcessStartFailed_404`.
+That is *not* the same as having no 404 behaviour: a 404 falls through
+to `ProcessDefaultFlowRecovery_Start`, which CMCC does override. See
+"CMCC's failure policy is Retry-After back-off" below, which corrects
+the conclusion originally drawn here.
 
 That is the closing argument on a long hypothesis class. joan's 404
 arrives on the protected REGISTER, after REG1 drew an `AKAv1-MD5`
@@ -533,6 +535,71 @@ REGISTER goes over TCP as China Mobile's own configuration asks, and the
 404 either follows it there or does not -- and either answer is worth
 more than the current trace, because it separates the transport failure
 from the registration failure for the first time.
+
+### CMCC's failure policy is Retry-After back-off, not P-CSCF rotation
+
+All thirteen remaining `CMCCAoSRegistration` overrides decompiled. Two
+of the addresses turned out to be shared thunks landing in neighbours
+(`VZWAoSRegistration::ProcessUpdateFailed_Others` and the *base*
+`AoSRegistration::ProcessUpdateFailed_423`), so they are not CMCC
+overrides at all. What the rest do:
+
+| override | behaviour |
+| --- | --- |
+| `ProcessStartFailed_423` | reads `AoSUtil::GetMinExpiresValue`, re-registers |
+| `ProcessStartFailed_305` / `ProcessUpdateFailed_305` | both call `ProcessFlowRecoveryWithNewPCSCF` |
+| `ProcessFlowRecoveryWithNewPCSCF` | `ClearPending` then `RecoverPCSCF` |
+| `ProcessStartFailed_TxnTimeout` | traces "no pcscf and don't retry registration" |
+| `ProcessDefaultFlowRecovery_Start` | fail count, Retry-After, timer, state |
+| `IsRetryAfterValueFromPrevResponse` | true when the **previous** response carried Retry-After > 0 |
+
+**This corrects an earlier claim in this document.** It said CMCC has no
+404 handling, on the grounds that there is no `ProcessStartFailed_404`.
+There is not -- but a 404 does not need one. It falls through
+`ProcessStartFailed_StatusCode` to `ProcessDefaultFlowRecovery_Start`,
+and **CMCC overrides that**. So China Mobile does have specific 404
+behaviour; it simply reaches it by the default path.
+
+What that override does, decompiled:
+
+```c
+IncreaseConsecutiveFailCount();
+retryAfter = AoSUtil::GetRetryAfterValue(response);
+if (retryAfter == 0) retryAfter = GetActualWaitTime();
+if (no registration)  StartTimer(100, retryAfter * 1000), state = 0;
+else                  StartTimer(101),                    state = 2;
+SetState(state);
+ReportStateChanged(3, 4);
+```
+
+**It never calls `TryNextPcscf()`.** AOSP's base flow recovery does.
+CMCC replaces P-CSCF rotation with a timed retry against the *same*
+P-CSCF, and reserves `RecoverPCSCF` / `ProcessFlowRecoveryWithNewPCSCF`
+exclusively for **305 Use Proxy** -- both 305 handlers call it and
+nothing else does. Read with `IsRetryAfterValueFromPrevResponse`, which
+carries a Retry-After forward from the previous response when the
+current one has none, China Mobile's entire registration-failure policy
+is Retry-After-driven back-off.
+
+**The gap that found.** joan parsed `Retry-After` on a 503 to an INVITE
+and **nowhere else** -- the registration path ignored the header
+completely, so a network that said "wait an hour" was retried in sixty
+seconds and then every doubling after that. Both reference stacks treat
+it as the governing delay (AOSP's
+`ProcessDefaultFlowRecovery_Start_WithRfcRule` branches on
+`nRetryAfter > 0`, citing IR.92), and RFC 3261 10.3 asks the same of a
+registrar's client. A UE that retries sooner than a network told it to
+is the kind of client a network starts refusing.
+
+Now honoured: the rejection's Retry-After outranks joan's own backoff,
+clamped at 30 minutes so a malformed or hostile value cannot park
+registration, and the exponential is left untouched on such a cycle
+because the network named the interval.
+
+Not adopted: CMCC's refusal to rotate P-CSCF. joan tries each advertised
+candidate within an attempt, which is AOSP's behaviour rather than
+China Mobile's, and there is no evidence that stopping would help --
+only that LG chose it. Recorded here rather than acted on.
 
 ### AOSP replaced the whole mechanism with configuration
 

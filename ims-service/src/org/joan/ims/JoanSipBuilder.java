@@ -226,6 +226,47 @@ final class JoanSipBuilder {
      * learned ours sends the null UUID, and there is nothing in it to
      * learn.
      */
+    /**
+     * Retry-After in seconds, RFC 3261 20.33, or -1 when absent.
+     *
+     * <p>The value is delta-seconds, optionally followed by a
+     * parenthesised comment and by parameters such as {@code duration},
+     * so only the leading digits are read.
+     *
+     * <p>joan honoured this on a 503 to an INVITE and nowhere else --
+     * the registration path ignored it entirely. Both reference stacks
+     * treat it as the governing retry delay for a failed REGISTER:
+     * AOSP's {@code ProcessDefaultFlowRecovery_Start_WithRfcRule}
+     * branches on {@code nRetryAfter > 0} citing IR.92, and LG's China
+     * Mobile override reads it first and falls back to a computed wait
+     * only when it is absent. RFC 3261 10.3 asks the same of a
+     * registrar's client, and a UE that retries sooner than a network
+     * told it to is the kind of client a network starts refusing.
+     */
+    static int retryAfterSeconds(String msg) {
+        String v = header(msg, "Retry-After");
+        if (v == null) {
+            return -1;
+        }
+        int i = 0;
+        while (i < v.length() && (v.charAt(i) == ' ' || v.charAt(i) == '\t')) {
+            i++;
+        }
+        int start = i;
+        while (i < v.length() && v.charAt(i) >= '0' && v.charAt(i) <= '9') {
+            i++;
+        }
+        if (i == start) {
+            return -1;
+        }
+        try {
+            long n = Long.parseLong(v.substring(start, i));
+            return (n < 0 || n > 86400) ? -1 : (int) n;
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
     static String peerSessionId(String msg) {
         if (msg == null) {
             return "";

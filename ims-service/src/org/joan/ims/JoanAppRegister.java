@@ -1196,6 +1196,45 @@ final class JoanAppRegister {
     }
 
     /**
+     * The Retry-After the network asked for, in ms, or 0 when it did not.
+     *
+     * <p>Read back out of the summary the same way
+     * {@link #scheduleFamilyRetry} reads its own marker, so the driver
+     * needs no new channel from the registration path.
+     *
+     * <p>Zero is a real answer: RFC 3261 20.33 permits
+     * {@code Retry-After: 0}, meaning "try again immediately", and the
+     * caller distinguishes it from "absent" by the marker being present
+     * at all. Absent is what returns 0 here, and the caller's own
+     * backoff covers both identically, so the distinction costs nothing
+     * to collapse -- but it is collapsed deliberately rather than by
+     * accident.
+     */
+    static long retryAfterMs(String summary) {
+        if (summary == null) {
+            return 0L;
+        }
+        int i = summary.indexOf("retry_after=");
+        if (i < 0) {
+            return 0L;
+        }
+        int v = i + "retry_after=".length();
+        int e = v;
+        while (e < summary.length() && summary.charAt(e) >= '0'
+                && summary.charAt(e) <= '9') {
+            e++;
+        }
+        if (e == v) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(summary.substring(v, e)) * 1000L;
+        } catch (NumberFormatException ex) {
+            return 0L;
+        }
+    }
+
+    /**
      * Compact reason trail for a non-2xx protected REGISTER. Header values
      * only -- the IMPI/IMSI never reaches the log, so the To user part is
      * reduced to its domain (the part a wrong-realm bug shows up in).
@@ -1203,6 +1242,10 @@ final class JoanAppRegister {
     static String rejectDetail(JoanSipBuilder.Reply reply, String raw,
                                String request) {
         StringBuilder d = new StringBuilder(96);
+        int ra = JoanSipBuilder.retryAfterSeconds(raw);
+        if (ra >= 0) {
+            d.append(" retry_after=").append(ra);
+        }
         appendHdr(d, "warn", JoanSipBuilder.header(raw, "Warning"));
         appendHdr(d, "reason", JoanSipBuilder.header(raw, "Reason"));
         appendHdr(d, "to_domain", domainOf(JoanSipBuilder.header(raw, "To")));

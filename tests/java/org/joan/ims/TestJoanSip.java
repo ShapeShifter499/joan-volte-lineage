@@ -33,6 +33,7 @@ public final class TestJoanSip {
         testSessionId();
         testOutgoingOir();
         testRoutingDivergences();
+        testRetryAfter();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -2836,6 +2837,40 @@ public final class TestJoanSip {
         check(!JoanSipBuilder.udpFallbackOnTcpConnectFail(),
                 "and can be turned off without a code change");
         JoanSipBuilder.setUdpFallbackOnTcpConnectFail(true);
+    }
+
+    /**
+     * RFC 3261 20.33 Retry-After on a REGISTER rejection. joan honoured
+     * this on a 503 to an INVITE and nowhere else; both reference stacks
+     * treat it as the governing retry delay for registration.
+     */
+    private static void testRetryAfter() {
+        check(JoanSipBuilder.retryAfterSeconds(
+                "SIP/2.0 503 Service Unavailable\r\n"
+                + "Retry-After: 120\r\n\r\n") == 120,
+                "a plain delta-seconds is read");
+        check(JoanSipBuilder.retryAfterSeconds(
+                "SIP/2.0 404 Not Found\r\n"
+                + "Retry-After: 300 (out of service);duration=600\r\n\r\n")
+                        == 300,
+                "a comment and a duration parameter are ignored");
+        check(JoanSipBuilder.retryAfterSeconds(
+                "SIP/2.0 486 Busy\r\nretry-after:  45\r\n\r\n") == 45,
+                "the header name is case-insensitive and space is skipped");
+        check(JoanSipBuilder.retryAfterSeconds(
+                "SIP/2.0 404 Not Found\r\n\r\n") == -1,
+                "absent reads as -1, not as zero seconds");
+        check(JoanSipBuilder.retryAfterSeconds(
+                "SIP/2.0 404 Not Found\r\nRetry-After: soon\r\n\r\n") == -1,
+                "a non-numeric value is not a delay");
+        check(JoanSipBuilder.retryAfterSeconds(
+                "SIP/2.0 404 Not Found\r\nRetry-After: 0\r\n\r\n") == 0,
+                "zero is a legal value meaning retry immediately");
+        /* A day is the cap; past it the header is treated as unusable
+         * rather than parking registration indefinitely. */
+        check(JoanSipBuilder.retryAfterSeconds(
+                "SIP/2.0 404 Not Found\r\nRetry-After: 999999\r\n\r\n") == -1,
+                "an absurd value is rejected rather than honoured");
     }
 
     private static void testImei() {
