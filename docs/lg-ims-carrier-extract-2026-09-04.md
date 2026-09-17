@@ -92,6 +92,43 @@ Joan already derives these (TS 23.003 §13.3).
   `IpSecManager`).
 - Any LG `.so` / `.apk` in the flashable zip.
 
+## REGISTER Contact feature tags are configuration, in LG too (2026-09-16)
+
+Extracted from the H932 Oreo KDZ already on the bench
+(`H93230d_00_0902.kdz`), whose AP-side IMS is **`/product/lib64/
+libims.lge.so`** -- `/product`, which is why earlier searches of
+`/vendor/lib64` and `/lib64` found only the QMI shims and concluded the
+AP-side stack was absent. Located by byte-offset: `grep -a -b -o` for
+`CMCCAoS`, then `debugfs icheck`/`ncheck` to map block to inode to name.
+
+Two symbols settle a question we had been answering by inference:
+
+```
+_ZNK17CoreServiceConfig14GetFeatureTagsEv   CoreServiceConfig::GetFeatureTags()
+_ZNK10SipConfigV20GetFeatureTagOptionsEv    SipConfigV2::GetFeatureTagOptions()
+```
+
+LG builds the REGISTER Contact's feature tags from **service
+configuration**, exactly as AOSP does (`RegContact.cpp` iterating
+`piServiceConfig->GetFeatureTags()`). Two independent shipping stacks
+agree, and joan was the only one hardcoding
+`+g.3gpp.icsi-ref=...mmtel;audio` onto every carrier's REGISTER. alpha28
+makes ours switchable and withholds it for CMCC.
+
+The library carries both `urn:gsma:imei:` and `urn:uuid:`, the same
+instance-id family. **Not settled here:** whether LG's IMEI URN ends in
+the spare digit `0` or the IMEI's check digit. It is built with string
+operations rather than a format string and no dedicated symbol surfaced,
+so answering it means disassembling around the `urn:gsma:imei:`
+reference. The marginal value is low -- AOSP's `SipUrnHelper.cpp` is
+explicit, cites TS 23.003 13.8 and RFC 7254, and appends a literal `'0'`
+-- so LG would be corroboration, not new information.
+
+**Not on this bench:** any US998 ROM image. `firmware-lge-joan-blobs/
+us998/` holds only `ath10k` Wi-Fi firmware, and the V300L Pie KDZ that
+the sections above were written from is no longer on disk. The H932
+image serves the same purpose: same stack, same `CMCCAoS*` classes.
+
 ## Hardware still required
 
 CMCC SIM: `last_register` with `tpt=tcp` then `reg2=200`, or
