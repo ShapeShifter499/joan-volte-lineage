@@ -447,6 +447,58 @@ behaviour, are taken from AOSP.
   config values) transcribed into our own profile format.
 - Boundary, unchanged: extract-only, no LG code or blobs shipped.
 
+## Qualcomm IMS (via LineageOS vendor blobs)
+
+- Source: <https://github.com/TheMuppets/proprietary_vendor_xiaomi_sm8250-common>
+  (`proprietary/system_ext/priv-app/ims/ims.apk`), the blobs LineageOS
+  ships for Xiaomi devices. Reference only; nothing copied, nothing
+  shipped.
+- Fetched with a shallow, sparse, blobless clone -- 2.9 MB rather than a
+  multi-gigabyte ROM.
+
+**`ims.apk` does not build SIP.** It has 171 "sip" hits and every one is a
+failure code (`CALL_FAIL_SIP_AMBIGUOUS`), a config item name, or a HAL
+type (`vendor/qti/hardware/radio/ims/V1_0/SipErrorInfo`). Its interfaces
+are `IImsRadio`, `IImsRadioIndication`, `IImsRadioResponse`. It is a
+radio-HAL client that **configures** a SIP stack and **receives** its
+errors; the stack itself is behind the HAL, in modem firmware. So
+reverse-engineering it yields QMI plumbing, not a REGISTER to compare
+against ours.
+
+**The useful part is the config surface.** The apk names 79
+`CONFIG_ITEM_*` knobs that a carrier policy can push into that stack.
+Most are SIP timers (`SIP_NON_INVITE_TXN_TIMEOUT_TIMER_MSEC`,
+`SIP_INVITE_RSP_RETX_INTERVAL_MSEC`), registration retry backoff, and
+`VOLTE_USER_OPT_IN_STATUS`. One matters here:
+
+```
+CONFIG_ITEM_DOMAIN_NAME
+```
+
+**On a Qualcomm stack the IMS home domain is a per-carrier configured
+value, not necessarily a derived one.** That is worth stating plainly
+because this file already records the opposite conclusion from two other
+implementations: AOSP's ImsStack and LG's `libims.lge.so` both *derive*
+the domain from the SIM's own MNC, and the `mnc000` theory was retired on
+that basis. Both of those are AP-side stacks. Neither is what runs on a
+stock Chinese handset, which is Qualcomm modem-side and can simply be
+told a domain by its MBN carrier policy -- a value invisible from the AP
+and under no obligation to match the derived one.
+
+This does **not** show that China Mobile configures a non-derived domain.
+It shows the mechanism exists on the stack that works there, which the
+earlier "no upstream IMS carries a China Mobile identity quirk" finding
+had implicitly ruled out. The retirement of `mnc000`-as-a-guess stands;
+"the domain is configured, not derived, on working handsets" is a
+different and better-supported statement.
+
+Android exposes no public carrier-config key for the IMS home domain.
+`CarrierConfigManager.Ims.KEY_PHONE_CONTEXT_DOMAIN_NAME_STRING`
+(`ims.phone_context_domain_name_string`) is the tel-URI phone context,
+not the registration realm, and reads empty on T-Mobile 310-260 here --
+but is worth having a CMCC tester dump, since a populated value would
+name the operator's own domain.
+
 ## Other sources
 
 - **3GPP specifications.** TS 23.003 (identity derivation), 24.229,
