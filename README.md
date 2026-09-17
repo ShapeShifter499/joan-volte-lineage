@@ -69,39 +69,94 @@ loopback control socket.
 > Caller ID is the asserted number; Dialer can still overlay a matching
 > contact.
 
-## Current tester build: v0.4.0-alpha26
+## Current tester build: v0.4.0-alpha28
 
-`v0.4.0-alpha26` (versionCode 34) is the current tester zip. It is a
-prerelease: offline suites passed (543 host checks, 260 UA checks); it
+`v0.4.0-alpha28` (versionCode 36) is the current tester zip. It is a
+prerelease: offline suites passed (574 host checks, 260 UA checks); it
 is **not** a live-carrier qualifier. Sideload
 `joan-volte-recovery.zip` from the GitHub release, reboot, then confirm
-the `build` row below reads `0.4.0-alpha26 (34)`.
+the `build` row below reads `0.4.0-alpha28 (36)`.
 
-Unlike alpha25, the headline changes here are on the **receive** path
-and were exercised on live calls in both directions before release.
+alpha27 built the audio offer from the carrier's own codec
+configuration -- each codec offered in both AMR framings, on the
+carrier's payload numbers -- and alpha28 corrects the REGISTER's
+`+sip.instance` for every carrier. **The instance-id change affects
+everyone**, not just China Mobile: it was wrong in its last character
+against TS 23.003 13.8, and networks that accepted it were being
+lenient.
 
-**If you are testing CMCC (46002): this build does not fix the
-`reg2=404`, but it is worth flashing for what it will tell us.**
-Everything else new here is call-path work that only runs after
-registration succeeds.
+**If you are testing China Mobile (46000 / 46002 / 46004 / 46007 /
+46008): this build changes two things that might fix your `reg2=404`,
+and adds a diagnostic that will tell us what you actually sent.** Read
+the section below before flashing so you know what to look for.
 
-Two diagnostics matter for that 404, and neither costs you anything
-beyond a flash and one trace:
+## China Mobile: what we know, and what alpha28 tries
 
-- the ISIM read now says *why* it produced nothing -- `ok`, `absent`
-  (the card genuinely has no such record), `no-api`, `denied`, or the
-  exception name. Until now it claimed "no ISIM" for all of those alike,
-  including the cases that would be our own bug;
-- the trace records the realm we registered with and whether it came
-  from the card or was derived from the IMSI. A realm is a network name,
-  not a subscriber identity, so nothing personal is logged.
+A tester on 46002 reaches REG2 and is answered:
 
-Four independent sources -- 3GPP TS 23.003, AOSP's ImsStack,
-rust-rcs-core, and the CMCC carrier config shipped in LineageOS's own
-OnePlus device trees -- agree that deriving the domain from the SIM's own
-MNC is correct, and no upstream IMS carries a China Mobile identity
-quirk. So the 404 is something else, and those two lines are what will
-say what.
+```
+reg2=404 warn="399 <...>.zj.chinamobile.com "Server Internal Error""
+to_domain="ims.mnc002.mcc460.3gppnetwork.org"
+req_domain="ims.mnc002.mcc460.3gppnetwork.org"
+```
+
+Everything before that works: REG1 is answered 401, the AKA runs against
+the USIM, IPsec is applied (`spi_in=exact apply_out=ok in=ok`), and the
+authenticated REGISTER goes out over TCP to the protected port. Their
+S-CSCF then returns 404 with a Warning naming an internal error. It is
+consistent -- retries at +50 s, +5 min and +15 min, and across reboots,
+all return exactly the same thing.
+
+**Three facts rule out the obvious explanations.**
+
+- **The line is provisioned.** The same SIM does VoLTE on a stock
+  handset. This is not an unregistered subscriber.
+- **The same handset and build registers on China Telecom (46011)**, to
+  `reg2=200 OK`, with a USIM that has no ISIM and an identity derived
+  from the IMSI. So our identity derivation, sec-agree, IPsec and REG2
+  all work on a Chinese network. Something is specific to CMCC.
+- **The domain we use is correct.** 3GPP TS 23.003, AOSP's ImsStack,
+  rust-rcs-core, and the CMCC carrier config in LineageOS's own OnePlus
+  device trees all agree the domain derives from the SIM's own MNC. AOSP
+  ImsStack contains **no** China, CMCC or MCC-460 special-casing at all.
+  The `mnc000` theory is retired and should stay retired.
+
+**What alpha28 changes**, both from reading AOSP's ImsStack at
+`android-17.0.0_r1`:
+
+- **The `+sip.instance` was malformed.** AOSP's `SipUrnHelper.cpp`, citing
+  TS 23.003 13.8 and RFC 7254, builds `tac(8)-snr(6)-0` with a literal
+  spare digit. We were sending the IMEI's *check* digit as the last
+  character. A registrar uses the instance-id to construct GRUUs when it
+  creates the binding -- which happens at REG2, not at the REG1
+  challenge -- so a validator that rejects it there would fault exactly
+  where this fails.
+- **The MMTEL feature tags are withheld for CMCC.** AOSP does not
+  hardcode them: `RegContact.cpp` builds the REGISTER Contact from
+  `piServiceConfig->GetFeatureTags()`, so they are carrier configuration
+  and a carrier listing none gets none. We sent
+  `+g.3gpp.icsi-ref=...mmtel;audio` to everyone. Scoped to CMCC only;
+  every other carrier's REGISTER is byte-identical to alpha27.
+
+**Both are hypotheses.** The honest counter-argument is that REG1 carries
+the same Contact and is answered 401, so their S-CSCF parses it at least
+once. The reason to try anyway is that a registrar validates and *stores*
+the Contact when it creates a binding, which is REG2.
+
+**What to send back, whether or not it works.** The trace now records
+`reg2_hdrs=` -- the header *names* of the REGISTER we actually sent, with
+repeats counted -- and `reg_tags=none` confirming the CMCC scoping took.
+Header names only; values are never logged, so no identities, no AKA
+response, no SPIs. Until now the only way to know what a tester's build
+sent was to read our source, which says what the code *can* send rather
+than what it did.
+
+Also worth knowing, and deliberately **not** implemented: LG's stack sets
+a CMCC-specific `SetIPv6Delay` of 4000 ms, where we register 11 ms after
+the IPv6 network appears. That is a real divergence, but it does not
+explain this failure -- retries minutes later on a bearer that stayed up
+return the identical 404 -- so it is recorded rather than shipped as a
+guess.
 
 **What to test first, in this order.** alpha25 changes the headers on
 every INVITE and the SDP on *every answer*, not just the new features,
