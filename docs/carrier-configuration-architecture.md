@@ -177,6 +177,51 @@ platform default on T-Mobile's wideband telephone-event (LG 99, platform
 101), which is a reminder that agreeing on AMR numbers was convention,
 not confirmation.
 
+## Session-ID (RFC 7989): a default with no config behind it
+
+A worked example of the precedence rule hitting an empty tier 1.
+
+- **Tier 1, updatable config: nothing.** AOSP gates the header on
+  `ims.support_sip_session_id_header_bool`, default **true**. That is one
+  of ImsStack's 488 private keys, and `CarrierConfigManager` on API 36
+  carries no session-id key under any name -- checked against the SDK jar,
+  not inferred. Nothing can update this from outside the app.
+- **Tier 2, negotiation: partly.** The header is not negotiated by SIM or
+  APN, and RFC 7989 registers no option tag, so there is no
+  Supported/Require handshake to lean on. What *is* negotiated is the
+  pairing: the `remote` parameter starts as the null UUID and is filled
+  in once the peer names its own. joan does that in both directions.
+- **Tier 3, a sane default: AOSP's.** On for everyone.
+- **Tier 4, the vendor snapshot: disagrees, and does not apply.** LG's
+  `IsHeaderSessionIdRequired` is hardcoded true for operator 0x52 (US
+  Cellular) alone. That is a per-operator predicate in `libims.lge.so`,
+  **not** a value in the carrier XML -- so there is no per-carrier figure
+  to transcribe, only LG's older default. It is exactly the mechanism
+  AOSP replaced with a config key defaulted on for everyone, and the rule
+  this document already states ("where the two disagree on a default,
+  AOSP wins") decides it.
+
+So: on for every carrier, behind `setSendSessionId()` so a future profile
+field or platform key can turn it off without a code change.
+
+**Construction.** AOSP's `SipUtils::GenerateSessionId` is HMAC-SHA-1 over
+the Call-ID under a secret, leading 128 bits, lowercase hex. joan uses the
+same construction with a per-process random key and no per-call salt, so a
+Call-ID maps to one UUID for the life of the process. RFC 7989 7 wants
+that -- the local UUID must not change during a session -- and deriving it
+rather than storing it means a response path never has to be handed a
+dialog to stay consistent with the request it answers. RFC 7989 6 forbids
+deriving the UUID from a user or device identifier; the key is what
+guarantees that, and the host suite asserts the IMSI and IMEI cannot
+appear in the output.
+
+**Scope.** Call dialogs only. A dialog gets a UUID when `buildInvite`
+mints one (MO) or when an incoming INVITE arrives carrying one (MT); the
+reg-event and conference SUBSCRIBE dialogs are dialogs but not
+communication sessions and get none. Responses **mirror**: a request that
+arrived without the header is answered without it. REGISTER never carries
+it, which is also why it cannot be relevant to the CMCC 404.
+
 ## Open divergences from AOSP's defaults
 
 Recorded, not yet acted on. Each needs a decision rather than a guess --

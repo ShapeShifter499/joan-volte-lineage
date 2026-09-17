@@ -30,6 +30,7 @@ public final class TestJoanSip {
         testRegisterRedirect();
         testRegisterShape();
         testCarrierTcpCriterion();
+        testSessionId();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -2498,6 +2499,141 @@ public final class TestJoanSip {
 
         /* Leave the builder as the rest of the suite expects it. */
         JoanSipBuilder.setSessionTimer(0, 90, JoanSessionTimer.REFRESHER_UAC);
+    }
+
+    /**
+     * RFC 7989 Session-ID, against AOSP's SipUtils::GenerateSessionId
+     * construction: HMAC-SHA-1 over the Call-ID, leading 128 bits,
+     * lowercase hex.
+     */
+    private static void testSessionId() {
+        String a = JoanSipBuilder.sessionIdFor("call-one@host");
+        String b = JoanSipBuilder.sessionIdFor("call-two@host");
+
+        check(a.length() == 32, "session-id is 32 characters");
+        check(a.matches("[0-9a-f]{32}"), "session-id is lowercase hex");
+        check(!a.equals(b), "a different Call-ID gives a different UUID");
+        check(a.equals(JoanSipBuilder.sessionIdFor("call-one@host")),
+                "the same Call-ID gives the same UUID (RFC 7989 7: the "
+                + "local UUID does not change during a session)");
+        check("".equals(JoanSipBuilder.sessionIdFor(null))
+                        && "".equals(JoanSipBuilder.sessionIdFor("")),
+                "no Call-ID means no session-id, not a constant");
+
+        /* RFC 7989 6: the UUID must not be derivable from a user or
+         * device identifier. The Call-ID is the only input, and the key
+         * is random per process -- but assert the obvious failure mode
+         * anyway, because it is the one that would leak a subscriber. */
+        String imsi = "310260123456789";
+        String imei = "123456789012345";
+        String fromIds = JoanSipBuilder.sessionIdFor(imsi + "@host");
+        check(fromIds.indexOf(imsi) < 0 && fromIds.indexOf(imei) < 0,
+                "session-id carries neither IMSI nor IMEI");
+        check(JoanSipBuilder.sessionIdFor("x").indexOf("x") < 0,
+                "session-id is not the Call-ID in disguise");
+
+        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                "310260123456789@ims.mnc260.mcc310.3gppnetwork.org",
+                "sip:+15550000@ims.mnc260.mcc310.3gppnetwork.org",
+                "ims.mnc260.mcc310.3gppnetwork.org",
+                "2001:db8::1", 5060, 5060, null);
+
+        /* The INVITE opens with the null UUID: we have not been told the
+         * peer's yet (RFC 7989 7). */
+        JoanSipBuilder.Dialog dlg = new JoanSipBuilder.Dialog();
+        String inv = JoanSipBuilder.buildInvite(id, dlg, "sip:peer@host",
+                "", null, 40000, null);
+        String local = JoanSipBuilder.sessionIdFor(dlg.callId);
+        check(inv.indexOf("Session-ID: " + local + ";remote="
+                        + JoanSipBuilder.SESSION_ID_NULL + "\r\n") > 0,
+                "an initial INVITE carries our UUID and the null remote");
+        check(local.equals(dlg.sessionId),
+                "the dialog's UUID is the one derived from its Call-ID");
+
+        /* The peer names itself; every later in-dialog request pairs the
+         * two. */
+        String peer = "0123456789abcdef0123456789abcdef";
+        String ok200 = "SIP/2.0 200 OK\r\nCall-ID: " + dlg.callId
+                + "\r\nSession-ID: " + peer + ";remote=" + local
+                + "\r\nContent-Length: 0\r\n\r\n";
+        JoanSipBuilder.learnSessionId(dlg, ok200);
+        check(peer.equals(dlg.sessionIdRemote),
+                "the peer's sess-id becomes our remote");
+        String bye = JoanSipBuilder.buildBye(id, dlg, "sip:peer@host", "",
+                null, "<sip:peer@host>;tag=b", "<sip:us@host>;tag=a");
+        check(bye.indexOf("Session-ID: " + local + ";remote=" + peer
+                        + "\r\n") > 0,
+                "an in-dialog request carries both halves");
+
+        /* RFC 7989 10: a legacy RFC 7329 peer reflects what it was given.
+         * Taking that back would set remote == local and erase the
+         * distinction the header exists to draw. */
+        JoanSipBuilder.Dialog legacy = new JoanSipBuilder.Dialog();
+        JoanSipBuilder.buildInvite(id, legacy, "sip:peer@host", "", null,
+                40000, null);
+        JoanSipBuilder.learnSessionId(legacy, "SIP/2.0 200 OK\r\n"
+                + "Session-ID: " + legacy.sessionId + "\r\n\r\n");
+        check(legacy.sessionIdRemote == null,
+                "a reflected UUID is not adopted as the remote");
+        JoanSipBuilder.learnSessionId(legacy, "SIP/2.0 200 OK\r\n"
+                + "Session-ID: " + JoanSipBuilder.SESSION_ID_NULL + "\r\n\r\n");
+        check(legacy.sessionIdRemote == null,
+                "the null UUID teaches us nothing");
+
+        /* Parsing: the sess-id is the token before any parameter. */
+        check(peer.equals(JoanSipBuilder.peerSessionId(
+                        "INVITE sip:x SIP/2.0\r\nSession-ID: " + peer
+                        + ";remote=" + JoanSipBuilder.SESSION_ID_NULL
+                        + "\r\n\r\n")),
+                "sess-id is read without its parameters");
+        check(peer.equals(JoanSipBuilder.peerSessionId(
+                        "INVITE sip:x SIP/2.0\r\nsession-id: "
+                        + peer.toUpperCase(java.util.Locale.US) + "\r\n\r\n")),
+                "an uppercase value on a lowercase header name still parses");
+        check("".equals(JoanSipBuilder.peerSessionId(
+                        "INVITE sip:x SIP/2.0\r\nSession-ID: abc\r\n\r\n")),
+                "a short value is not a UUID");
+        check("".equals(JoanSipBuilder.peerSessionId(
+                        "INVITE sip:x SIP/2.0\r\nSession-ID: "
+                        + "0123456789abcdef0123456789abcdeg\r\n\r\n")),
+                "a non-hex character is not a UUID");
+        check("".equals(JoanSipBuilder.peerSessionId(
+                        "INVITE sip:x SIP/2.0\r\nCSeq: 1 INVITE\r\n\r\n")),
+                "no header means no value");
+
+        /* Mirroring into a response, and only when asked. */
+        String req = "INVITE sip:us SIP/2.0\r\nCall-ID: mt-1@host\r\n"
+                + "Session-ID: " + peer + ";remote="
+                + JoanSipBuilder.SESSION_ID_NULL + "\r\n\r\n";
+        check(("Session-ID: " + JoanSipBuilder.sessionIdFor("mt-1@host")
+                        + ";remote=" + peer + "\r\n")
+                        .equals(JoanSipBuilder.sessionIdMirror(req)),
+                "a response answers with our UUID and theirs as remote");
+        check("".equals(JoanSipBuilder.sessionIdMirror(
+                        "OPTIONS sip:us SIP/2.0\r\nCall-ID: x@host\r\n\r\n")),
+                "a request without Session-ID gets a response without one");
+
+        /* Dialogs that are not communication sessions carry none: the
+         * reg-event SUBSCRIBE never has a UUID minted for it. */
+        JoanSipBuilder.Dialog sub = new JoanSipBuilder.Dialog();
+        sub.callId = "sub-1@host";
+        String subscribe = JoanSipBuilder.buildRegEventSubscribe(id, sub,
+                "sip:+15550000@ims.mnc260.mcc310.3gppnetwork.org", "", null,
+                600000);
+        check(subscribe.indexOf("Session-ID") < 0,
+                "a reg-event SUBSCRIBE carries no Session-ID");
+
+        /* The switch, and the state the rest of the suite expects. */
+        JoanSipBuilder.setSendSessionId(false);
+        JoanSipBuilder.Dialog offDlg = new JoanSipBuilder.Dialog();
+        String offInv = JoanSipBuilder.buildInvite(id, offDlg,
+                "sip:peer@host", "", null, 40000, null);
+        check(offInv.indexOf("Session-ID") < 0 && offDlg.sessionId == null,
+                "a carrier with Session-ID off sends none");
+        check("".equals(JoanSipBuilder.sessionIdMirror(req)),
+                "and mirrors none into a response");
+        JoanSipBuilder.setSendSessionId(true);
+        check(JoanSipBuilder.sendSessionId(), "default is on, per AOSP");
     }
 
     private static void testImei() {

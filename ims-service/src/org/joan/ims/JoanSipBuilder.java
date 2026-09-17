@@ -82,6 +82,199 @@ final class JoanSipBuilder {
         return sSendUa;
     }
 
+    /**
+     * RFC 7989 Session-ID: the "no remote UUID known yet" value.
+     *
+     * <p>32 zeros. RFC 7989 s7 has the originator carry this as the
+     * {@code remote} parameter until the peer has named its own UUID.
+     */
+    static final String SESSION_ID_NULL = "00000000000000000000000000000000";
+
+    /* The per-process HMAC key behind every local Session-ID UUID.
+     * Random, never emitted, and derived from nothing about the device. */
+    private static final byte[] SESSION_ID_KEY = newSessionIdKey();
+
+    private static byte[] newSessionIdKey() {
+        byte[] k = new byte[16];
+        RNG.nextBytes(k);
+        return k;
+    }
+
+    private static final char[] HEX_LOWER = "0123456789abcdef".toCharArray();
+
+    /* Whether call dialogs carry a Session-ID. */
+    private static volatile boolean sSendSessionId = true;
+
+    /**
+     * Whether to emit RFC 7989 Session-ID.
+     *
+     * <p>Default on, following AOSP's ImsStack, whose
+     * {@code ims.support_sip_session_id_header_bool} defaults to
+     * {@code true} for every carrier. That key has no provider here: it
+     * is one of ImsStack's private keys and {@code CarrierConfigManager}
+     * carries no session-id key at all, so the default is ours to pick
+     * and AOSP's is the one worth copying.
+     *
+     * <p>LG takes the older position -- {@code IsHeaderSessionIdRequired}
+     * is hardcoded true for US Cellular (operator 0x52) and nobody else.
+     * That is a per-operator quirk in {@code libims.lge.so} rather than a
+     * value in its carrier XML, and it is precisely the mechanism AOSP
+     * replaced with a config key defaulted on for everyone. So there is
+     * no per-carrier value to adopt, only two defaults to choose between.
+     *
+     * <p>Left switchable so a future carrier profile or a platform key
+     * can turn it off without a code change.
+     */
+    static void setSendSessionId(boolean on) {
+        sSendSessionId = on;
+    }
+
+    static boolean sendSessionId() {
+        return sSendSessionId;
+    }
+
+    /**
+     * Our own Session-ID UUID for a dialog, RFC 7989 s6.
+     *
+     * <p>AOSP's {@code SipUtils::GenerateSessionId} runs HMAC-SHA-1 over
+     * the Call-ID under a per-slot secret, keeps the leading 128 bits and
+     * renders them as lowercase hex. This is that construction with one
+     * difference: the key is drawn once per process and carries no
+     * per-call salt, so one Call-ID maps to one UUID for as long as the
+     * process lives. RFC 7989 s7 requires exactly that -- the local UUID
+     * must not change for the duration of the session -- and deriving it
+     * means no response path has to be handed a dialog to stay
+     * consistent with the request it answers.
+     *
+     * <p>The privacy rule (s6: the UUID must not be derivable from a user
+     * or device identifier) is met by the key rather than by the input.
+     * The Call-ID is already random per dialog, and without the key the
+     * UUID cannot be tied back even to that.
+     *
+     * <p>A retried INVITE gets a fresh Call-ID and so a fresh UUID, which
+     * is right for a header whose whole purpose is correlating the
+     * messages of one call leg.
+     *
+     * @return 32 lowercase hex characters, or "" when there is no Call-ID
+     */
+    static String sessionIdFor(String callId) {
+        if (callId == null || callId.isEmpty()) {
+            return "";
+        }
+        byte[] mac;
+        try {
+            javax.crypto.Mac m = javax.crypto.Mac.getInstance("HmacSHA1");
+            m.init(new javax.crypto.spec.SecretKeySpec(
+                    SESSION_ID_KEY, "HmacSHA1"));
+            mac = m.doFinal(callId.getBytes(
+                    java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            return "";
+        }
+        StringBuilder b = new StringBuilder(32);
+        for (int i = 0; i < 16; i++) {
+            b.append(HEX_LOWER[(mac[i] >> 4) & 0xf])
+                    .append(HEX_LOWER[mac[i] & 0xf]);
+        }
+        return b.toString();
+    }
+
+    /**
+     * The sender's own UUID from a message's Session-ID, RFC 7989 s9.
+     *
+     * <p>The {@code sess-id} is always the sender's own value, so on a
+     * message we received it is our {@code remote}. Returns "" for an
+     * absent, malformed or null-UUID value: a peer that has not yet
+     * learned ours sends the null UUID, and there is nothing in it to
+     * learn.
+     */
+    static String peerSessionId(String msg) {
+        if (msg == null) {
+            return "";
+        }
+        String v = header(msg, "Session-ID");
+        if (v == null) {
+            return "";
+        }
+        int end = v.length();
+        for (int i = 0; i < v.length(); i++) {
+            char c = v.charAt(i);
+            if (c == ';' || c == ' ' || c == '\t' || c == ',') {
+                end = i;
+                break;
+            }
+        }
+        String id = v.substring(0, end).toLowerCase(java.util.Locale.US);
+        if (id.length() != 32) {
+            return "";
+        }
+        for (int i = 0; i < 32; i++) {
+            char c = id.charAt(i);
+            if ((c < '0' || c > '9') && (c < 'a' || c > 'f')) {
+                return "";
+            }
+        }
+        return SESSION_ID_NULL.equals(id) ? "" : id;
+    }
+
+    /**
+     * The Session-ID line for a dialog, or "" when the dialog carries
+     * none. {@code remote} is the null UUID until the peer names its own.
+     */
+    static String sessionIdLine(Dialog dlg) {
+        if (dlg == null || dlg.sessionId == null || dlg.sessionId.isEmpty()) {
+            return "";
+        }
+        String r = (dlg.sessionIdRemote == null
+                || dlg.sessionIdRemote.isEmpty())
+                ? SESSION_ID_NULL : dlg.sessionIdRemote;
+        return "Session-ID: " + dlg.sessionId + ";remote=" + r + "\r\n";
+    }
+
+    /**
+     * Mirror a request's Session-ID into the response, RFC 7989 s7: our
+     * own UUID for this Call-ID, and the request's as {@code remote}.
+     *
+     * <p>Only when the request carried one. Answering with a header the
+     * peer never sent is allowed but pointless -- it is a correlator, and
+     * a peer that does not use it has nothing to correlate -- and
+     * mirroring keeps the header off responses to requests that are not
+     * part of a call at all.
+     */
+    static String sessionIdMirror(String req) {
+        if (!sSendSessionId) {
+            return "";
+        }
+        String peer = peerSessionId(req);
+        if (peer.isEmpty()) {
+            return "";
+        }
+        String local = sessionIdFor(header(req, "Call-ID"));
+        if (local.isEmpty()) {
+            return "";
+        }
+        return "Session-ID: " + local + ";remote=" + peer + "\r\n";
+    }
+
+    /**
+     * Record the peer's UUID on a dialog, from any message it sent.
+     *
+     * <p>A legacy RFC 7329 peer reflects the value it was handed instead
+     * of minting one of its own (RFC 7989 s10). Taking that back as the
+     * remote UUID would make both halves of the pair identical and erase
+     * the distinction the header exists to draw, so it is ignored.
+     */
+    static void learnSessionId(Dialog dlg, String msg) {
+        if (dlg == null || dlg.sessionId == null || dlg.sessionId.isEmpty()) {
+            return;
+        }
+        String peer = peerSessionId(msg);
+        if (peer.isEmpty() || peer.equals(dlg.sessionId)) {
+            return;
+        }
+        dlg.sessionIdRemote = peer;
+    }
+
     static final String ALLOW = "INVITE, ACK, CANCEL, BYE, UPDATE, OPTIONS, "
             + "REFER, SUBSCRIBE, NOTIFY, PRACK";
     /** The 3GPP default unprotected P-CSCF port. */
@@ -1275,6 +1468,15 @@ final class JoanSipBuilder {
         /** Peer's CSeq space; never compared to {@link #cseq}. */
         int remoteCseq;
         String remoteTag;
+        /**
+         * Our RFC 7989 Session-ID UUID. Null on any dialog that carries
+         * no Session-ID, which is what keeps the header on call dialogs
+         * and off the reg-event and conference SUBSCRIBE dialogs -- those
+         * are dialogs, but not communication sessions.
+         */
+        String sessionId;
+        /** The peer's UUID, once it has named one; null until then. */
+        String sessionIdRemote;
     }
 
     /**
@@ -2374,6 +2576,11 @@ final class JoanSipBuilder {
                 rng.nextInt() & 0xffff);
         dlg.fromTag = String.format("%012x", rng.nextLong() & 0xffffffffffffL);
         dlg.cseq = 1;
+        /* A fresh Call-ID is a fresh session, so the UUID is minted here
+         * and the remote half starts unknown. A retry after 401/422/3xx
+         * comes back through this method and gets both again. */
+        dlg.sessionId = sSendSessionId ? sessionIdFor(dlg.callId) : null;
+        dlg.sessionIdRemote = null;
         String sdp = sdpOffer(id.localIp, rtpPort);
         String contactUser = contactUser(aor);
         if (pani == null || pani.isEmpty()) {
@@ -2393,6 +2600,7 @@ final class JoanSipBuilder {
         a.append("To: <").append(dest).append(">\r\n");
         a.append("Call-ID: ").append(dlg.callId).append("\r\n");
         a.append("CSeq: ").append(dlg.cseq).append(" INVITE\r\n");
+        a.append(sessionIdLine(dlg));
         a.append("Contact: <sip:").append(contactUser).append('@')
                 .append(host).append(':').append(id.contactPort)
                 .append(">;+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\";audio\r\n");
@@ -2809,6 +3017,7 @@ final class JoanSipBuilder {
         }
         a.append("Call-ID: ").append(dlg.callId).append("\r\n");
         a.append("CSeq: ").append(cseq).append(' ').append(method).append("\r\n");
+        a.append(sessionIdLine(dlg));
         if (extra != null) {
             a.append(extra);
         }

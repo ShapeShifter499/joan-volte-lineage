@@ -87,6 +87,8 @@ conflating the two produced a wrong diagnosis once already.
 | RFC 4733 | `telephone-event` DTMF, sent and recognised on receive | `JoanDtmf`, `JoanCallSession`, `JoanMedia`, `JoanSipUa`, `JoanSipBuilder` |
 | RFC 4867 | AMR / AMR-WB, octet-aligned **and** bandwidth-efficient; FT=8 SID, FT=14 SPEECH_LOST | `JoanAmr`, `JoanAmrCodec`, `JoanSipBuilder` |
 | RFC 5761 | `rtcp-mux` | `JoanRtcp`, `JoanMedia` |
+| RFC 7254 | `+sip.instance` IMEI URN, spare digit (TS 23.003 13.8) | `JoanSipBuilder` |
+| RFC 7989 | End-to-end Session-ID on call dialogs, `remote` learned from the peer; RFC 7329 reflections rejected | `JoanSipBuilder`, `JoanSipUa` |
 
 **3GPP:** TS 23.003 (identity derivation, 13.3/13.4), TS 24.229 (IMS
 call control; 5.1.1.3 for the reg-event subscribe), TS 24.147

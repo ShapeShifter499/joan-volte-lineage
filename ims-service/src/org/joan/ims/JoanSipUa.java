@@ -1047,7 +1047,8 @@ final class JoanSipUa {
         InviteWait wait = new InviteWait(dlg.callId, dlg.cseq);
         registerInviteWait(wait);
         byte[] pkt = msg.getBytes(StandardCharsets.US_ASCII);
-        JoanTrace.note("app invite built bytes=" + pkt.length);
+        JoanTrace.note("app invite built bytes=" + pkt.length
+                + (dlg.sessionId == null ? "" : " sid=" + dlg.sessionId));
         try {
             send(sSockC, sPcscf, sPcscfPortS, pkt);
         } catch (Exception e) {
@@ -1070,6 +1071,7 @@ final class JoanSipUa {
                 continue;
             }
             JoanTrace.note("app invite reply=" + p.status);
+            JoanSipBuilder.learnSessionId(dlg, rx);
             if (p.status >= 100 && p.status < 200) {
                 if (headerRseq(rx) > 0) {
                     String prack = JoanSipBuilder.buildPrack(id, dlg, dest,
@@ -1521,6 +1523,13 @@ final class JoanSipUa {
             JoanSipBuilder.Dialog dlg = new JoanSipBuilder.Dialog();
             dlg.callId = JoanSipBuilder.header(invite, "Call-ID");
             dlg.cseq = 0;
+            /* Mirror, as the 200 already did: a Session-ID on our BYE
+             * only if the caller opened the session with one. */
+            String peerSid = JoanSipBuilder.peerSessionId(invite);
+            if (!peerSid.isEmpty() && JoanSipBuilder.sendSessionId()) {
+                dlg.sessionId = JoanSipBuilder.sessionIdFor(dlg.callId);
+                dlg.sessionIdRemote = peerSid;
+            }
             dlg.fromTag = tag;
             dlg.remoteTag = JoanSipBuilder.tagOf(
                     JoanSipBuilder.header(invite, "From"));
@@ -3393,6 +3402,10 @@ final class JoanSipUa {
         if (cseq != null) {
             a.append("CSeq: ").append(cseq).append("\r\n");
         }
+        /* RFC 7989 s7: our UUID for this Call-ID, the request's as
+         * remote. Only when the request carried one -- see
+         * JoanSipBuilder.sessionIdMirror. */
+        a.append(JoanSipBuilder.sessionIdMirror(req));
         a.append("Contact: <sip:").append(contactUser).append('@')
                 .append(host).append(':').append(id.contactPort).append(">\r\n");
         if (extraHeaders != null && !extraHeaders.isEmpty()) {

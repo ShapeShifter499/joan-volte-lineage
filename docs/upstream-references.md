@@ -119,7 +119,34 @@ RFC 3261 10.2 asks for a single Call-ID per registrar. Now held in
 (a CSeq that restarts under a Call-ID already used would be rejected, and a
 fresh Call-ID after a restart is always safe).
 
-### 5. Codec negotiation: the offerer's order decides, both directions
+### 5. Session-ID is a keyed hash, not a device identifier
+
+`native/libimsstack/engine/sipcore/SipUtils.cpp`,
+`SipUtils::GenerateSessionId()`, is the construction and the comment is
+the specification:
+
+> HMAC-SHA-1-128 (Call-ID, secret-key): 128-bit result encoded using
+> lowercase alphanumeric hex representation
+
+The secret is a per-slot fixed key with a random byte appended, and the
+result is truncated to 16 bytes. What matters is what it is *not*: RFC
+7989 6 forbids a UUID that can be derived from a user or device
+identifier, and AOSP answers that with a key rather than by picking a
+different input.
+
+joan uses the same construction with a per-process random key and no
+per-call salt, so one Call-ID maps to one UUID for the life of the
+process. That is what RFC 7989 7 requires of the local UUID, and it means
+the response path can derive the value from the request it is answering
+instead of being handed a dialog. Whether AOSP's random byte or our
+stable key is used, the emitted value is a 128-bit keyed hash either way.
+
+AOSP also decides *who* gets it: `ims.support_sip_session_id_header_bool`
+defaults to **true**, where LG hardcodes the header on for US Cellular
+alone. The key has no provider on this platform, so the default is the
+only part that transfers -- see `docs/carrier-configuration-architecture.md`.
+
+### 6. Codec negotiation: the offerer's order decides, both directions
 
 `enabler/media/BaseNego.cpp` dispatches on offer/answer **state**, not call
 direction -- `STATE_IDLE`/`STATE_NEGOTIATED` go to `NegotiateOffer()` (an

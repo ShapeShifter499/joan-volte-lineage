@@ -430,10 +430,14 @@ value, not a hardcoded operator id.
 **Where joan stands against those defaults.** It never emits or parses a
 `transport=` URI parameter at all, so it already behaves the way
 `ignore_udp_transport_parameter` prescribes -- by omission rather than by
-decision, which is worth knowing if that ever needs to change. It does
-**not** implement Session-ID (RFC 7989), which AOSP defaults to
-supported; that is a real gap, but it is dialog-scope and cannot bear on
-a REGISTER.
+decision, which is worth knowing if that ever needs to change.
+
+Session-ID (RFC 7989) **was** the one real gap in this table and is now
+closed: joan carries it on call dialogs, defaulted on for every carrier
+the way AOSP does rather than for US Cellular alone the way LG does. It
+is dialog-scope and could never have borne on a REGISTER, so it does not
+touch the 404. See "Session-ID" in
+`docs/carrier-configuration-architecture.md` for why AOSP's default won.
 
 This closes a hypothesis class rather than opening one: there is no
 hidden, code-level China Mobile SIP behaviour in LG's stack. Everything
