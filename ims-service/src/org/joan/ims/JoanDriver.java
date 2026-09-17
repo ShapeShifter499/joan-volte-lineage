@@ -492,6 +492,30 @@ final class JoanDriver {
                  * switch stays because it is the right shape and the
                  * diagnostic uses it; the CMCC scoping was wrong. */
                 boolean tags = true;
+                /* Push the carrier's own transport criterion into the SIP
+                 * builder. 164 carrier profiles were distilled from stock
+                 * configuration and then read by nothing but the
+                 * conference path; the registration transport decision was
+                 * a separate hardcoded table that disagreed with them. */
+                JoanCarrierProfile cp =
+                        JoanCarrierProfile.forNetwork(app, mcc, mnc);
+                if (cp != null && cp.tcpCriterionLen >= 0) {
+                    try {
+                        JoanSipBuilder.setCarrierTcpCriterion(
+                                Integer.parseInt(mcc),
+                                Integer.parseInt(mnc),
+                                cp.tcpCriterionLen);
+                        String cs = mcc + "/" + mnc + " criterion="
+                                + cp.tcpCriterionLen
+                                + " src=" + cp.srcKey;
+                        if (!cs.equals(sCarrierSummary)) {
+                            sCarrierSummary = cs;
+                            JoanTrace.note("carrier profile " + cs);
+                        }
+                    } catch (NumberFormatException e) {
+                        /* A PLMN that is not numeric is not a PLMN. */
+                    }
+                }
                 if (tags != JoanSipBuilder.registerContactTags()) {
                     JoanSipBuilder.setRegisterContactTags(tags);
                     JoanTrace.note("register contact tags="
@@ -557,6 +581,7 @@ final class JoanDriver {
 
     /** Last session-timer summary, so the trace says it once per change. */
     private static volatile String sSeSummary;
+    private static volatile String sCarrierSummary;
 
     /**
      * Push the carrier's session-timer settings into the SIP builder.

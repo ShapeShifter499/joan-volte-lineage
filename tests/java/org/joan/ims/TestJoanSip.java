@@ -29,6 +29,7 @@ public final class TestJoanSip {
         testCarrierCodecs();
         testRegisterRedirect();
         testRegisterShape();
+        testCarrierTcpCriterion();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -688,6 +689,48 @@ public final class TestJoanSip {
         check(JoanSipBuilder.redirectHost(
                         "SIP/2.0 305 Use Proxy\r\nContact: *\r\n\r\n") == null,
                 "a Contact with no URI yields no host");
+    }
+
+    /** The carrier's transport criterion, and the PLMN scoping of it. */
+    private static void testCarrierTcpCriterion() {
+        String cmcc2 = "ims.mnc002.mcc460.3gppnetwork.org";
+        String cmcc0 = "ims.mnc000.mcc460.3gppnetwork.org";
+        String tmo   = "ims.mnc260.mcc310.3gppnetwork.org";
+        String other = "ims.mnc001.mcc234.3gppnetwork.org";
+
+        /* Built-in table, before any profile is pushed. China Mobile is
+         * five MNCs; this used to match mnc000 alone, so 46002 -- the PLMN
+         * that reports the reg2=404 -- got the 4096 GLOBAL default. */
+        JoanSipBuilder.setCarrierTcpCriterion(-1, -1, -1);
+        check(JoanSipBuilder.preferTcp(cmcc2, 1400, 0, true),
+                "CMCC 46002 uses China Mobile's 1300, not the 4096 default");
+        check(JoanSipBuilder.preferTcp(cmcc0, 1400, 0, true),
+                "CMCC 46000 still does");
+        check(!JoanSipBuilder.preferTcp(other, 1400, 1500, false),
+                "an unknown carrier keeps the 4096 default");
+
+        /* The T-Mobile exception outranks everything: LG's own config asks
+         * for 1200, joan deliberately stays on UDP there. */
+        check(!JoanSipBuilder.preferTcp(tmo, 4000, 1500, false),
+                "T-Mobile never flips to TCP on the criterion");
+        JoanSipBuilder.setCarrierTcpCriterion(310, 260, 1200);
+        check(!JoanSipBuilder.preferTcp(tmo, 4000, 1500, false),
+                "and a pushed profile does not override that exception");
+
+        /* A pushed profile applies only to its own PLMN. */
+        JoanSipBuilder.setCarrierTcpCriterion(460, 2, 900);
+        check(JoanSipBuilder.preferTcp(cmcc2, 1000, 1500, false),
+                "a pushed criterion is used for its own PLMN");
+        check(!JoanSipBuilder.preferTcp(other, 1000, 1500, false),
+                "and never leaks onto a different PLMN");
+        check(!JoanSipBuilder.preferTcp(cmcc0, 1000, 1500, false),
+                "not even onto a sibling MNC of the same carrier");
+
+        /* Non-3GPP realms never flip transport, profile or not. */
+        check(!JoanSipBuilder.preferTcp("ims.example.net", 9000, 1500, false),
+                "a non-3GPP realm never flips transport");
+
+        JoanSipBuilder.setCarrierTcpCriterion(-1, -1, -1);
     }
 
     private static void testInvite() {

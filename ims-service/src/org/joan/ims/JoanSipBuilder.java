@@ -499,17 +499,58 @@ final class JoanSipBuilder {
      * 310-260 keeps Joan's bench-proven UDP exception (-1 / never
      * TCP) — that is Joan policy, not stock AdjustTcpCriterionPerMtu.
      */
+    /* The carrier's own criterion, pushed from the profile, and the PLMN
+     * it belongs to. -1 = nothing loaded, use the built-in table. */
+    private static volatile int sProfileCriterion = -1;
+    private static volatile int sProfileMcc = -1;
+    private static volatile int sProfileMnc = -1;
+
+    /**
+     * Adopt a carrier profile's {@code tcp_criterion_len}.
+     *
+     * <p>Scoped to the PLMN it came from: the criterion is matched against
+     * the realm actually being addressed, so a stale value cannot follow a
+     * SIM swap onto a different network.
+     *
+     * <p>Pushed in rather than read here because this class compiles
+     * without android.jar -- the host suite depends on that -- and the
+     * profile lives in an asset that needs a Context.
+     */
+    static void setCarrierTcpCriterion(int mcc, int mnc, int criterion) {
+        sProfileMcc = mcc;
+        sProfileMnc = mnc;
+        sProfileCriterion = criterion;
+    }
+
+    /** CMCC's MNCs. China Mobile is not one PLMN. */
+    private static boolean isCmccPlmn(int mcc, int mnc) {
+        return mcc == 460 && (mnc == 0 || mnc == 2 || mnc == 4
+                || mnc == 7 || mnc == 8);
+    }
+
     private static int tcpCriterionFor(String realm) {
         int mcc = plmnOf(realm);
         int mnc = mncOf(realm);
         if (mcc == -1) {
             return -1; // non-3GPP realm: never flip transport
         }
-        if (mcc == 460 && mnc == 0) {
-            return 1300; // CMCC common_tcp_criterion_len
-        }
         if (mcc == 310 && mnc == 260) {
-            return 0; // Joan TMUS UDP exception, PLMN-scoped
+            /* Deliberate joan exception, ahead of the profile. LG's own
+             * TMO config asks for 1200, and this handset registers on
+             * T-Mobile over UDP; flipping it to TCP has been tested and
+             * is not wanted. PLMN-scoped so it cannot leak. */
+            return 0;
+        }
+        if (sProfileCriterion >= 0 && mcc == sProfileMcc
+                && mnc == sProfileMnc) {
+            return sProfileCriterion;
+        }
+        if (isCmccPlmn(mcc, mnc)) {
+            /* CMCC common_tcp_criterion_len. Was mnc==0 only, which gave
+             * every China Mobile subscriber outside mnc000 -- including
+             * 46002, the one that reports the reg2=404 -- the 4096 GLOBAL
+             * default instead of China Mobile's own 1300. */
+            return 1300;
         }
         return 4096; // stock GLOBAL root config
     }
