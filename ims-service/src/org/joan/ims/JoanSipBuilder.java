@@ -904,8 +904,32 @@ final class JoanSipBuilder {
         }
         if (sProfileCriterion >= 0 && mcc == sProfileMcc
                 && mnc == sProfileMnc) {
-            /* A per-family value wins over the common one; 0 is how the
-             * stock configuration spells "no per-family value". */
+            /* A per-family value wins over the common one.
+             *
+             * The comment here used to say 0 was "how the stock
+             * configuration spells no per-family value". That is wrong,
+             * and the shared engine says so outright: SipProfile.h
+             * defines NOT_PROVISIONED = (-10), and
+             * SipConfigProxy::GetTcpCriterionLength returns the profile
+             * value for anything != NOT_PROVISIONED. A provisioned 0
+             * therefore reaches SipClientTransport's
+             * "nBuffLen > criterion" test, where every message is longer
+             * than zero -- so 0 means ALWAYS TCP, not "unset", and
+             * certainly not joan's "never TCP".
+             *
+             * 21 of 136 profiles provision 0 in both families, including
+             * CMCC, DCM, KDDI, SBM, KT, SKT and LGU -- LG's own home
+             * markets, which are the best-documented profiles it ships.
+             * That is not what an unset field looks like.
+             *
+             * Still skipped rather than honoured, because acting on it is
+             * a transport change for 21 untestable networks and the one
+             * trace we hold from such a network shows its TCP connect
+             * failing. See docs/carrier-configuration-architecture.md,
+             * "The REGISTER TCP criterion"; the resolution there is to
+             * take AOSP's MTU-derived criterion, which is tier 1 and
+             * makes the question moot, and that needs a decision rather
+             * than a guess. */
             int perFamily = ipv6 ? sProfileCritV6 : sProfileCritV4;
             return perFamily > 0 ? perFamily : sProfileCriterion;
         }

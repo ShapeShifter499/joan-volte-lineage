@@ -231,6 +231,94 @@ communication sessions and get none. Responses **mirror**: a request that
 arrived without the header is answered without it. REGISTER never carries
 it, which is also why it cannot be relevant to the CMCC 404.
 
+## The REGISTER TCP criterion: joan reads a provisioned 0 as absence
+
+Found 2026-09-17 while testing whether the CMCC 404 is an encryption
+problem. It is not an encryption problem -- see below -- but the search
+turned this up, and it is a live defect affecting 21 of 136 carriers.
+
+**What the shared engine says.** `SipProfile.h` defines
+`NOT_PROVISIONED = (-10)`. `SipConfigProxy::GetTcpCriterionLength`
+returns the profile's value for anything `!= NOT_PROVISIONED`, so a
+provisioned `0` is returned unchanged. `SipClientTransport.cpp` then
+does `if (nBuffLen > GetTcpCriterionLength(...))` and rewrites the Via
+sent-protocol to TCP. Every message is longer than zero bytes.
+
+**So a criterion of 0 means "always TCP".** It does not mean "unset" --
+that is -10 -- and it certainly does not mean "never TCP".
+
+**What joan does.** `tcpCriterionFor()` carried the comment *"0 is how
+the stock configuration spells no per-family value"* and skipped it
+(`perFamily > 0 ? perFamily : ...`), then callers treat `criterion <= 0`
+as "never flip transport". Both halves are the inverse of the engine.
+
+**Who provisions 0 in both families** -- 21 carriers, and the list is the
+argument:
+
+```
+AIS.TH  ATT.US.NAO  CLR.PE  CMCC.CN  CNW.PA  CSL.HK  CTM.MO  DCM.JP
+H3G.HK  KDDI.JP  KT.KR  LGU.KR  O2.GB  PCCW.HK  SBM.JP  SFR.FR
+SFR.RE  SKT.KR  SPR.US  TMO.US.NAO  VZW.US.VOWIFI
+```
+
+Docomo, KDDI, SoftBank, KT, SKT, LG U+ -- LG's home markets, the
+profiles it documents most heavily (KT alone has 43 hardcoded quirks).
+An unset field does not cluster like that.
+
+For CMCC specifically joan discards the provisioned 0 and falls through
+to `isCmccPlmn()` -> 1300, a threshold China Mobile never asked for.
+
+**Not acted on yet, deliberately.** Honouring it flips 21 untestable
+networks to all-TCP REGISTER, and the one trace held from such a network
+shows its TCP connect *failing*. Making REG1 share REG2's failing
+transport would be strictly worse.
+
+**The resolution that avoids the question.** AOSP deleted the provisioned
+criterion entirely. `AosRegistration::SetTcpCriterionLength()` computes
+it, gated on `GetSipPreferredTransport() == PREFERRED_TRANSPORT_DYNAMIC_UDP_TCP`:
+
+```
+nLength = min(linkMtu, maxAllowedMtu) - sipMessageThresholdForTransportChange
+   ...falling back to ims.ipv4/ipv6_sip_mtu_size_cellular_int when the
+      link MTU is unusable, and to defaults when the result is <= 0
+```
+
+Every input is tier 1 on this platform and joan already reads two of
+them: the bench handset reports `ims.sip_preferred_transport_int` = 2
+(DYNAMIC_UDP_TCP) and SIP MTU 1500/1500. Adopting AOSP's algorithm makes
+the snapshot's per-family criterion irrelevant, which disposes of the
+0-semantics question rather than answering it -- and it is what the
+precedence rule asks for anyway, since a computed platform value outranks
+a 2017 snapshot.
+
+It is still a transport change across many carriers, so it is written up
+here for a decision rather than taken unilaterally.
+
+## The 404 is not an encryption-configuration problem
+
+Tested directly, because it was a reasonable suspicion.
+
+| field | CMCC | fleet |
+| --- | --- | --- |
+| `ipsec` | true | true x126, false x10 |
+| `ipsec_spi_3gpp` | false | false x120, true x16 |
+| `ipsec_algs` | 458755 | 458755 x127, others x9 |
+
+CMCC holds the **majority** value in all three. There is no IPsec
+parameter on which China Mobile is an outlier, so there is no
+encryption-side carrier setting joan could be getting wrong for CMCC
+specifically.
+
+The mechanism worth knowing about, which does exist: AOSP carries
+`ims.reg_retry_err_code_without_ipsec_int_array`, a per-carrier list of
+REGISTER failure codes whose remedy is to retry the registration
+**without IPsec** (`ProcessIpsecFallback`). So "this failure means drop
+IPsec and try again" is a first-class, configured behaviour in the
+reference stack. AOSP ships the list empty and defines no carrier
+values, so whether China Mobile puts 404 in it is not knowable from
+here -- but if a packet capture ever shows the 404 surviving an
+unprotected retry, this is the mechanism that names it.
+
 ## Three divergences from AOSP's defaults, resolved
 
 Recorded for a while as "needs a decision rather than a guess". Decided
