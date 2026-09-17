@@ -815,7 +815,24 @@ final class JoanSipBuilder {
         a.append("Security-Client: ").append(securityClientValue(txn.mine))
                 .append("\r\n");
         a.append("P-Access-Network-Info: ").append(pani).append("\r\n");
-        a.append("P-Preferred-Identity: <").append(aor).append(">\r\n");
+        /* No P-Preferred-Identity here.
+         *
+         * RFC 3325 9.1: a UAC may include it "in any request other than
+         * REGISTER". It exists so a UA can tell a trusted proxy which of
+         * its identities to assert on an outgoing request, which is
+         * meaningless in a REGISTER -- the To header already names the
+         * public identity being registered.
+         *
+         * AOSP agrees by construction: ImsStack's REGISTER builders
+         * (Registration.cpp, RegParameter.cpp, RegContact.cpp) contain no
+         * reference to P_PREFERRED_IDENTITY at all; it is added only in
+         * Service.cpp for dialogs and standalone requests and in
+         * RegSubscription.cpp for the reg-event SUBSCRIBE.
+         *
+         * joan sent it in both REGISTERs. T-Mobile accepted it, which
+         * establishes only that T-Mobile is lenient -- the same thing it
+         * did with our malformed +sip.instance. It is still carried on
+         * INVITE and the reg-event SUBSCRIBE, where it belongs. */
         if (ch != null && ch.secServer != null && !ch.secServer.isEmpty()) {
             a.append("Security-Verify: ").append(ch.secServer).append("\r\n");
         }

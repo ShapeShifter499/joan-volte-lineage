@@ -621,6 +621,15 @@ public final class TestJoanSip {
                 "and the audio tag goes with them");
         check(noTags.contains("+sip.instance=\"<urn:gsma:imei:"),
                 "but the instance-id always stays: it identifies the binding");
+
+        /* RFC 3325 9.1: a UAC may include P-Preferred-Identity "in any
+         * request other than REGISTER". AOSP's REGISTER builders never
+         * reference the header; it belongs on INVITE and the reg-event
+         * SUBSCRIBE. joan sent it in both REGISTERs until alpha29. */
+        check(!withTags.contains("P-Preferred-Identity"),
+                "REGISTER carries no P-Preferred-Identity (RFC 3325 9.1)");
+        check(!noTags.contains("P-Preferred-Identity"),
+                "and not in the no-tags form either");
         /* No dangling separator where the tags used to be: the Contact
          * must end at the instance-id's closing quote. */
         check(noTags.contains(">\"\r\n"),
