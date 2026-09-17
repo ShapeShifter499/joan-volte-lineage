@@ -34,6 +34,7 @@ public final class TestJoanSip {
         testOutgoingOir();
         testRoutingDivergences();
         testRetryAfter();
+        testDialIdentity();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -2902,6 +2903,37 @@ public final class TestJoanSip {
         check(JoanSipBuilder.retryAfterSeconds(
                 "SIP/2.0 404 Not Found\r\nRetry-After: 999999\r\n\r\n") == -1,
                 "an absurd value is rejected rather than honoured");
+    }
+
+    /**
+     * The identity a subscriber may be shown as. Pins the 2026-08-28
+     * incident: a USIM-only card's registration identity is the IMPI,
+     * which contains the IMSI, and it once reached a called party's
+     * screen as caller ID.
+     */
+    private static void testDialIdentity() {
+        String impi = "310260123456789@ims.mnc260.mcc310.3gppnetwork.org";
+        String isimImpu = "sip:+15555550100@ims.mnc260.mcc310.3gppnetwork.org";
+        String assoc = "<sip:+15555550100@ims.mnc260.mcc310.3gppnetwork.org>";
+
+        check(JoanSipBuilder.dialIdentity(assoc, isimImpu, impi)
+                        .indexOf("+15555550100") >= 0,
+                "P-Associated-URI wins: the network says who we are");
+        check(isimImpu.equals(JoanSipBuilder.dialIdentity(null, isimImpu, impi)),
+                "an ISIM IMPU is used when the network supplied nothing");
+
+        /* The one that matters. On a USIM-only card impu == impi, and
+         * the IMPI contains the IMSI. */
+        check("".equals(JoanSipBuilder.dialIdentity(null, impi, impi)),
+                "a USIM-only identity is refused, not substituted");
+        check("".equals(JoanSipBuilder.dialIdentity("", impi, impi)),
+                "and refused with an empty header too");
+        check(JoanSipBuilder.dialIdentity(null, impi, impi)
+                        .indexOf("310260123456789") < 0,
+                "the IMSI never survives as a dial identity");
+        check("".equals(JoanSipBuilder.dialIdentity(null, null, impi))
+                        && "".equals(JoanSipBuilder.dialIdentity(null, "", impi)),
+                "no IMPU at all is refused rather than defaulted");
     }
 
     private static void testImei() {

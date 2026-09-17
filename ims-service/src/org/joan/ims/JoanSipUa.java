@@ -881,12 +881,11 @@ final class JoanSipUa {
             sPani = pani;
             sSecVerify = secVerify;
             sServiceRoute = JoanSipBuilder.header(reg2Msg, "Service-Route");
-            sPublicId = JoanSipBuilder.pickPublicId(
-                    JoanSipBuilder.header(reg2Msg, "P-Associated-URI"));
-            if (sPublicId.isEmpty() && id.impu != null
-                    && !id.impu.equals(id.impi)) {
-                sPublicId = id.impu;
-            }
+            /* Fails closed on a USIM-only card: see
+             * JoanSipBuilder.dialIdentity. */
+            sPublicId = JoanSipBuilder.dialIdentity(
+                    JoanSipBuilder.header(reg2Msg, "P-Associated-URI"),
+                    id.impu, id.impi);
             sSockC = sockC;
             sSockS = sockS;
             sTcpClient = tcpClient;

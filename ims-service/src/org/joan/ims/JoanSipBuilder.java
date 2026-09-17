@@ -311,6 +311,45 @@ final class JoanSipBuilder {
         }
     }
 
+    /**
+     * The public identity this subscriber may be shown as, or "".
+     *
+     * <p>Order: the network's own {@code P-Associated-URI} from the
+     * REGISTER 200 first, because that is the network stating which
+     * identities it registered; then the ISIM's IMPU, but **only when it
+     * differs from the IMPI**; then nothing.
+     *
+     * <p>That middle condition is the whole point of this method. On a
+     * USIM-only card there is no ISIM IMPU, so the registration identity
+     * is set to the IMPI -- correct for REGISTER, because TS 23.003 13.4
+     * makes {@code sip:<IMSI>@ims.mnc...} the temporary public identity
+     * you register with. It is catastrophic anywhere else: the IMPI
+     * contains the IMSI, and on 2026-08-28 this exact fallback put a
+     * subscriber's permanent IMSI on the called party's screen as the
+     * caller ID of a live call.
+     *
+     * <p>So it fails closed. An empty return means the UA refuses to
+     * dial rather than substituting an identity it should not reveal --
+     * refusing the operation is the correct behaviour, not a degraded
+     * one.
+     *
+     * <p>The rule lived as an inline condition in the registration
+     * completion path, where nothing tested it and understanding it
+     * meant reading three files. It is here so it has a name, a reason
+     * and a test.
+     */
+    static String dialIdentity(String associatedUriHeader, String impu,
+                               String impi) {
+        String picked = pickPublicId(associatedUriHeader);
+        if (picked != null && !picked.isEmpty()) {
+            return picked;
+        }
+        if (impu != null && !impu.isEmpty() && !impu.equals(impi)) {
+            return impu;
+        }
+        return "";
+    }
+
     static String peerSessionId(String msg) {
         if (msg == null) {
             return "";
