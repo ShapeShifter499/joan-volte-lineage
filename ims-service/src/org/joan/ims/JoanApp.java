@@ -21,6 +21,15 @@ public class JoanApp extends Application {
          * codec without this app changing at all. */
         java.util.Set<String> amr = JoanAmrCodec.availableAmr();
         JoanSipBuilder.restrictProfile(amr);
+        /* Our own versionName, for the User-Agent. Read here because
+         * JoanSipBuilder compiles without android.jar. */
+        try {
+            android.content.pm.PackageInfo pi = getPackageManager()
+                    .getPackageInfo(getPackageName(), 0);
+            JoanSipBuilder.setUserAgentVersion(pi.versionName);
+        } catch (Throwable t) {
+            /* No version is not a reason to fail startup. */
+        }
         JoanTrace.note("codec profile: " + JoanSipBuilder.profileSummary());
         JoanDriver.start(getApplicationContext());
     }

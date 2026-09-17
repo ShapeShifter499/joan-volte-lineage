@@ -630,6 +630,33 @@ public final class TestJoanSip {
                 "REGISTER carries no P-Preferred-Identity (RFC 3325 9.1)");
         check(!noTags.contains("P-Preferred-Identity"),
                 "and not in the no-tags form either");
+
+        /* RFC 3261 20.41. Optional, but both reference stacks send one,
+         * and ours must be truthful rather than an imitation of a vendor
+         * string a carrier might profile on. */
+        JoanSipBuilder.setUserAgentVersion(null);
+        check(withTags.contains("User-Agent: joan-ims")
+                        || JoanSipBuilder.buildRegister(id, txn, 1, null, null)
+                                .contains("User-Agent: joan-ims"),
+                "REGISTER carries a User-Agent");
+        JoanSipBuilder.setUserAgentVersion("0.4.0-test");
+        String uaReg = JoanSipBuilder.buildRegister(id, txn, 1, null, null);
+        check(uaReg.contains("User-Agent: joan-ims/0.4.0-test"),
+                "and it carries our version when we know it");
+        /* Scoped to the header line: "algorithm=AKAv1-MD5" contains
+         * "lg", which a whole-message search trips over. */
+        String uaLine = "";
+        for (String ln : uaReg.split("\r\n")) {
+            if (ln.startsWith("User-Agent:")) {
+                uaLine = ln;
+                break;
+            }
+        }
+        final String ua = uaLine.toLowerCase(java.util.Locale.ROOT);
+        check(!ua.contains("lge") && !ua.contains("lg/")
+                        && !ua.contains("t-mobile") && !ua.contains("volte-epdg"),
+                "and never imitates a vendor or carrier");
+        JoanSipBuilder.setUserAgentVersion(null);
         /* No dangling separator where the tags used to be: the Contact
          * must end at the instance-id's closing quote. */
         check(noTags.contains(">\"\r\n"),

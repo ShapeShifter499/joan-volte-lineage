@@ -35,6 +35,32 @@ final class JoanSipBuilder {
      * telephone-events, not as application/dtmf-relay. If a handler is
      * ever written, this is the line that re-advertises it.
      */
+    /**
+     * Our User-Agent, RFC 3261 20.41.
+     *
+     * <p>Optional by the RFC, but both reference stacks send one: AOSP's
+     * REGISTER path sets {@code USER_AGENT}, and LG carries a per-carrier
+     * {@code header_info_useragent_fmt}. There is no carrier-config key
+     * for it, so this is a default of our own choosing.
+     *
+     * <p>Deliberately truthful and minimal. It does not imitate a vendor
+     * or a carrier's expected string: a network that gates behaviour on
+     * User-Agent should see what this actually is, and a trace that ends
+     * up in a carrier's hands should not claim to be an LG handset.
+     */
+    static final String USER_AGENT = "joan-ims";
+
+    private static volatile String sUaVersion;
+
+    /** Record our own version for the User-Agent string. */
+    static void setUserAgentVersion(String version) {
+        sUaVersion = (version == null || version.isEmpty()) ? null : version;
+    }
+
+    static String userAgent() {
+        return sUaVersion == null ? USER_AGENT : USER_AGENT + "/" + sUaVersion;
+    }
+
     static final String ALLOW = "INVITE, ACK, CANCEL, BYE, UPDATE, OPTIONS, "
             + "REFER, SUBSCRIBE, NOTIFY, PRACK";
     /** The 3GPP default unprotected P-CSCF port. */
@@ -809,6 +835,7 @@ final class JoanSipBuilder {
                 .append("\r\n");
         a.append("Expires: ").append(registerExpires()).append("\r\n");
         a.append("Allow: ").append(ALLOW).append("\r\n");
+        a.append("User-Agent: ").append(userAgent()).append("\r\n");
         a.append("Supported: path, sec-agree\r\n");
         a.append("Require: sec-agree\r\n");
         a.append("Proxy-Require: sec-agree\r\n");
@@ -2349,6 +2376,7 @@ final class JoanSipBuilder {
         a.append("P-Preferred-Identity: <").append(aor).append(">\r\n");
         a.append("P-Access-Network-Info: ").append(pani).append("\r\n");
         a.append("Allow: ").append(ALLOW).append("\r\n");
+        a.append("User-Agent: ").append(userAgent()).append("\r\n");
         if (requireSecAgree) {
             a.append("Require: sec-agree\r\n");
             a.append("Proxy-Require: sec-agree\r\n");
