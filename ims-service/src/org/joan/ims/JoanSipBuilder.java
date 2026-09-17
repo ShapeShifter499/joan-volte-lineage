@@ -171,6 +171,50 @@ final class JoanSipBuilder {
         return sUdpFallbackOnConnectFail;
     }
 
+    /* Whether a protected TCP socket closes with RST rather than FIN. */
+    private static volatile boolean sProtectedTcpLingerReset = true;
+
+    /**
+     * Whether to close the protected TCP socket with a reset.
+     *
+     * <p>{@code SO_LINGER} with a linger time of zero, which is LG's
+     * remedy for China Mobile: {@code CMCCAoSIPSecHelper::InitIPSec}
+     * sets {@code CONFIG_I_LINGER} with the value zeroed and does
+     * nothing else. Under RFC 3329 sec-agree both ends of the protected
+     * connection are fixed, so every protected connection reuses one
+     * 4-tuple and a lingering {@code TIME_WAIT} makes the next
+     * {@code connect()} fail -- which is what the China Mobile trace
+     * shows.
+     *
+     * <p><b>The hazard, and why this is a switch rather than a
+     * constant.</b> A reset tells the P-CSCF the flow died. LG scoped
+     * this to one carrier; joan applies it to every protected TCP
+     * socket, which is a first-principles argument overriding a
+     * deliberate vendor choice -- and this project has already shipped
+     * one carrier change in the wrong direction by reasoning from a
+     * mechanism instead of checking the value.
+     *
+     * <p>It also stopped being a narrow change the moment the
+     * MTU-derived criterion landed. Before that, 11 profiles plus every
+     * unprofiled carrier sat on a 4096-byte criterion and essentially
+     * never reached protected TCP, so this affected almost nobody. At a
+     * computed 1300 most carriers' REG2 -- which carries auth
+     * parameters and Security-Verify -- will exceed it. The two
+     * untested changes compound, and that is exactly the pair worth
+     * being able to separate from a tester's couch.
+     *
+     * <p>Default on: the fixed-4-tuple argument is sound and the
+     * connect failure is observed, not theorised. But it is one call to
+     * turn off.
+     */
+    static void setProtectedTcpLingerReset(boolean on) {
+        sProtectedTcpLingerReset = on;
+    }
+
+    static boolean protectedTcpLingerReset() {
+        return sProtectedTcpLingerReset;
+    }
+
     /**
      * Our own Session-ID UUID for a dialog, RFC 7989 s6.
      *

@@ -2837,6 +2837,18 @@ public final class TestJoanSip {
         check(!JoanSipBuilder.udpFallbackOnTcpConnectFail(),
                 "and can be turned off without a code change");
         JoanSipBuilder.setUdpFallbackOnTcpConnectFail(true);
+
+        /* RST-on-close for the protected TCP socket. Default on, but a
+         * switch rather than a constant: it tells the P-CSCF the flow
+         * died, LG scoped it to one carrier, and it stopped being narrow
+         * the moment the MTU-derived criterion put most carriers onto
+         * protected TCP in the first place. */
+        check(JoanSipBuilder.protectedTcpLingerReset(),
+                "the protected TCP socket closes with RST by default");
+        JoanSipBuilder.setProtectedTcpLingerReset(false);
+        check(!JoanSipBuilder.protectedTcpLingerReset(),
+                "and that can be turned off without a rebuild");
+        JoanSipBuilder.setProtectedTcpLingerReset(true);
     }
 
     /**

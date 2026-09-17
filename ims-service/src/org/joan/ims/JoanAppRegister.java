@@ -1802,7 +1802,9 @@ final class JoanAppRegister {
                  * carrier joan cannot test is a bad place to put a
                  * scope. No configuration key anywhere supplies this,
                  * so there is nothing to make switchable. */
-                sock.setSoLinger(true, 0);
+                if (JoanSipBuilder.protectedTcpLingerReset()) {
+                    sock.setSoLinger(true, 0);
+                }
                 /* Bounded per-read slices so the deadline holds to ~2 s. */
                 sock.setSoTimeout(Math.max(1, Math.min(2000, timeoutMs)));
                 try {
