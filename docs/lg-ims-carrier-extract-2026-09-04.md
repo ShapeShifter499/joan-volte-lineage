@@ -356,6 +356,46 @@ implements AKA only. The failing tester is challenged with `AKAv1-MD5`
 and answers it, so Digest is not what that network asked of them -- but
 it is the only row in this table naming something joan cannot do at all.
 
+### LG applies no hardcoded SIP quirk to China Mobile (2026-09-16)
+
+`SIPFeatures` in `libims.lge.so` holds eleven per-operator predicates --
+`IsTransportParameterIgnoredForRegBinding`, `IsHeaderSessionIdRequired`,
+`IsPANIHeaderForAckRequired`, `IsReferSubHeaderSupported`,
+`IsSocketOptionRequiredForTcpMaxSeg` and others. They look like bitmask
+tests on `common_sip_features`; they are not. Each calls
+
+```c
+bool IsOperatorTargetFS(int wanted, int slot) {
+    return op->slots[slot].operatorId == wanted;   // offset 0x14
+}
+```
+
+so they are **hardcoded per-operator quirks**, keyed by an operator enum.
+
+The enum's name table is in `.rodata`, 158 entries beginning
+`NONE AIS APT ARTL ATT CRK AVE BEE BELL BYT CCM CELC CHT CLR CMCC ...`,
+which puts **CMCC at index 14 (0x0E)**. The five constants those
+predicates test resolve to:
+
+| id | operator | quirk |
+| --- | --- | --- |
+| 0x13 | DCM (NTT Docomo) | TCP MaxSeg socket option, host-part validation |
+| 0x20 | KDDI | PANI required in ACK |
+| 0x3c | SBM (SoftBank) | Refer-Sub not supported |
+| 0x52 | USC (US Cellular) | Session-ID header required |
+| 0x5a | SPR (Sprint) | transport parameter ignored for reg binding |
+
+**None of them is China Mobile.** Every quirk in this mechanism targets a
+Japanese or US carrier.
+
+This closes a hypothesis class rather than opening one: there is no
+hidden, code-level China Mobile SIP behaviour in LG's stack. Everything
+CMCC-specific is in the configuration XML -- which is now fully mined --
+and in the `CMCCAoS*` classes, whose specialisation is proxy and flow
+recovery. So the 404 is not explained by a vendor quirk joan is missing,
+and the remaining unknowns are what our REGISTER actually contains
+(`reg2_hdrs` will say) and their core's own behaviour.
+
 ## Hardware still required
 
 CMCC SIM: `last_register` with `tpt=tcp` then `reg2=200`, or
