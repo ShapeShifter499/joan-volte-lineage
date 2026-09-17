@@ -231,6 +231,47 @@ communication sessions and get none. Responses **mirror**: a request that
 arrived without the header is answered without it. REGISTER never carries
 it, which is also why it cannot be relevant to the CMCC 404.
 
+## Protected TCP, verified end to end on hardware (2026-09-17)
+
+The protected-TCP path had never executed on any device. T-Mobile is the
+only carrier this project can test and it registers over UDP, so
+`SO_LINGER(0)`, the IPsec transform on a stream socket, and the
+MTU-derived criterion selecting TCP were all host-tested only.
+
+Forced by installing a throwaway build with the T-Mobile PLMN exception
+bypassed -- everything else identical to alpha32. Measured:
+
+```
+reg1_crit=1300 tpt_pol=2 plmn=sim:310260 reg1len=1529 reg1_tpt=tcp
+reg1=401
+reg2send=27954->65529 tpt=tcp
+reg2=200 OK
+```
+
+Every element of the chain fired, and no `tcp_fail=` appears anywhere:
+
+- the criterion selected TCP on its own arithmetic (1529 > 1300);
+- the PLMN resolved through the SIM, not the branded realm;
+- the unprotected REGISTER went over TCP and drew a 401 challenge;
+- the **protected** REGISTER went over TCP inside the IPsec SAs and drew
+  a 200 OK;
+- `SO_LINGER(0)` -- RST rather than FIN on close -- did not prevent any
+  of it.
+
+Registration then stayed up across three checks at 45-second intervals,
+which is the question that mattered for the reset: an RST tells the
+P-CSCF the flow died, and the fear was that it would take the binding
+with it. It did not.
+
+**What this does and does not establish.** T-Mobile's P-CSCF accepts
+protected TCP and tolerates the reset. That is one network. It does not
+prove China Mobile's will, and the reset is still scoped wider than LG
+scopes it -- see `setProtectedTcpLingerReset()`, which exists to be
+turned off. But the mechanism is no longer theoretical: it has carried a
+real registration to 200 OK on a real handset.
+
+The bench was restored to alpha32 afterwards and re-verified registered.
+
 ## The REGISTER TCP criterion: now computed, not provisioned
 
 Found 2026-09-17 while testing whether the CMCC 404 is an encryption
