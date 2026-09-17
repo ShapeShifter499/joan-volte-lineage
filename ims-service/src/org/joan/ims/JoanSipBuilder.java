@@ -363,6 +363,76 @@ final class JoanSipBuilder {
         return plat > 0 ? plat : linkMtu;
     }
 
+    /** {@code ims.sip_preferred_transport_int}, a public carrier key. */
+    static final int TRANSPORT_UDP = 0;
+    static final int TRANSPORT_TCP = 1;
+    static final int TRANSPORT_DYNAMIC_UDP_TCP = 2;
+    static final int TRANSPORT_TLS = 3;
+
+    /* AosRegistration.h constants. Neither
+     * ims.max_allowed_network_mtu_int nor
+     * ims.sip_message_threshold_for_transport_change_int is in the
+     * public CarrierConfigManager, so these are the reference stack's
+     * own defaults rather than values we can read. 1500 - 200 = 1300,
+     * which is also AOSP's final fallback. */
+    static final int MTU_MAX_SIZE_VIA_MOBILE = 1500;
+    static final int DEFAULT_SIP_THRESHOLD_SIZE = 200;
+
+    /* The platform's preferred transport, -1 = it did not say. */
+    private static volatile int sPlatTransport = -1;
+
+    static void setPlatformPreferredTransport(int transport) {
+        sPlatTransport = transport;
+    }
+
+    static int platformPreferredTransport() {
+        return sPlatTransport;
+    }
+
+    /**
+     * The REGISTER TCP criterion, computed the way AOSP computes it.
+     *
+     * <p>Ported from {@code AosRegistration::SetTcpCriterionLength()}:
+     *
+     * <pre>
+     *   if (mtu > 0 &amp;&amp; mtu &gt; threshold)  len = min(mtu, maxMtu) - threshold;
+     *   else                                       len = sipMtuSize[family];
+     *   if (len &lt;= 0)                            len = 1500 - 200;
+     * </pre>
+     *
+     * <p>The asymmetry in the middle is AOSP's, not a transcription
+     * slip: when the link MTU is unusable the SIP MTU key is taken as
+     * the criterion directly, because that key already states a SIP
+     * message size rather than a link MTU to subtract headroom from.
+     *
+     * <p>This replaces the per-carrier criterion distilled from the LG
+     * snapshot. AOSP deleted that mechanism, and the precedence rule
+     * prefers a value computed from updatable platform keys over a 2017
+     * extract -- which also disposes of the question of what a
+     * provisioned 0 meant, since nothing provisioned is consulted.
+     *
+     * <p>On this handset the bearer reports MTU 1500, so the criterion
+     * is 1300: the same figure the CMCC profile was being given by the
+     * hardcoded path this replaces.
+     *
+     * <p>The ePDG/Wi-Fi branches of the original are omitted with the
+     * rest of VoWiFi; {@code MTU_MAX_SIZE_VIA_WIFI} belongs with them.
+     */
+    static int registerTcpCriterion(int linkMtu, boolean ipv6) {
+        int threshold = DEFAULT_SIP_THRESHOLD_SIZE;
+        int len;
+        if (linkMtu > 0 && linkMtu > threshold) {
+            int mtu = Math.min(linkMtu, MTU_MAX_SIZE_VIA_MOBILE);
+            len = mtu - threshold;
+        } else {
+            len = ipv6 ? sPlatMtuV6 : sPlatMtuV4;
+        }
+        if (len <= 0) {
+            len = MTU_MAX_SIZE_VIA_MOBILE - DEFAULT_SIP_THRESHOLD_SIZE;
+        }
+        return len;
+    }
+
     static final class Params {
         final long spiC;
         final long spiS;
@@ -770,8 +840,7 @@ final class JoanSipBuilder {
      * select TCP under GLOBAL 4096.
      */
     static boolean preferProtectedTcp(String realm, int messageLen) {
-        int criterion = tcpCriterionFor(realm, false);
-        return criterion > 0 && messageLen > criterion;
+        return preferTcp(realm, messageLen, 0, false);
     }
 
     /**
@@ -800,21 +869,38 @@ final class JoanSipBuilder {
      */
     static boolean preferTcp(String realm, int messageLen, int mtu,
                              boolean ipv6) {
-        int criterion = tcpCriterionFor(realm, ipv6);
-        if (criterion <= 0) {
+        int mcc = plmnOf(realm);
+        if (mcc == -1) {
+            return false; /* non-3GPP realm: never flip transport */
+        }
+        if (mcc == 310 && mncOf(realm) == 260) {
+            /* Kept ahead of everything, and it is the one piece of
+             * policy here that is not the reference stack's. This
+             * handset registers on T-Mobile over UDP and flipping it to
+             * TCP was tested and not wanted. A bench-proven result
+             * outranks a computed default; PLMN-scoped so it cannot
+             * leak to another carrier. */
             return false;
         }
-        if (messageLen > criterion) {
+        /* The platform's own transport policy, a public carrier key, and
+         * therefore tier 1. DYNAMIC_UDP_TCP -- what this handset reports
+         * -- is the only value that consults a length criterion at all.
+         * TLS falls through to the criterion rather than being honoured:
+         * joan has no TLS transport, and claiming one we cannot speak
+         * would be worse than choosing between the two we can. */
+        int transport = sPlatTransport;
+        if (transport == TRANSPORT_UDP) {
+            return false;
+        }
+        if (transport == TRANSPORT_TCP) {
             return true;
         }
-        if (!ipv6) {
-            return false;
-        }
-        int useMtu = effectiveMtu(mtu, true);
-        if (useMtu > 0) {
-            return messageLen + udpOverhead(true) + 200 > useMtu;
-        }
-        return messageLen > 1300;
+        /* AOSP's criterion already carries RFC 3261 18.1.1's intent: its
+         * 200-byte threshold is the headroom the RFC asks to be left
+         * below the path MTU. joan used to apply the RFC rule again on
+         * top of a carrier criterion, and for IPv6 only; that is now one
+         * calculation for both families. */
+        return messageLen > registerTcpCriterion(mtu, ipv6);
     }
 
     /**
@@ -889,7 +975,18 @@ final class JoanSipBuilder {
                 || mnc == 7 || mnc == 8);
     }
 
-    private static int tcpCriterionFor(String realm, boolean ipv6) {
+    /**
+     * The criterion the LG snapshot holds for this PLMN.
+     *
+     * <p><b>Diagnostic only since the MTU-derived criterion landed.</b>
+     * Nothing routes on this any more -- see
+     * {@link #registerTcpCriterion} -- but the value is still worth
+     * being able to report, because it is what a trace from a failing
+     * network has to be read against. Retained rather than deleted for
+     * that reason, and because the tests that pin the snapshot's content
+     * are the record of what LG actually shipped.
+     */
+    static int tcpCriterionFor(String realm, boolean ipv6) {
         int mcc = plmnOf(realm);
         int mnc = mncOf(realm);
         if (mcc == -1) {

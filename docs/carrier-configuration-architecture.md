@@ -231,68 +231,94 @@ communication sessions and get none. Responses **mirror**: a request that
 arrived without the header is answered without it. REGISTER never carries
 it, which is also why it cannot be relevant to the CMCC 404.
 
-## The REGISTER TCP criterion: joan reads a provisioned 0 as absence
+## The REGISTER TCP criterion: now computed, not provisioned
 
 Found 2026-09-17 while testing whether the CMCC 404 is an encryption
-problem. It is not an encryption problem -- see below -- but the search
-turned this up, and it is a live defect affecting 21 of 136 carriers.
+problem. It is not -- see below -- but the search turned up a live
+defect, and the fix was to delete the mechanism it lived in.
 
-**What the shared engine says.** `SipProfile.h` defines
-`NOT_PROVISIONED = (-10)`. `SipConfigProxy::GetTcpCriterionLength`
-returns the profile's value for anything `!= NOT_PROVISIONED`, so a
-provisioned `0` is returned unchanged. `SipClientTransport.cpp` then
-does `if (nBuffLen > GetTcpCriterionLength(...))` and rewrites the Via
-sent-protocol to TCP. Every message is longer than zero bytes.
+### The defect
 
-**So a criterion of 0 means "always TCP".** It does not mean "unset" --
-that is -10 -- and it certainly does not mean "never TCP".
+`SipProfile.h` defines `NOT_PROVISIONED = (-10)`.
+`SipConfigProxy::GetTcpCriterionLength` returns the profile's value for
+anything `!= NOT_PROVISIONED`, so a provisioned `0` is returned
+unchanged, and `SipClientTransport.cpp` then does
+`if (nBuffLen > criterion)` -- which every message satisfies. **A
+criterion of 0 means "always TCP".**
 
-**What joan does.** `tcpCriterionFor()` carried the comment *"0 is how
-the stock configuration spells no per-family value"* and skipped it
-(`perFamily > 0 ? perFamily : ...`), then callers treat `criterion <= 0`
-as "never flip transport". Both halves are the inverse of the engine.
+joan's `tcpCriterionFor()` claimed *"0 is how the stock configuration
+spells no per-family value"* and skipped it, and callers read
+`criterion <= 0` as "never TCP". Both halves were the inverse of the
+engine. 21 of 136 profiles provision 0 in both families -- CMCC, DCM,
+KDDI, SBM, KT, SKT, LGU, ATT, TMO, O2, SFR, SPR and others. Docomo,
+KDDI, SoftBank and the three Korean carriers are LG's home markets and
+its most heavily documented profiles; an unset field does not cluster
+like that.
 
-**Who provisions 0 in both families** -- 21 carriers, and the list is the
-argument:
+### The fix: adopt AOSP's computation
 
-```
-AIS.TH  ATT.US.NAO  CLR.PE  CMCC.CN  CNW.PA  CSL.HK  CTM.MO  DCM.JP
-H3G.HK  KDDI.JP  KT.KR  LGU.KR  O2.GB  PCCW.HK  SBM.JP  SFR.FR
-SFR.RE  SKT.KR  SPR.US  TMO.US.NAO  VZW.US.VOWIFI
-```
-
-Docomo, KDDI, SoftBank, KT, SKT, LG U+ -- LG's home markets, the
-profiles it documents most heavily (KT alone has 43 hardcoded quirks).
-An unset field does not cluster like that.
-
-For CMCC specifically joan discards the provisioned 0 and falls through
-to `isCmccPlmn()` -> 1300, a threshold China Mobile never asked for.
-
-**Not acted on yet, deliberately.** Honouring it flips 21 untestable
-networks to all-TCP REGISTER, and the one trace held from such a network
-shows its TCP connect *failing*. Making REG1 share REG2's failing
-transport would be strictly worse.
-
-**The resolution that avoids the question.** AOSP deleted the provisioned
-criterion entirely. `AosRegistration::SetTcpCriterionLength()` computes
-it, gated on `GetSipPreferredTransport() == PREFERRED_TRANSPORT_DYNAMIC_UDP_TCP`:
+Rather than settle what LG's 0 meant, joan now does what AOSP does and
+consults nothing provisioned. Ported from
+`AosRegistration::SetTcpCriterionLength()`:
 
 ```
-nLength = min(linkMtu, maxAllowedMtu) - sipMessageThresholdForTransportChange
-   ...falling back to ims.ipv4/ipv6_sip_mtu_size_cellular_int when the
-      link MTU is unusable, and to defaults when the result is <= 0
+if (mtu > 0 && mtu > threshold)  len = min(mtu, maxMtu) - threshold;
+else                             len = sipMtuSize[family];
+if (len <= 0)                    len = 1500 - 200;
 ```
 
-Every input is tier 1 on this platform and joan already reads two of
-them: the bench handset reports `ims.sip_preferred_transport_int` = 2
-(DYNAMIC_UDP_TCP) and SIP MTU 1500/1500. Adopting AOSP's algorithm makes
-the snapshot's per-family criterion irrelevant, which disposes of the
-0-semantics question rather than answering it -- and it is what the
-precedence rule asks for anyway, since a computed platform value outranks
-a 2017 snapshot.
+The asymmetry in the middle is AOSP's: when the link MTU is unusable the
+SIP MTU key is taken as the criterion *directly*, because that key
+already states a SIP message size rather than a link MTU to subtract
+headroom from.
 
-It is still a transport change across many carriers, so it is written up
-here for a decision rather than taken unilaterally.
+Inputs, and where each sits in the precedence rule:
+
+| input | source | tier |
+| --- | --- | --- |
+| `ims.sip_preferred_transport_int` | public `CarrierConfigManager` | 1 |
+| `ims.ipv4/ipv6_sip_mtu_size_cellular_int` | public `CarrierConfigManager` | 1 |
+| link MTU | the bearer | 2 |
+| `max_allowed_network_mtu` = 1500 | AOSP constant; no public key | 3 |
+| `sip_message_threshold_for_transport_change` = 200 | AOSP constant; no public key | 3 |
+
+The first three are readable and updatable; only the two constants are
+fixed, and both are the reference stack's own defaults.
+
+### What changed in behaviour
+
+- **The snapshot no longer routes.** `tcpCriterionFor()` survives as a
+  diagnostic, because a trace from a failing network has to be read
+  against what LG shipped, and the tests that pin its content are the
+  record of that. Nothing decides on it.
+- **IPv4 and IPv6 share one calculation.** joan applied RFC 3261 18.1.1
+  to IPv6 only and left IPv4 on the carrier criterion, so a 1568- or
+  1830-byte IPv4 REGISTER stayed on UDP well past the point of
+  fragmenting. AOSP's 200-byte threshold *is* 18.1.1's headroom, so
+  applying both was double-counting.
+- **An over-large MTU is clamped.** A 2500-byte MTU used to keep a big
+  message on UDP; it now clamps to 1500 and yields the same 1300.
+- **The platform's transport policy decides first.** `UDP` never flips,
+  `TCP` always does, `DYNAMIC_UDP_TCP` -- what this handset reports --
+  is the only value that consults a length at all. `TLS` falls through
+  to the criterion rather than being honoured: joan has no TLS
+  transport, and claiming one it cannot speak would be worse than
+  choosing between the two it can.
+
+### Risk
+
+Lower than it looks. `1500 - 200 = 1300`, which is also AOSP's final
+fallback, so on any ordinary 1500-MTU cellular bearer the computed
+criterion equals the 1300 the hardcoded CMCC path was already handing
+out. The carriers that move are those whose snapshot value was far from
+1300 -- chiefly the 4096 GLOBAL default, where oversized REGISTERs were
+staying on UDP.
+
+**The T-Mobile exception is kept, ahead of the computation.** It is the
+one piece of policy here that is not the reference stack's: this handset
+registers on T-Mobile over UDP and flipping it to TCP was tested and not
+wanted. A bench-proven result outranks a computed default, and it is
+PLMN-scoped so it cannot leak.
 
 ## The 404 is not an encryption-configuration problem
 

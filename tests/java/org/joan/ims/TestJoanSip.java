@@ -213,8 +213,16 @@ public final class TestJoanSip {
         check(!JoanSipBuilder.preferProtectedTcp(
                         "ims.mnc002.mcc460.3gppnetwork.org", 1024),
                 "other MCC 460 MNC also criterion-bound");
-        check(!JoanSipBuilder.preferProtectedTcp(
-                        "ims.mnc001.mcc460.3gppnetwork.org", 1824),
+        /* PLMN scoping -- that China Unicom (46001) must not inherit
+         * China Mobile's value -- is now a property of the snapshot
+         * lookup rather than of routing, because routing no longer
+         * consults the snapshot. Every 3GPP realm gets the same computed
+         * criterion, so the assertion moves to where the distinction
+         * still exists. */
+        check(JoanSipBuilder.tcpCriterionFor(
+                        "ims.mnc001.mcc460.3gppnetwork.org", false) == 4096
+                        && JoanSipBuilder.tcpCriterionFor(
+                        "ims.mnc000.mcc460.3gppnetwork.org", false) == 1300,
                 "CU must not inherit CMCC instead of GLOBAL");
         check(!JoanSipBuilder.preferProtectedTcp(
                         "ims.mnc260.mcc310.3gppnetwork.org", 1024),
@@ -467,7 +475,7 @@ public final class TestJoanSip {
                 "NOS-sized REGISTER stays UDP on global criterion");
         check(JoanSipBuilder.preferProtectedTcp(
                         "ims.mnc04.mcc452.3gppnetwork.org", 5000),
-                "unknown-PLMN message over 4096 goes TCP (stock 4096 live)");
+                "a message over the computed criterion goes TCP");
         String nos = "ims.mnc003.mcc268.3gppnetwork.org";
         String viettel = "ims.mnc004.mcc452.3gppnetwork.org";
         String tmus = "ims.mnc260.mcc310.3gppnetwork.org";
@@ -480,12 +488,20 @@ public final class TestJoanSip {
                 "small IPv6 REGISTER with unknown MTU stays UDP");
         check(JoanSipBuilder.preferTcp(nos, 1630, 1500, true),
                 "NOS IPv6 REG1 within 200 bytes of 1500 MTU uses TCP");
-        check(!JoanSipBuilder.preferTcp(nos, 1630, 2500, true),
-                "IPv6 REGISTER under a large path MTU stays UDP");
-        check(!JoanSipBuilder.preferTcp(viettel, 1568, 0, false),
-                "Viettel IPv4 REG1 stays UDP when MTU is unknown");
-        check(!JoanSipBuilder.preferTcp(viettel, 1830, 1500, false),
-                "Viettel IPv4 REG2 does not inherit the IPv6 RFC switch");
+        /* Changed deliberately with the MTU-derived criterion. A 2500
+         * MTU is clamped to max_allowed_network_mtu (1500), so it gives
+         * the same 1300 as a 1500 bearer -- joan used to let an
+         * over-large MTU keep a big message on UDP. */
+        check(JoanSipBuilder.preferTcp(nos, 1630, 2500, true),
+                "an MTU above 1500 is clamped, so 1630 still goes TCP");
+        /* IPv4 and IPv6 now share one calculation. joan used to apply
+         * RFC 3261 18.1.1 to IPv6 only and leave IPv4 on the carrier
+         * criterion, which left 1568- and 1830-byte IPv4 REGISTERs on
+         * UDP well past the point of fragmenting. */
+        check(JoanSipBuilder.preferTcp(viettel, 1568, 0, false),
+                "IPv4 uses the same criterion as IPv6 (unknown MTU -> 1300)");
+        check(JoanSipBuilder.preferTcp(viettel, 1830, 1500, false),
+                "and an 1830-byte IPv4 REG2 no longer stays on UDP");
         check(!JoanSipBuilder.preferTcp(tmus, 1830, 0, true)
                         && !JoanSipBuilder.preferTcp(tmus, 9216, 1280, true),
                 "TMUS never leaves UDP even on IPv6/small MTU");
@@ -748,57 +764,83 @@ public final class TestJoanSip {
         String tmo   = "ims.mnc260.mcc310.3gppnetwork.org";
         String other = "ims.mnc001.mcc234.3gppnetwork.org";
 
-        /* Built-in table, before any profile is pushed. China Mobile is
-         * five MNCs; this used to match mnc000 alone, so 46002 -- the PLMN
-         * that reports the reg2=404 -- got the 4096 GLOBAL default. */
+        /* The snapshot's criterion is now DIAGNOSTIC ONLY. Routing moved
+         * to registerTcpCriterion(), which AOSP computes from the MTU and
+         * which consults nothing provisioned. These checks keep pinning
+         * what LG actually shipped and that its PLMN scoping is right,
+         * because that is what a trace from a failing network has to be
+         * read against -- they just no longer describe what joan does. */
         JoanSipBuilder.setCarrierTcpCriterion(-1, -1, -1);
-        check(JoanSipBuilder.preferTcp(cmcc2, 1400, 0, true),
-                "CMCC 46002 uses China Mobile's 1300, not the 4096 default");
-        check(JoanSipBuilder.preferTcp(cmcc0, 1400, 0, true),
-                "CMCC 46000 still does");
-        check(!JoanSipBuilder.preferTcp(other, 1400, 1500, false),
-                "an unknown carrier keeps the 4096 default");
+        check(JoanSipBuilder.tcpCriterionFor(cmcc2, true) == 1300,
+                "snapshot: CMCC 46002 reads China Mobile's 1300, not 4096");
+        check(JoanSipBuilder.tcpCriterionFor(cmcc0, true) == 1300,
+                "snapshot: CMCC 46000 still does");
+        check(JoanSipBuilder.tcpCriterionFor(other, false) == 4096,
+                "snapshot: an unknown carrier reads the 4096 GLOBAL default");
+        JoanSipBuilder.setCarrierTransport(460, 2, 1300, 900, 1080);
+        check(JoanSipBuilder.tcpCriterionFor(cmcc2, true) == 1080
+                        && JoanSipBuilder.tcpCriterionFor(cmcc2, false) == 900,
+                "snapshot: a per-family value wins over the common one");
+        check(JoanSipBuilder.tcpCriterionFor(other, false) == 4096,
+                "snapshot: a pushed profile never leaks onto another PLMN");
+        JoanSipBuilder.setCarrierTransport(-1, -1, -1, 0, 0);
 
-        /* The T-Mobile exception outranks everything: LG's own config asks
-         * for 1200, joan deliberately stays on UDP there. */
-        check(!JoanSipBuilder.preferTcp(tmo, 4000, 1500, false),
-                "T-Mobile never flips to TCP on the criterion");
-        JoanSipBuilder.setCarrierTcpCriterion(310, 260, 1200);
-        check(!JoanSipBuilder.preferTcp(tmo, 4000, 1500, false),
-                "and a pushed profile does not override that exception");
+        /* And the point of the change: a pushed profile no longer moves
+         * the transport decision at all. 900 would have flipped a
+         * 1000-byte message; the computed criterion is 1300, so it does
+         * not. */
+        JoanSipBuilder.setCarrierTransport(460, 2, 900, 900, 900);
+        check(!JoanSipBuilder.preferTcp(cmcc2, 1000, 0, true),
+                "a snapshot criterion no longer routes");
+        JoanSipBuilder.setCarrierTransport(-1, -1, -1, 0, 0);
 
-        /* A pushed profile applies only to its own PLMN. */
-        JoanSipBuilder.setCarrierTcpCriterion(460, 2, 900);
-        check(JoanSipBuilder.preferTcp(cmcc2, 1000, 1500, false),
-                "a pushed criterion is used for its own PLMN");
-        check(!JoanSipBuilder.preferTcp(other, 1000, 1500, false),
-                "and never leaks onto a different PLMN");
-        check(!JoanSipBuilder.preferTcp(cmcc0, 1000, 1500, false),
-                "not even onto a sibling MNC of the same carrier");
+        /* The T-Mobile exception is the one piece of joan policy that
+         * still outranks the computation, because it is bench-proven. */
+        check(!JoanSipBuilder.preferTcp(tmo, 4000, 1500, false)
+                        && !JoanSipBuilder.preferTcp(tmo, 9216, 1280, true),
+                "T-Mobile never flips to TCP, whatever the MTU says");
 
-        /* Non-3GPP realms never flip transport, profile or not. */
+        /* The platform's own transport policy is tier 1 and decides
+         * before any length is considered. */
+        JoanSipBuilder.setPlatformPreferredTransport(
+                JoanSipBuilder.TRANSPORT_UDP);
+        check(!JoanSipBuilder.preferTcp(cmcc2, 9000, 1500, false),
+                "the platform asking for UDP keeps a huge message on UDP");
+        JoanSipBuilder.setPlatformPreferredTransport(
+                JoanSipBuilder.TRANSPORT_TCP);
+        check(JoanSipBuilder.preferTcp(cmcc2, 10, 1500, false),
+                "the platform asking for TCP flips even a tiny message");
+        JoanSipBuilder.setPlatformPreferredTransport(
+                JoanSipBuilder.TRANSPORT_TLS);
+        check(!JoanSipBuilder.preferTcp(cmcc2, 10, 1500, false),
+                "TLS falls through to the criterion; joan has no TLS to claim");
+        JoanSipBuilder.setPlatformPreferredTransport(
+                JoanSipBuilder.TRANSPORT_DYNAMIC_UDP_TCP);
+        check(JoanSipBuilder.preferTcp(cmcc2, 1400, 1500, false)
+                        && !JoanSipBuilder.preferTcp(cmcc2, 1000, 1500, false),
+                "DYNAMIC_UDP_TCP is the value that consults the criterion");
+        JoanSipBuilder.setPlatformPreferredTransport(-1);
+
+        /* AOSP's own arithmetic: AosRegistration::SetTcpCriterionLength. */
+        check(JoanSipBuilder.registerTcpCriterion(1500, false) == 1300,
+                "a 1500 MTU gives 1300 (1500 - 200 threshold)");
+        check(JoanSipBuilder.registerTcpCriterion(9000, false) == 1300,
+                "an MTU above max_allowed_network_mtu is clamped to 1500");
+        check(JoanSipBuilder.registerTcpCriterion(1280, true) == 1080,
+                "a 1280 MTU gives 1080, the IPv6 value 108 profiles carry");
+        check(JoanSipBuilder.registerTcpCriterion(0, false) == 1300,
+                "no MTU and no platform SIP MTU falls back to 1500 - 200");
+        check(JoanSipBuilder.registerTcpCriterion(100, false) == 1300,
+                "an MTU below the threshold is unusable, not a criterion of -100");
+        JoanSipBuilder.setPlatformSipMtu(1400, 1200);
+        check(JoanSipBuilder.registerTcpCriterion(0, false) == 1400
+                        && JoanSipBuilder.registerTcpCriterion(0, true) == 1200,
+                "an unusable link MTU falls back to the platform SIP MTU key, "
+                + "taken as the criterion directly (AOSP's asymmetry)");
+        JoanSipBuilder.setPlatformSipMtu(0, 0);
+
         check(!JoanSipBuilder.preferTcp("ims.example.net", 9000, 1500, false),
                 "a non-3GPP realm never flips transport");
-
-        JoanSipBuilder.setCarrierTcpCriterion(-1, -1, -1);
-
-        /* Per-family criteria. 108 of 136 profiles carry an IPv6 value of
-         * 1080; joan had no way to use one until now. */
-        JoanSipBuilder.setCarrierTransport(460, 2, 1300, 0, 1080);
-        check(JoanSipBuilder.preferTcp(cmcc2, 1100, 1500, true),
-                "the IPv6 per-family criterion is used over the common one");
-        check(!JoanSipBuilder.preferTcp(cmcc2, 1100, 1500, false),
-                "and IPv4 still uses the common one");
-        JoanSipBuilder.setCarrierTransport(460, 2, 1300, 900, 0);
-        check(JoanSipBuilder.preferTcp(cmcc2, 1000, 1500, false),
-                "an IPv4 per-family criterion is used for IPv4");
-        /* v6 is 0 here, so IPv6 must fall back to the common 1300:
-         * above it flips, below it does not. */
-        check(JoanSipBuilder.preferTcp(cmcc2, 1400, 1500, true),
-                "IPv6 falls back to the common value when v6 is 0");
-        check(!JoanSipBuilder.preferTcp(cmcc2, 1000, 1500, true),
-                "and that fallback is a real threshold, not always-true");
-        JoanSipBuilder.setCarrierTransport(-1, -1, -1, 0, 0);
 
         /* REGISTER Expires. Both carriers joan can test want 600000, so
          * this must not change them; 43 of 136 profiles want otherwise. */

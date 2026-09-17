@@ -515,6 +515,11 @@ final class JoanDriver {
                                 JoanImsVoiceConfig.forSub(app, sub);
                         JoanSipBuilder.setPlatformSipMtu(
                                 pv.sipMtuV4, pv.sipMtuV6);
+                        /* ims.sip_preferred_transport_int: tier 1, and
+                         * the gate AOSP puts in front of the whole
+                         * length-criterion calculation. */
+                        JoanSipBuilder.setPlatformPreferredTransport(
+                                pv.preferredTransport);
                         int platExpiry = pv.regExpirySec;
                         JoanSipBuilder.setCarrierPcscfPort(cp.pcscfPort);
                         JoanSipBuilder.setSendUserAgent(cp.sendUserAgent);
