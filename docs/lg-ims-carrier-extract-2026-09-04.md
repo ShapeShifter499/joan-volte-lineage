@@ -246,6 +246,64 @@ Ghidra note: `-import` runs full analysis once (slow on this 18 MB
 binary); afterwards `-process <name> -noanalysis` reuses the project and
 returns in seconds, which is how the second function was read.
 
+### LG ships China Mobile's own IMS configuration, and it was on the bench
+
+`Ims6.apk` is at **`/product/priv-app/Ims6/Ims6.apk`** in the H932 KDZ --
+`/product`, like `libims.lge.so`, which is why earlier searches of `/app`
+and `/priv-app` concluded the AP-side IMS app was absent.
+
+**This image ships LG's WORLD carrier set**, 347 asset files, including
+`assets/Configuration/CMCC/CN/configuration.CMCC.CN.xml`. The note above
+saying the T-Mobile SKU carries "T-Mobile US only" configuration is wrong
+for this image. No ROM download was needed.
+
+988 parameters per carrier; **212 differ** between CMCC and TMO/US:
+
+| parameter | TMO/US | CMCC/CN |
+| --- | --- | --- |
+| `aos_reg_0_ipsec_spi_3gpp` | true | **false** |
+| `aos_reg_0_ipsec_algs` | 0x00010003 | **0x00070003** |
+| `aos_reg_0_features` | 0x00000004 | **0x00000A04** |
+| `aos_reg_0_authentication_max_count` | 3 | **5** |
+| `header_info_feature_tags` | 0x01000208 | **0x03000208** |
+| `header_info_target_scheme` | sip | **tel** |
+| `header_info_target_number_format` | global | **local** |
+| `common_sip_features` | 0x151A001B | **0x16000000** |
+| `common_tcp_criterion_len` | 1200 | **1300** |
+| `session_st_headers` | 0x01 | **0x11** |
+| `mmtel_auth_username` | MDN | **IMPI** |
+| `LGE_FEATURE_MULTIPLE_REGISTRATION` | 1 | **0** |
+| `reg_methods` | ...MESSAGE | ...MESSAGE,**OPTIONS** |
+
+**Two conclusions, both correcting something written earlier.**
+
+*The MMTEL feature tags belong in CMCC's Contact.* CMCC's `tContactH` is
+literally
+
+```
+;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel
+```
+
+and its `header_info_feature_tags` is `0x03000208` against T-Mobile's
+`0x01000208` -- an extra bit, so China Mobile gets **more** tags than a
+network joan already works on. alpha28 briefly withheld them from CMCC on
+the argument that AOSP treats them as configuration; that was the right
+observation and the wrong direction, and it is reverted.
+
+*No home domain is configured for CMCC.* `home_network_domain_name` is
+empty and `subscriber_0_home_domain_name` is the placeholder
+`ims.mnc001.mcc001.3gppnetwork.org`, filled at runtime. So LG derives the
+domain on China Mobile too. Together with AOSP and joan that is three
+implementations deriving it, which weighs against the domain being the
+404's cause -- the Qualcomm `CONFIG_ITEM_DOMAIN_NAME` knob recorded in
+`upstream-references.md` shows the *mechanism* exists, not that CMCC uses
+it.
+
+Placeholder subscriber values are templates (`1234567890`), but their
+*shapes* are informative: CMCC's `subscriber_0_impu_1` is a **`tel:`**
+URI where T-Mobile's is `sip:`, matching `target_scheme=tel` and
+`number_format=local`.
+
 ## Hardware still required
 
 CMCC SIM: `last_register` with `tpt=tcp` then `reg2=200`, or

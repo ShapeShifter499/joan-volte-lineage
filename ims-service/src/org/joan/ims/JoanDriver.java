@@ -478,13 +478,20 @@ final class JoanDriver {
                 String mcc = mccMnc.substring(0, 3);
                 String mnc = mccMnc.substring(3);
                 JoanRegistration.setOperator(mcc, mnc);
-                /* China Mobile answers an authenticated REGISTER carrying
-                 * our MMTEL feature tags with 404 "Server Internal Error",
-                 * on a line that registers on a stock handset. AOSP takes
-                 * these tags from carrier configuration rather than
-                 * hardcoding them, so sending none is a shape AOSP already
-                 * has. Scoped to CMCC; everyone else is unchanged. */
-                boolean tags = !JoanCarrierProfile.isCmcc(mcc, mnc);
+                /* Withheld from nobody.
+                 *
+                 * alpha28 briefly withheld the MMTEL tags from China
+                 * Mobile, reasoning that AOSP takes them from carrier
+                 * configuration so "none" is a shape it already has. LG's
+                 * shipping CMCC configuration says otherwise: its Contact
+                 * template is literally
+                 *   ;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel
+                 * and its header_info_feature_tags is 0x03000208 against
+                 * T-Mobile's 0x01000208 -- China Mobile gets MORE feature
+                 * tags than a network we already work on, not fewer. The
+                 * switch stays because it is the right shape and the
+                 * diagnostic uses it; the CMCC scoping was wrong. */
+                boolean tags = true;
                 if (tags != JoanSipBuilder.registerContactTags()) {
                     JoanSipBuilder.setRegisterContactTags(tags);
                     JoanTrace.note("register contact tags="

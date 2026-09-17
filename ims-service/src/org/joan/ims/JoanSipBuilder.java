@@ -209,13 +209,14 @@ final class JoanSipBuilder {
     /**
      * Whether to advertise the MMTEL feature tags in the REGISTER Contact.
      *
-     * <p>Off for China Mobile: their S-CSCF answers an otherwise correct
-     * authenticated REGISTER with 404 and {@code Warning: 399 ...
-     * "Server Internal Error"}, on a subscription that registers fine on a
-     * stock handset, and these tags are the most substantial thing we send
-     * that AOSP would only send if the carrier asked for it. The
-     * {@code +sip.instance} is NOT covered by this: it is required of the
-     * UE and identifies the binding.
+     * <p>Currently on for every carrier. It was briefly off for China
+     * Mobile; LG's shipping CMCC configuration disproved that, giving
+     * China Mobile the icsi-ref tag explicitly and MORE feature-tag bits
+     * than T-Mobile. The switch is kept because carrier-scoped tags are
+     * the right shape -- AOSP and LG both treat them as configuration --
+     * and because the trace reports its state. The {@code +sip.instance}
+     * is NOT covered by it: it is required of the UE and identifies the
+     * binding.
      */
     static void setRegisterContactTags(boolean on) {
         sRegContactTags = on;
