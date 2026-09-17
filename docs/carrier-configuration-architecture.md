@@ -31,6 +31,13 @@ inheritance -- `ims.parent_carrier_ids_int_array` -- rather than by PLMN.
 That is a better key than a PLMN: one operator can hold dozens of PLMNs,
 and carrier id already collapses them.
 
+**But AOSP ships no per-carrier values through it.** The asset directory
+holds one file, and that file is the defaults: no carrier-id blocks, no
+China Mobile entry, nothing to extrapolate from. AOSP defines the shape
+and the default and leaves the values to carriers and OEMs. Checked
+directly, because the mechanism's existence reads like the presence of
+data and is not.
+
 **But only 160 of those keys are in the public `CarrierConfigManager`
 API, and the overlap with ImsStack's set is three keys.** The other 488
 are internal to ImsStack, and **LineageOS 22.2 does not ship ImsStack at
@@ -51,7 +58,9 @@ true   ims.require_sip_expires_header_in_register_bool
 false  ims.sip_compact_form_enabled_bool
 ```
 
-joan currently diverges from the first three. See "Open divergences".
+joan diverges from the first three. All three were examined on
+2026-09-17 and each resolved differently -- see "Three divergences from
+AOSP's defaults, resolved".
 
 ## LG Ims6 (H932 KDZ)
 
@@ -222,30 +231,103 @@ communication sessions and get none. Responses **mirror**: a request that
 arrived without the header is answered without it. REGISTER never carries
 it, which is also why it cannot be relevant to the CMCC 404.
 
-## Open divergences from AOSP's defaults
+## Three divergences from AOSP's defaults, resolved
 
-Recorded, not yet acted on. Each needs a decision rather than a guess --
-this project has already shipped one carrier change in the wrong
-direction by reasoning from a mechanism without checking the value.
+Recorded for a while as "needs a decision rather than a guess". Decided
+2026-09-17 by reading AOSP's implementation rather than only its default,
+which changed the answer in every case.
 
-- **PANI in the initial REGISTER.** joan always sends
-  `P-Access-Network-Info`; AOSP defaults to not sending it in the
-  unprotected REGISTER. LG templates the field and leaves it empty for
-  both CMCC and TMO, so LG takes no position we can copy.
-- **UDP fallback after a TCP connect failure.** joan falls back; AOSP
-  defaults to not falling back. The CMCC trace shows exactly this
-  sequence (`tcp connect FAIL` then UDP), so the behaviour is live on a
-  failing network.
-- **Blocking a P-CSCF that failed registration.** AOSP defaults to
-  blocking it; joan retries the same candidate list in the same order.
-  LG's CMCC config specialises `RecoverPCSCF` and
-  `ProcessFlowRecoveryWithNewPCSCF`, so both other stacks do something
-  here that joan does not.
+### PANI in the initial REGISTER: nominal, and now tripwired
+
+AOSP defaults `ims.allow_sip_p_access_network_info_header_in_initial_register_bool`
+to **false**; joan always sends the header.
+
+What AOSP's PANI contains decides this. `platform/util/AccessNetworkInfoFormatter.cpp`
+emits `utran-cell-id-3gpp=<MCC><MNC><LAC><CellID>` -- the serving cell,
+which locates the subscriber, sent in the clear on a REGISTER that by
+definition precedes IPsec. That is what the default protects.
+
+joan's `paniFor()` emits an access-type token and nothing else:
+`3GPP-E-UTRAN-FDD`, `3GPP-NR-FDD` or `IEEE-802.11`. There is no location
+in it to protect, and TS 24.229 wants the access type. **No change**, and
+a test now asserts the unprotected REGISTER carries no `utran-cell-id`,
+`cgi-3gpp` or `i-wlan-node-id`, so the day PANI gains cell information
+the tripwire fires instead of a silent leak.
+
+### UDP fallback after a TCP connect failure: kept, now switchable
+
+AOSP defaults `ims.allow_sip_udp_fallback_on_tcp_connection_setup_failed_bool`
+to **false**; joan fell back unconditionally.
+
+The trigger was never the difference. AOSP falls back from
+`SipClientTransmissionProxy::NotifyTransportError` on
+`ERROR_CONNECTION_TIMEDOUT` or `ERROR_CONNECT_FAILED` and nothing else;
+joan falls back on `TcpFail.CONNECT` and nothing else, failing closed on
+setup, send and read failures because those mean the transaction already
+reached the far end. Same condition, independently arrived at.
+
+Only the gate differed, and joan keeps it **on** against AOSP's default
+for a reason the default cannot see: AOSP has a full P-CSCF manager to
+fall through to, so refusing the fallback costs it nothing -- it moves to
+the next node. Refusing it here ends the attempt. The one failing network
+this project holds a trace from shows a refused TCP connect followed by a
+UDP retry the network *answered*; failing closed there would have
+produced silence and less evidence. Tier 3 of the precedence rule ("best
+chance of working") outranks a default written for a stack with more
+moves available to it.
+
+Now behind `JoanSipBuilder.setUdpFallbackOnTcpConnectFail()` rather than
+being unconditional, so a carrier profile or a future platform key can
+move it without a code change.
+
+### Blocking a failed P-CSCF: declined, semantics recorded
+
+AOSP defaults `ims.block_pcscf_on_reg_failure_bool` to **true**, and the
+divergence was recorded as "joan retries the same candidate list in the
+same order". That description was wrong in one half and misleading in the
+other.
+
+joan **does** advance: `JoanAppRegister` loops `for (InetAddress cand :
+n.pcscfs)` and continues past a candidate that fails, stopping early only
+for AKA outcomes, which no second P-CSCF improves. What it lacks is
+memory *across* attempts.
+
+And AOSP's blocking is narrower than the key's name suggests:
+
+- It fires from `ProcessStartFailed_TxnTimeout` -- a **Timer F timeout**,
+  i.e. silence -- and from flow recovery. A 4xx answer goes to
+  `ProcessStartFailed_StatusCode`, which invalidates the P-CSCF only if
+  the code appears in `ims.reg_err_code_for_pcscf_discovery_int_array`,
+  and AOSP ships that list **empty** (`num="0"`).
+- The block is time-limited -- `SetCurrentPcscfInvalid(IMS_TRUE, nAwt + 300)`,
+  or the `Retry-After` value when the response carried one -- not permanent.
+- It is gated again by `IsRetryOnSamePcscfRequired()`.
+
+So a cross-attempt blocklist buys something only on timeout, where joan's
+per-attempt loop already tries every candidate each time. Declined as
+complexity without a matching benefit; the semantics are written here so
+a future decision starts from facts rather than from the key's name.
+
+**This also corrects a claim made earlier in the same session.** Blocking
+was flagged as the most actionable remaining lead on the CMCC 404, on the
+reasoning that joan might never be reaching the second P-CSCF. It reaches
+it, and AOSP would not invalidate a P-CSCF on a 404 either. The lead was
+wrong.
 
 ## What is deliberately NOT adopted
 
+- **AOSP's per-carrier values: there are none to adopt.** The inheritance
+  mechanism is real -- `ims.parent_carrier_ids_int_array`, keyed by
+  Android carrier id -- but `java/assets/carrier_config/` ships exactly
+  one file, the defaults, with no carrier-id blocks in it. AOSP specifies
+  the shape and leaves the values to carriers and OEMs. So there is no
+  AOSP China Mobile configuration to extrapolate from, and the LG
+  snapshot remains the only source of per-carrier values this project
+  holds.
+
 - ImsStack's 488 private keys: no provider on this platform.
 - AOSP's carrier-id keying: joan resolves by PLMN because the LG table
-  is PLMN-keyed. Carrier id is the better key and is worth migrating to
-  if a second source ever arrives.
+  is PLMN-keyed. Carrier id is the better key, but nothing is keyed by
+  it yet -- see the bullet above -- so migrating would buy nothing until
+  a source of carrier-id-keyed values exists.
 - Any LG file, verbatim. Values only.

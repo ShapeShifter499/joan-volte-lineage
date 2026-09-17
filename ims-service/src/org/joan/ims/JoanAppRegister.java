@@ -838,9 +838,18 @@ final class JoanAppRegister {
                             return sb + "FAIL: reg2 tcp " + tf.phase
                                     + " (fail closed)";
                         }
-                        /* UDP fallback, matching stock TransmissionProxy
-                         * ("UDP fallback"): same protected REGISTER,
-                         * only after a refused/dropped connect. */
+                        /* UDP fallback on a refused/dropped connect
+                         * only -- the same trigger AOSP uses in
+                         * SipClientTransmissionProxy::NotifyTransportError
+                         * (ERROR_CONNECTION_TIMEDOUT, ERROR_CONNECT_FAILED)
+                         * and the same one stock TransmissionProxy used.
+                         * AOSP gates it off by default; see
+                         * JoanSipBuilder.setUdpFallbackOnTcpConnectFail
+                         * for why joan gates it on. */
+                        if (!JoanSipBuilder.udpFallbackOnTcpConnectFail()) {
+                            return sb + "FAIL: reg2 tcp connect "
+                                    + "(udp fallback off)";
+                        }
                         sb.append("tpt=udp ");
                         JoanRegTransport.UdpResult ur = JoanRegTransport
                                 .sendRecvUdp(sockC, sockS, pcscf,

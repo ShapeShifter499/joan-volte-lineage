@@ -32,6 +32,7 @@ public final class TestJoanSip {
         testCarrierTcpCriterion();
         testSessionId();
         testOutgoingOir();
+        testRoutingDivergences();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -2748,6 +2749,51 @@ public final class TestJoanSip {
                 "and mirrors none into a response");
         JoanSipBuilder.setSendSessionId(true);
         check(JoanSipBuilder.sendSessionId(), "default is on, per AOSP");
+    }
+
+    /**
+     * The two AOSP routing defaults joan deliberately does not share,
+     * pinned so the reasoning is testable rather than only written down.
+     */
+    private static void testRoutingDivergences() {
+        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                "310260123456789@ims.mnc260.mcc310.3gppnetwork.org",
+                "sip:+15550000@ims.mnc260.mcc310.3gppnetwork.org",
+                "ims.mnc260.mcc310.3gppnetwork.org",
+                "2001:db8::1", 5060, 5060, null);
+
+        /* AOSP defaults ims.allow_sip_p_access_network_info_header_in_
+         * initial_register_bool to false, and joan sends PANI anyway.
+         * The divergence is nominal: AOSP's PANI carries
+         * utran-cell-id-3gpp (AccessNetworkInfoFormatter.cpp), which is
+         * the serving cell -- the subscriber's location, in the clear,
+         * before IPsec exists. joan's carries an access-type token and
+         * nothing else, so there is nothing in it to protect.
+         *
+         * This is the tripwire: the day PANI gains cell information, the
+         * unprotected REGISTER is where it must not appear. */
+        JoanSipBuilder.Txn txn = new JoanSipBuilder.Txn(
+                new JoanSipBuilder.Params(1111, 2222, 15000, 16000),
+                new java.security.SecureRandom());
+        String reg1 = JoanSipBuilder.buildRegister(id, txn, 1,
+                null, null, null, null, "3GPP-E-UTRAN-FDD", false);
+        check(reg1.indexOf("P-Access-Network-Info: 3GPP-E-UTRAN-FDD") > 0,
+                "the unprotected REGISTER carries the access type");
+        check(reg1.indexOf("utran-cell-id") < 0
+                        && reg1.indexOf("cgi-3gpp") < 0
+                        && reg1.indexOf("i-wlan-node-id") < 0,
+                "and carries no cell identity: an unprotected REGISTER "
+                + "must never locate the subscriber");
+
+        /* The UDP-fallback gate. joan's trigger already matches AOSP's;
+         * only the default differs, and it is a switch rather than a
+         * constant so a carrier profile or platform key can move it. */
+        check(JoanSipBuilder.udpFallbackOnTcpConnectFail(),
+                "UDP fallback after a refused TCP connect is on by default");
+        JoanSipBuilder.setUdpFallbackOnTcpConnectFail(false);
+        check(!JoanSipBuilder.udpFallbackOnTcpConnectFail(),
+                "and can be turned off without a code change");
+        JoanSipBuilder.setUdpFallbackOnTcpConnectFail(true);
     }
 
     private static void testImei() {

@@ -133,6 +133,44 @@ final class JoanSipBuilder {
         return sSendSessionId;
     }
 
+    /* Whether a refused TCP connect may retry the same REGISTER on UDP. */
+    private static volatile boolean sUdpFallbackOnConnectFail = true;
+
+    /**
+     * Whether to retry on UDP after a TCP connect failure.
+     *
+     * <p>joan's trigger already matches AOSP's exactly: AOSP falls back
+     * from {@code SipClientTransmissionProxy::NotifyTransportError} on
+     * {@code ERROR_CONNECTION_TIMEDOUT} or {@code ERROR_CONNECT_FAILED}
+     * and nothing else, which is joan's {@code TcpFail.CONNECT} and
+     * nothing else -- a setup, send or read failure fails closed either
+     * way, because the transaction has already reached the far end.
+     *
+     * <p>What differed is the gate. AOSP wraps it in
+     * {@code ims.allow_sip_udp_fallback_on_tcp_connection_setup_failed_bool},
+     * default {@code false}; joan fell back unconditionally.
+     *
+     * <p>Kept on, against AOSP's default, for one reason the default
+     * cannot see: AOSP has a full P-CSCF manager to fall through to, so
+     * refusing the fallback costs it nothing -- it moves to the next
+     * node. Refusing it here ends the attempt. The one failing network
+     * this project has a trace from shows a refused TCP connect followed
+     * by a UDP retry that the network **answered**; failing closed there
+     * would have produced silence and less evidence, not a better
+     * outcome. "Best chance of working" outranks a default written for a
+     * stack with more moves available to it.
+     *
+     * <p>Switchable so a carrier profile or a future platform key can
+     * turn it off without a code change.
+     */
+    static void setUdpFallbackOnTcpConnectFail(boolean on) {
+        sUdpFallbackOnConnectFail = on;
+    }
+
+    static boolean udpFallbackOnTcpConnectFail() {
+        return sUdpFallbackOnConnectFail;
+    }
+
     /**
      * Our own Session-ID UUID for a dialog, RFC 7989 s6.
      *
