@@ -800,7 +800,7 @@ compute, testing time and hardware wear, and none of it is sponsored.
 If this project put VoLTE on a phone that officially never had it for
 you, you can help keep it moving:
 
-**[Help support this project on Ko-fi](https://ko-fi.com/shapeshifter499)**
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/shapeshifter499)
 
 Bug reports, traces and tester feedback are just as welcome as donations
 — they are how each carrier lane gets closed.
