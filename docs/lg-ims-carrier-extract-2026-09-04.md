@@ -747,7 +747,29 @@ class of finding as the `integrity-protected` parity note already in
 precedes CMCC's 404.
 
 Not proven causal. It is a diff, in the failing header, that LG
-deliberately configured off for this carrier.
+configured off for this carrier.
+
+**And "for this carrier" is the wrong emphasis, read across the whole
+asset.** 130 of the 136 shipped profiles clear bit 24. The six that set
+it are `KT.KR`, `LGU.KR`, `SKT.KR`, `BEE.RU`, `TELE2.RU` and
+`TMO.US.NAO` -- the Korean three, two Russian carriers, and T-Mobile US.
+Omitting `algorithm=` is stock's norm; T-Mobile, the network joan was
+first built against, is the outlier.
+
+That reframing is what decided the engineering call, so it is recorded
+here rather than in a commit nobody will find. There is no
+carrier-shaped change to make from this row. Either joan copies stock
+generally -- which would move **287 of the 294 mapped PLMNs** away from
+what RFC 3310 requires, with no trace from any of them, and with every
+network we have actually seen register (T-Mobile, NOS, Viettel, China
+Telecom) absent from the PLMN map and so unaffected anyway -- or it
+changes nothing. A China-Mobile-only exception would be neither stock's
+behaviour nor anyone else's, and was rejected on those grounds.
+
+joan therefore keeps sending `algorithm=` everywhere. The finding stands
+as a description of stock, not as a pending change;
+`tests/carrier/run-carrier-tests.sh` pins the six-profile split so a
+regenerated asset cannot quietly invalidate this paragraph.
 
 ### Checked and NOT a delta: User-Agent to China Mobile
 
