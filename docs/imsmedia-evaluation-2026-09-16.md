@@ -161,7 +161,18 @@ replaced the algorithm around them:
 - ImsMedia caps the audio buffer at **9 frames**; ours was capped at 50,
   a full second of held audio.
 
-The ceiling was brought to 9 in the commit that added this note. The
-other three are still open, and are the interesting part of any future
-pass: the constants matching made the divergence easy to miss, since the
-file reads as if it were the same algorithm.
+All four were closed: the ceiling first, then the windowed sizing, the
+single-step growth, the discarded-spike rule and the unguarded shrink.
+`JoanJitter` now follows `GetNextJitterBufferSize` -- worst offset in a
+150-entry window, weighted, plus the round-up margin, over the packet
+interval; immediate growth straight to that size; stepped shrinking only
+after a GOOD dwell with no late arrival in it.
+
+One divergence is deliberate. AOSP lets a negative computed size fall
+into an unsigned divide; ours floors the target at zero and lets the
+ordinary bounds take it from there.
+
+What is still not ported, and would be the next pass: RTCP-XR
+(`RtcpXrEncoder`, `RtcpXrPacket`), which this document already noted we
+do not advertise because nothing emits the blocks, and
+`MediaQualityAnalyzer`. Neither is on the path of a working call.
