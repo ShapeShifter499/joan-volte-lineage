@@ -790,6 +790,21 @@ Implemented since this list was written, and no longer missing:
   inbound call, `octet-aligned` on an outbound one, both AMR-WB at
   12650 bps in the same session).
 
+## Support this project
+
+This stack gets built and tested the slow way: real LG V30 hardware,
+real SIMs on live carrier networks, and a lot of reverse-engineering and
+log analysis to get each network's quirks right. Every build costs AI
+compute, testing time and hardware wear, and none of it is sponsored.
+
+If this project put VoLTE on a phone that officially never had it for
+you, you can help keep it moving:
+
+**[Help support this project on Ko-fi](https://ko-fi.com/shapeshifter499)**
+
+Bug reports, traces and tester feedback are just as welcome as donations
+— they are how each carrier lane gets closed.
+
 ## License
 
 Apache-2.0. See `LICENSE`.
