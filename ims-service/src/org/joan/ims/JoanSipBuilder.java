@@ -570,11 +570,80 @@ final class JoanSipBuilder {
             this.portS = portS;
         }
 
+        /* Stock's UE SPI and protected-port convention.
+         *
+         * AOSP ImsStack -- the codebase LG's engine derives from --
+         * does not pick these freely. AosIpsec::CreateUeSpi() runs a
+         * process-wide counter seeded from a random, stepping by
+         * SPI_VALUE_TO_BE_INCREASED and floored at SPI_MIN, and
+         * AosIpsecHelper::SetUePortnSpi() then takes spi-s as
+         * spi-c + 1; LG's own binary does the same ("stores SPI then
+         * SPI+1" at 0xa44484). Ports come from two fixed windows,
+         * UE_PORT_LOWER..UE_PORT_UPPER for the client and the same
+         * range shifted by PORTS_INTERVAL for the server.
+         *
+         * Nothing in TS 33.203 or RFC 3329 asks for an adjacent pair
+         * or for these ranges -- 33.203 only wants SPIs above 255, and
+         * a real P-CSCF does not care: Kamailio's ims_ipsec_pcscf
+         * allocates its own from 100 up and consumes the UE's spi-c
+         * and spi-s verbatim, with no range or adjacency check. Our
+         * previous values registered fine on T-Mobile, NOS and China
+         * Telecom and are equally legal.
+         *
+         * We match stock anyway, because "byte-identical to the
+         * handset the operator tested against" is worth more on a core
+         * that rejects us than "legal" is, and it costs nothing. */
+        private static final long SPI_MIN = 1000000000L;
+        private static final long SPI_STEP = 2L;
+        private static final long SPI_MASK = 0xffffffffL;
+        /** Highest spi-c that keeps spi-c and spi-s positive as ints. */
+        private static final long SPI_CEILING = 0x7ffffffeL;
+        private static final int UE_PORT_LOWER = 38001;
+        private static final int UE_PORT_UPPER = 39000;
+        private static final int PORTS_INTERVAL = 1000;
+
+        /** CreateUeSpi()'s counter: an unsigned 32-bit value in a long. */
+        private static long sSpi = -1L;
+
+        private static synchronized long nextSpi(SecureRandom rng) {
+            if (sSpi < 0L) {
+                sSpi = ((long) rng.nextInt()) & SPI_MASK;
+            }
+            sSpi = (sSpi + SPI_STEP) & SPI_MASK;
+            if (sSpi < SPI_MIN) {
+                sSpi = (sSpi + SPI_MIN) & SPI_MASK;
+            }
+            /* Two deliberate divergences from stock's counter, both
+             * about staying on code we have actually run.
+             *
+             * Stock lets it reach 0xffffffff, where spi-c + 1 wraps to
+             * zero -- not a legal SPI, and our own parser rejects a zero
+             * from the peer.
+             *
+             * Stock also uses the full unsigned 32-bit range, so half of
+             * its SPIs have the high bit set. Ours are handed to
+             * IpSecManager.allocateSecurityParameterIndex(), whose
+             * parameter is a signed int; joan has only ever passed it
+             * positive values, because the previous random was capped at
+             * 0x7fffffff. A high-bit SPI is very likely fine there and is
+             * entirely untested on this device, which is the combination
+             * that fails on a bench rather than here.
+             *
+             * The wire-visible parts of the convention -- an adjacent
+             * pair, at or above the floor -- do not need the top half of
+             * the range, so the counter stays below it. */
+            if (sSpi >= SPI_CEILING) {
+                sSpi = SPI_MIN;
+            }
+            return sSpi;
+        }
+
         static Params random(SecureRandom rng) {
-            long spiC = 256L + (rng.nextInt(0x7fffffff - 256));
-            long spiS = 256L + (rng.nextInt(0x7fffffff - 256));
-            int base = 10000 + rng.nextInt(20000);
-            return new Params(spiC, spiS, base, base + 1000);
+            long spiC = nextSpi(rng);
+            int portC = UE_PORT_LOWER
+                    + rng.nextInt(UE_PORT_UPPER - UE_PORT_LOWER + 1);
+            return new Params(spiC, spiC + 1L, portC,
+                    portC + PORTS_INTERVAL);
         }
     }
 

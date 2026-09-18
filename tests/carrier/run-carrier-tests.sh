@@ -71,6 +71,44 @@ for k, v in prof.items():
 check(not bad_e,
       f"every carrier allows an encryption alg joan offers (bad: {bad_e[:4]})")
 
+# common_sip_features bit 24 (AUTHENTICATION_ALGORITHM_PARAMETER) is what
+# decides, in stock, whether the REGISTER's Authorization header carries
+# "algorithm=". The runtime does NOT read it -- joan always sends the
+# parameter, as RFC 3310 s3 requires. These checks pin the finding that
+# docs/lg-ims-carrier-extract-2026-09-04.md rests on, so a regenerated
+# profile set cannot quietly invalidate what that document claims.
+AUTH_ALGO_BIT = 0x01000000
+def sip_features(key):
+    v = prof.get(key, {}).get("sip_features")
+    return None if not isinstance(v, str) else int(v, 16)
+
+unparsable = sorted(k for k, v in prof.items()
+                    if isinstance(v.get("sip_features"), str)
+                    and not re.fullmatch(r"0[xX][0-9a-fA-F]+",
+                                         v["sip_features"]))
+check(not unparsable,
+      f"every sip_features mask is readable hex (bad: {unparsable[:4]})")
+
+cm = sip_features("CMCC.CN")
+check(cm is not None and not (cm & AUTH_ALGO_BIT),
+      f"CMCC.CN clears the algorithm-parameter bit (0x{cm:08x})"
+      if cm is not None else "CMCC.CN carries a sip_features mask")
+tm = sip_features("TMO.US.NAO")
+check(tm is not None and (tm & AUTH_ALGO_BIT),
+      f"TMO.US.NAO sets the algorithm-parameter bit (0x{tm:08x})"
+      if tm is not None else "TMO.US.NAO carries a sip_features mask")
+# Omission is stock's NORM, not a China Mobile quirk: only the Korean
+# three, two Russian carriers and T-Mobile US send the parameter. That
+# 130-of-136 split is the reason joan does not copy stock here -- there is
+# no carrier-shaped exception to make, only a global change we have no
+# trace to justify. If this set moves, re-read that decision.
+senders = sorted(k for k in prof
+                 if (sip_features(k) or 0) & AUTH_ALGO_BIT)
+check(senders == ["BEE.RU", "KT.KR", "LGU.KR", "SKT.KR", "TELE2.RU",
+                  "TMO.US.NAO"],
+      f"the same six profiles send algorithm= ({len(senders)} of "
+      f"{len(prof)}): {senders}")
+
 print(f"carrier asset tests: {'FAIL %d' % fail if fail else 'all passed'}")
 sys.exit(1 if fail else 0)
 PY

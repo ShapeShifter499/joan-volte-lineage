@@ -36,6 +36,7 @@ public final class TestJoanSip {
         testRoutingDivergences();
         testRetryAfter();
         testDialIdentity();
+        testUeSpiPortConvention();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -50,6 +51,48 @@ public final class TestJoanSip {
             System.out.println("FAIL " + name);
             gFail++;
         }
+    }
+
+    /**
+     * The UE sec-agree parameters must follow stock's convention:
+     * spi-s is spi-c + 1, both at or above SPI_MIN, and the protected
+     * ports come from stock's two windows (38001-39000 client, one
+     * PORTS_INTERVAL higher for the server).
+     *
+     * A zero SPI is not legal and our own peer parser rejects one, so
+     * the counter must never produce one however long it runs.
+     */
+    private static void testUeSpiPortConvention() {
+        java.security.SecureRandom rng = new java.security.SecureRandom();
+        long prev = -1;
+        boolean adjacent = true;
+        boolean floored = true;
+        boolean inWindow = true;
+        boolean serverOffset = true;
+        boolean nonZero = true;
+        boolean distinct = true;
+        for (int i = 0; i < 20000; i++) {
+            JoanSipBuilder.Params p = JoanSipBuilder.Params.random(rng);
+            adjacent &= (p.spiS == p.spiC + 1L);
+            floored &= (p.spiC >= 1000000000L);
+            nonZero &= (p.spiC != 0L && p.spiS != 0L);
+            /* Both must survive the cast to the signed int that
+             * IpSecManager.allocateSecurityParameterIndex() takes, a
+             * path joan has only ever exercised with positive values. */
+            floored &= (p.spiS <= 0x7fffffffL);
+            floored &= ((int) p.spiC > 0 && (int) p.spiS > 0);
+            floored &= ((long) (int) p.spiC == p.spiC);
+            inWindow &= (p.portC >= 38001 && p.portC <= 39000);
+            serverOffset &= (p.portS == p.portC + 1000);
+            distinct &= (p.spiC != prev);
+            prev = p.spiC;
+        }
+        check(adjacent, "spi-s is spi-c + 1, as stock emits it");
+        check(floored, "spi-c is at or above SPI_MIN and fits 32 bits");
+        check(nonZero, "neither SPI is ever zero");
+        check(distinct, "each attempt gets its own spi-c");
+        check(inWindow, "port-c comes from stock's 38001-39000 window");
+        check(serverOffset, "port-s is one PORTS_INTERVAL above port-c");
     }
 
     private static void testAkaV1() {
