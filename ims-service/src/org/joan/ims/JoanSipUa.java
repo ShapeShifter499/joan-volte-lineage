@@ -1618,6 +1618,19 @@ final class JoanSipUa {
         return "OK";
     }
 
+    /**
+     * Refuse a ringing inbound call.
+     *
+     * <p>Every path here is traced, including both failures. It used to
+     * trace none of them and return a String its only caller discarded on
+     * a detached thread, so a declined call left the log completely
+     * silent -- and a 603 that went out looked exactly like a
+     * {@code sHeldInvite} that was already null and sent nothing, which
+     * is the case where the caller keeps hearing ringback until the
+     * network gives up on us. Observed on the bench 2026-09-18: a
+     * declined call, and nothing in the trace between the INVITE and the
+     * next one.
+     */
     static String reject(int code) {
         String invite;
         synchronized (LOCK) {
@@ -1625,6 +1638,8 @@ final class JoanSipUa {
             sHeldInvite = null;
         }
         if (invite == null) {
+            JoanTrace.note("app reject " + code
+                    + ": no held INVITE, nothing sent");
             return "ERR no held invite";
         }
         String tag = sRingingToTag != null ? sRingingToTag
@@ -1633,9 +1648,14 @@ final class JoanSipUa {
                 code == 603 ? "Decline" : "Busy Here", sId, tag, null);
         try {
             sendReply(resp.getBytes(StandardCharsets.US_ASCII));
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            JoanTrace.note("app reject " + code + " send "
+                    + e.getClass().getSimpleName());
             return "ERR reject send";
         }
+        JoanTrace.note("app reject " + code + " sent tag="
+                + (sRingingToTag != null ? "ringing"
+                        : (sOurToTag != null ? "ours" : "synth")));
         return "OK";
     }
 

@@ -214,6 +214,11 @@ public class JoanCallSession extends ImsCallSessionImplBase {
             /* 603 Decline says the user refused; 486 would claim we are
              * busy, which sends some callers to a different treatment. */
             state = STATE_TERMINATED;
+            /* The UA traces the outcome itself; this line records that
+             * the user refused, so a decline is distinguishable in the
+             * log from a caller who gave up. Both used to look like
+             * nothing at all. */
+            JoanTrace.note("incoming call declined by user reason=" + reason);
             new Thread(() -> JoanSipUa.reject(603),
                     "joan-ims-reject").start();
             notifyTerminated(reason);
