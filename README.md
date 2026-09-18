@@ -69,18 +69,25 @@ loopback control socket.
 > Caller ID is the asserted number; Dialer can still overlay a matching
 > contact.
 
-## Current tester build: v0.4.0-alpha33
+## Current tester build: v0.4.0-alpha34
 
-`v0.4.0-alpha33` (versionCode 43) is the current tester zip, a
-prerelease: 673 host checks and the UA, registration, discovery, merge,
-xfrm and carrier suites pass, and it registers on T-Mobile 310-260 on
+`v0.4.0-alpha34` (versionCode 44) is the current tester zip: 689 host
+checks and the UA, registration, discovery, merge, xfrm and carrier
+suites pass, and it registers on T-Mobile 310-260 on
 the bench handset. That is not a live-carrier qualifier for anyone else.
+
+What alpha34 adds over alpha33: PCMU calls now bridge lost audio frames
+(a faded repeat of the last frame instead of a tear) and keep their
+playback pacing during packet loss; refused INVITEs log the carrier's
+reason phrase and Warning header in the trace; answered-into-silence
+calls are now visible in the trace (blackout timing and first-audio
+arrival).
 
 Sideload `joan-volte-recovery.zip`, reboot, then confirm:
 
 ```
 adb shell content query --uri content://org.joan.ims.state/state | grep key=build
-→ 0.4.0-alpha33 (43)
+→ 0.4.0-alpha34 (44)
 ```
 
 Check that row, **not** `dumpsys package`, which serves a stale version
