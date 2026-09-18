@@ -321,9 +321,9 @@ covered**, so the remaining rows are the short list worth testing.
 | `bUse180RPR` 0, `session_sdp_non_rpr` false | joan answers PRACK but never requires 180rel |
 | `LGE_FEATURE_GRUU` 0, `MULTIPLE_REGISTRATION` 0 | joan advertises neither `gruu` nor `outbound`; **but sends `+sip.instance` unconditionally** |
 | `LGE_FEATURE_AUTH_SIP_DIGEST` 1 | **not implemented** -- joan does AKA only |
-| `ipsec_spi_3gpp` false, `ipsec_algs` 0x00070003 | unknown semantics; their 404 came back **over** the SA, so IPsec demonstrably works |
+| `ipsec_spi_3gpp` false, `ipsec_algs` 0x00070003 | their 404 came back **over** the SA, so IPsec demonstrably works. [2026-09-18: `ipsec_spi_3gpp` is no longer unknown -- it is decimal formatting of `spi-c`/`spi-s`, and joan already matches. See "REG2 message shape" below.] |
 | `target_scheme` tel, `number_format` local | affects INVITE targets, not REGISTER |
-| `aos_reg_0_features` 0x00000A04 | bits 9+11 beyond the decoder's vocabulary -- see below |
+| `aos_reg_0_features` 0x00000A04 | bits 9+11 beyond the decoder's vocabulary -- see below. [2026-09-18: confirmed unresolvable from the AOSP source too; needs the binary.] |
 
 **Feature bitmask decoding.** `AoSRegistration::FeatureToString()` is a
 trace helper that names only four bits:
@@ -676,3 +676,156 @@ criterion is 0 = disabled; `AdjustTcpCriterionPerMtu` stays unreplicated).
 
 L-01K still has no public KDZ listing. H930DS HK Pie was identified but not
 downloaded.
+
+## REG2 message shape, read against AOSP ImsStack (2026-09-18)
+
+LG's `libims.lge.so` is a derivative of AOSP's
+`platform/packages/modules/ImsStack`: the `AoS*` class names, the
+`CreateUeSpi` / `SetUePortnSpi` call shape and the `SIP_FEATURE_CAPS_*`
+vocabulary are all the same codebase. Where one of LG's XML knobs maps
+onto an AOSP call site, **AOSP's source names the behaviour the knob
+selects** — without needing the binary. Tree read at tag
+`android-17.0.0_r1`, extracted read-only to `~/joan-analysis/aosp-ims/`.
+
+This closes three rows of the 09-16 delta table, opens one new one, and
+kills a theory.
+
+### `common_sip_features` decoded
+
+The single largest unexplained value in the table. It is
+`ISipConfig::SIP_FEATURE_CAPS_*`
+(`config/interface/common/ISipConfig.h:104`), consumed through
+`SipConfig::HasFeature` / `SipConfigProxy::Is*`.
+
+| bit | name | TMO `0x151A001B` | CMCC `0x16000000` |
+| --- | --- | --- | --- |
+| 0 | `IPSEC` | set | clear |
+| 1 | `GRUU` | set | clear |
+| 3 | `KEEP` | set | clear |
+| 4 | `TRUST_DOMAIN` | set | clear |
+| 17 | `PPI_HEADER_IN_REG_SUB` | set | **clear** |
+| 19 | `SIP_INSTANCE_FOR_CALLER_PREFERENCE` | set | clear |
+| 20 | `ROUTE_HEADER_IN_REG` | set | clear |
+| 24 | `AUTHENTICATION_ALGORITHM_PARAMETER` | **set** | **clear** |
+| 25 | `UA_SET_BY_CONTEXT` | clear | set |
+| 26 | `USER_AGENT` | set | set |
+| 28 | `CONTACT_IN_ALL_1XX` | set | set |
+
+Bit 17 clear for CMCC is the independent confirmation of alpha33's
+P-Preferred-Identity fix — LG had already configured China Mobile not to
+carry PPI in REGISTER/SUBSCRIBE.
+
+Two cautions against over-reading this table. Bit 0 `IPSEC` has **no
+consumer anywhere in the AOSP tree**, and CMCC plainly does use IPsec
+(`aos_reg_0_ipsec` is true and their 404 came back over the SA), so bit 0
+is not the IPsec master switch. Bit 19 governs how `+sip.instance` is
+*evaluated for service routing*, not whether it is emitted — consistent
+with the `SetContactHeader` finding above that LG does not drop the
+instance-id for CMCC.
+
+### New confirmed delta: `algorithm=` in the Authorization header
+
+`engine/registration/RegParameter.cpp:403` appends the `algorithm=`
+parameter to the REGISTER's Authorization header **only** when
+`SipConfigProxy::IsAuthenticationAlgorithmRequired()` is true, which is
+`HasFeature(SIP_FEATURE_CAPS_AUTHENTICATION_ALGORITHM_PARAMETER)` —
+bit 24 (`config/interface/private/SipConfig.h:95`).
+
+**T-Mobile sets bit 24. China Mobile clears it.** So LG sends the
+Authorization header *without* `algorithm=` to China Mobile.
+
+joan emits it unconditionally, on both legs —
+`JoanSipBuilder.java:1336` (the REG2 digest) and `:1353` (the initial
+credential-less REGISTER).
+
+RFC 3310 §4 *requires* `algorithm=AKAv1-MD5`, so omitting it is
+non-standard, which is presumably exactly why LG made it a per-carrier
+flag rather than a default: a carrier-scoped opt-out is what you write
+after hitting a core that mishandles the standard form. This is the same
+class of finding as the `integrity-protected` parity note already in
+`JoanSipBuilder` — a byte-shape difference in the one header that
+precedes CMCC's 404.
+
+Not proven causal. It is a diff, in the failing header, that LG
+deliberately configured off for this carrier.
+
+### Checked and NOT a delta: User-Agent to China Mobile
+
+Worth recording because bit 26 makes the opposite look obvious, and
+because a previous session reached the wrong answer from the header
+list of a *different* tester's trace.
+
+Bit 26 `USER_AGENT` is **set** for CMCC, which looks like "LG does send a
+UA to China Mobile". Following the whole chain says otherwise:
+
+1. `RegParameter.cpp:380` adds the header only if bit 26 is set. CMCC: yes.
+2. `UserAgentHeader::SetHeader` (`engine/core/util/UserAgentHeader.cpp:47`)
+   resolves the string: `GetRegUaString` → the profile's reg-UA if
+   non-null, else `SipConfig::GetUaVersion()` →
+   `SipConfigV::m_strServiceVersion` ← `KEY_IMS_USER_AGENT_STRING`.
+3. **If that string is empty it returns without setting the header**
+   ("UA version is empty", `UserAgentHeader.cpp:58`).
+
+LG's CMCC profile has exactly one UA key, `user_agent_fmt = ''`, against
+T-Mobile's `'T-Mobile VoLTE-ePDG-#RCS#-IR94-ussd LG/#MODEL# #SW_VERSION#'`.
+There is no separate reg-UA key. So the machinery is enabled and the
+string is empty: **no User-Agent reaches China Mobile**, and joan's
+suppression matches stock.
+
+Bit 25 `UA_SET_BY_CONTEXT` does not change this. Per
+`SipProfile.h:591`, it selects *which* header carries the string —
+`User-Agent` on requests, `Server` on responses — it does not synthesise
+one.
+
+Do not "fix" this. The CMCC tester's alpha33 REGISTERs correctly carry no
+User-Agent; the `User-Agent` seen in a 2026-09-17 trace belongs to the
+**NOS (268-03)** tester, where it is expected.
+
+### Closed: `ipsec_spi_3gpp` semantics
+
+The 09-16 table recorded this as "unknown semantics". It was in fact
+resolved from the binary on 2026-09-05 and the note never made it back
+here. `SIPSecurityHeader::ToString()` (0x79770c) tests the SPI-option
+bool stored by `SetSPIOption` and selects `;spi-c=%010u` / `;spi-s=%010u`
+when true, `;spi-c=%u` / `;spi-s=%u` when false. It is **decimal
+formatting**, not a port-derived SA scheme.
+
+CMCC is `false` → unpadded. joan writes plain unpadded decimal, so
+**joan already matches.** Full evidence and the rejected "SPI = port"
+hypothesis:
+`~/.hermes/skills/software-development/ims-volte-stack-development/references/joan-cmcc-spi-flag-correction-2026-09.md`.
+
+### Open: the UE SPI and protected-port convention
+
+joan and stock pick these differently. Constants from
+`enabler/include/aos/registration/AosIpsec.h`, behaviour from
+`AosIpsec::CreateUeSpi()` and `AosIpsecHelper::SetUePortnSpi()` — and
+independently corroborated in LG's own binary, where
+`AoSIPSecHelper::SetUePortnSPI` (0xa44484) "stores SPI then SPI+1".
+
+| | stock (AOSP + LG binary) | joan |
+| --- | --- | --- |
+| `spi-c` | monotonic counter, step `SPI_VALUE_TO_BE_INCREASED` = 2, floored at `SPI_MIN` = 1 000 000 000 | `256 + rng.nextInt(0x7fffffff - 256)` |
+| `spi-s` | **`spi-c + 1`** | a second, unrelated random |
+| `port-c` | `UE_PORT_LOWER` 38001 – `UE_PORT_UPPER` 39000 | `10000 + rng.nextInt(20000)` |
+| `port-s` | 39001 – 40000 (`+ PORTS_INTERVAL`) | `port-c + 1000` |
+
+So stock always offers an adjacent SPI pair, both ≥ 1e9, from two fixed
+1000-port windows; joan offers two unrelated SPIs that are usually far
+below 1e9, from a 20000-port window.
+
+Nothing in TS 33.203 or RFC 3329 requires the pair to be adjacent, and
+joan's current values register fine on T-Mobile, NOS and China Telecom —
+so this is **not** a demonstrated cause of anything. It is simply the
+last part of the sec-agree shape that still differs from stock, and
+matching it is a small, bounded change to `JoanSipBuilder.Params.random`.
+
+### Closed as unresolvable from AOSP: `aos_reg_0_features` bits 9 and 11
+
+AOSP's registration feature enum
+(`enabler/include/aos/registration/AosRegistration.h:496`) has **two**
+values, `FEATURE_SUBSCRIPTION = 0x01` and `FEATURE_IPSEC = 0x02`; TRM and
+TRM_BLOCK are LG additions, and bits 9/11 are further LG additions on top
+of that. The upstream source cannot name them, so this stays where the
+09-16 entry left it: resolvable only from `libims.lge.so`, by the
+disassembly method that settled `ipsec_spi_3gpp`.
