@@ -684,6 +684,9 @@ LineageOS 22 inherit: `upstream/` (`joan-ims.mk` + `Android.bp`).
 **How per-carrier behaviour is decided, and from which of three sources:**
 [`docs/carrier-configuration-architecture.md`](docs/carrier-configuration-architecture.md)
 
+**When the zip will not install, or installs and does nothing:**
+[`docs/install-troubleshooting.md`](docs/install-troubleshooting.md)
+
 **What was consulted, derived, or reverse engineered, and from where:**
 [`docs/upstream-references.md`](docs/upstream-references.md)
 — every file in the flashable zip, the four conditions that must all hold

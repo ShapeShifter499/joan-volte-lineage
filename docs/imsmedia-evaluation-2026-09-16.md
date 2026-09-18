@@ -140,3 +140,28 @@ configuration and agent layer over a native SIP stack that is not in the
 repository, so for SIP there is repeatedly nothing to take; ImsMedia is
 self-contained and the algorithms are present, which is why it is worth
 this evaluation and ImsStack is worth reading.
+
+## What the port actually took (2026-09-18)
+
+Path 3 was taken and `JoanJitter` is the result. Diffing it back against
+`JitterNetworkAnalyser` and `AudioJitterBuffer` two days later found the
+port had kept the tuning constants verbatim -- 20 ms interval, 10 ms
+round-up margin, 200/2000 ms thresholds, step 2, start depth 4 -- and
+replaced the algorithm around them:
+
+- ImsMedia sizes from the **maximum over a window of up to 150
+  accumulated deltas** (plus mean and deviation); ours decided from the
+  single latest delta.
+- ImsMedia jumps straight to the computed size when the network is bad;
+  ours grows one frame at a time, and its growth test
+  (`deltaMs < INCREASE_THRESHOLD_MS`) declines to grow at all for a delta
+  of 200 ms or more -- exactly the spikes that need the depth.
+- ImsMedia only shrinks after dwelling in GOOD **and** seeing no recent
+  late arrivals; ours shrank on a bare timer since the last growth.
+- ImsMedia caps the audio buffer at **9 frames**; ours was capped at 50,
+  a full second of held audio.
+
+The ceiling was brought to 9 in the commit that added this note. The
+other three are still open, and are the interesting part of any future
+pass: the constants matching made the divergence easy to miss, since the
+file reads as if it were the same algorithm.
