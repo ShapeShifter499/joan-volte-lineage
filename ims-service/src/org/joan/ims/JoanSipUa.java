@@ -1079,7 +1079,17 @@ final class JoanSipUa {
             if (p == null) {
                 continue;
             }
-            JoanTrace.note("app invite reply=" + p.status);
+            /* A refusal with only a status code is undiagnosable: the
+             * Viettel core 400s our INVITE and the trace could not say
+             * which thing it found wrong. The reason phrase and any
+             * Warning header usually name it, and cost one line. */
+            String inviteWarn = p.status >= 300
+                    ? JoanSipBuilder.header(rx, "Warning") : null;
+            JoanTrace.note("app invite reply=" + p.status
+                    + (p.status >= 300 && p.reason != null
+                            && !p.reason.isEmpty() ? " " + p.reason : "")
+                    + (inviteWarn != null
+                            ? " warn=\"" + inviteWarn + "\"" : ""));
             JoanSipBuilder.learnSessionId(dlg, rx);
             if (p.status >= 100 && p.status < 200) {
                 if (headerRseq(rx) > 0) {
