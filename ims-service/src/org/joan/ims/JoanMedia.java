@@ -1103,7 +1103,13 @@ final class JoanMedia {
                         /* Downlink has started. Nothing else is traced
                          * from this loop: JoanTrace.note() opens, writes
                          * and closes a FileWriter under a process-global
-                         * lock, and this loop runs every 20 ms. */
+                         * lock, and this loop runs every 20 ms. The
+                         * blackout clock anchors here for every codec:
+                         * anchored was PCMU-only at first, and every AMR
+                         * call then reported its whole duration as a
+                         * blackout in the stop summary. */
+                        anchored = true;
+                        anchorMs = nowMs;
                         JoanTrace.note("media dl first frame write=" + wr
                                 + " mode=" + (am == null ? -1 : am.getMode())
                                 + " spk=" + (am != null && am.isSpeakerphoneOn()));

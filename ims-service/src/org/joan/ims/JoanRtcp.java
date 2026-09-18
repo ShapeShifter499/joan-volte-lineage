@@ -101,10 +101,17 @@ final class JoanRtcp {
                         ((b[blocks + 5] & 0xff) << 16)
                                 | ((b[blocks + 6] & 0xff) << 8)
                                 | (b[blocks + 7] & 0xff),
-                        ((b[blocks + 16] & 0xff) << 24)
-                                | ((b[blocks + 17] & 0xff) << 16)
-                                | ((b[blocks + 18] & 0xff) << 8)
-                                | (b[blocks + 19] & 0xff));
+                        /* RFC 3550 6.4.1 report block: SSRC(4), fraction
+                         * (1), cumulative (3), extended max seq (4),
+                         * jitter (4) at +12, LSR (4) at +16, DLSR (4).
+                         * This read jitter from +16 -- the LSR, an NTP
+                         * timestamp that once reached 452198400 on the
+                         * bench and was logged as 452 million ticks of
+                         * jitter on a clean call. */
+                        ((b[blocks + 12] & 0xff) << 24)
+                                | ((b[blocks + 13] & 0xff) << 16)
+                                | ((b[blocks + 14] & 0xff) << 8)
+                                | (b[blocks + 15] & 0xff));
             }
             off += plen;
         }

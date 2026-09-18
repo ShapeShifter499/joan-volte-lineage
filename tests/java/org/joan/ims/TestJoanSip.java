@@ -1793,9 +1793,13 @@ public final class TestJoanSip {
                 "a short buffer is refused, not overrun");
 
         /* RTCP receiver reports: what the far end says it is getting.
-         * An RR is header(8) + one 24-byte report block; fraction lost is
-         * the byte after the reported SSRC, cumulative loss the next
-         * three, jitter at offset 16. */
+         * An RR is header(8) + one 24-byte report block; per RFC 3550
+         * 6.4.1: SSRC(4) fraction(1) cumulative(3) extended-max-seq(4)
+         * JITTER(4) lsr(4) dlsr(4). The jitter word is block+12 -- this
+         * test once placed it at block+16 (LSR) and the parser agreed,
+         * both misreading the field: the bench logged a real LSR of
+         * 452198400 as "jitter" on a lossless call. LSR gets a distinct
+         * value so reading the wrong word can never pass again. */
         byte[] rr = new byte[32];
         rr[0] = (byte) 0x81;              // V=2, RC=1
         rr[1] = (byte) 201;               // RR
@@ -1803,13 +1807,16 @@ public final class TestJoanSip {
         rr[8] = 0; rr[9] = 0; rr[10] = 0; rr[11] = 9;   // reported SSRC
         rr[12] = (byte) 64;               // fraction lost = 64/256 = 25%
         rr[13] = 0; rr[14] = 1; rr[15] = 44;            // cumulative = 300
-        rr[24] = 0; rr[25] = 0; rr[26] = 2; rr[27] = 88; // jitter = 600
+        rr[20] = 0; rr[21] = 0; rr[22] = 2; rr[23] = 88; // jitter = 600
+        rr[24] = 0x1a; rr[25] = (byte) 0xfa; rr[26] = 0; rr[27] = 0; // LSR
         JoanRtcp.Report rep = JoanRtcp.parse(rr, rr.length);
         check(rep != null && rep.lossPercent() == 25,
                 "fraction lost is read as a percentage");
         check(rep != null && rep.cumulativeLost == 300,
                 "cumulative loss spans three bytes");
         check(rep != null && rep.jitter == 600, "interarrival jitter is read");
+        check(rep != null && rep.jitter != 0x1afa0000,
+                "the LSR word is never mistaken for jitter");
         /* A truncated or unknown packet must be ignored, never read past. */
         check(JoanRtcp.parse(new byte[] { (byte) 0x81, (byte) 201, 0, 7 }, 4) == null,
                 "a truncated RTCP packet yields no report");
