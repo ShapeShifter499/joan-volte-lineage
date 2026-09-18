@@ -24,6 +24,7 @@ echo "== apn overlay merge"
 
 echo "== carrier assets"
 "$ROOT/tests/carrier/run-carrier-tests.sh"
+"$ROOT/tests/installer/run-installer-tests.sh"
 
 echo "== java sip/crypto (host javac)"
 JAVA_SRC="$ROOT/ims-service/src/org/joan/ims"

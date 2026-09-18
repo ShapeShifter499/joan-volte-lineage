@@ -67,11 +67,53 @@ need_file "$TMP/app/joan-ims.apk" 5000
 # nothing installed. v6 refused, correctly, but could not install either.
 #
 # The partitions are logical (dynamic/super). Recovery creates them as
-# /dev/block/mapper/<name>, and they mount read-write: dm-verity is not
-# in the way on this build. Mount them ourselves at private mountpoints.
+# /dev/block/mapper/<name>. On the US998 LineageOS build they mount
+# read-write and dm-verity is not in the way; that is a property of that
+# recovery, not a rule, which unlock_device below exists to handle.
 SYSMNT=/mnt/joan_system
 PRODMNT=/mnt/joan_product
 TMPDM=$(stat -c %d /tmp 2>/dev/null)
+
+# Clear the read-only flag on a device-mapper node.
+#
+# A logical partition is a dm-linear device, and the bootloader hands it
+# over with force_ro set. Nothing in a sideload clears it. The filesystem
+# then mounts and REPORTS rw while every write returns EROFS, which is
+# exactly the "writable but the write failed" branch further down.
+#
+# That is not hypothetical. An InfinityX install was refused on a system
+# partition holding 3.14 MiB and 132 free inodes -- about fifteen times
+# what this package needs -- and the refusal was read as the ROM being
+# full. Measured from the ext4 superblocks afterwards: system 805 free
+# blocks, product 1136, system_ext 495, against a payload of roughly
+# 210 KB and 8 inodes, with 2.25 GiB still unallocated inside super.
+# Space was never the problem.
+#
+# Best effort and silent by design: a device with static partitions has
+# no dm node and nothing to do, a recovery that already handed us a
+# writable device is untouched, and a failure here changes nothing --
+# the write test still decides whether we install.
+unlock_device() {
+  ud_dev=$(readlink -f "$1" 2>/dev/null)
+  [ -n "$ud_dev" ] || ud_dev="$1"
+  case "$ud_dev" in
+    */dm-*) ;;
+    *) return 1 ;;
+  esac
+  ud_ro="/sys/block/${ud_dev##*/}/force_ro"
+  [ -f "$ud_ro" ] || return 1
+  [ "$(cat "$ud_ro" 2>/dev/null)" = "1" ] || return 1
+  echo 0 > "$ud_ro" 2>/dev/null || true
+  # Some recoveries ship blockdev and not a writable sysfs, some the
+  # reverse. Try both, then believe only what sysfs reads back.
+  blockdev --setrw "$ud_dev" 2>/dev/null || true
+  [ "$(cat "$ud_ro" 2>/dev/null)" = "0" ]
+}
+
+# The block device currently backing a mount point, or empty.
+device_of() {
+  mount | grep " $1 " | head -1 | cut -d" " -f1
+}
 
 mount_part() {
   name="$1"
@@ -86,6 +128,9 @@ mount_part() {
       [ -b "$dev" ] || continue
       real=$(readlink -f "$dev" 2>/dev/null)
       [ -n "$real" ] || real="$dev"
+      if unlock_device "$real"; then
+        ui_print "  cleared the read-only flag on $name ($real)"
+      fi
       # Recovery mounts /system itself, to read otacerts.zip while it
       # verifies the package signature. ext4 refuses a second rw mount of
       # a device it already holds read-only, so a plain "mount -o rw"
@@ -120,6 +165,15 @@ mount_part() {
   fi
 
   wt="$mp/.joan_write_test"
+  if ! echo joan > "$wt" 2>/dev/null; then
+    # A mount that claims rw and refuses a five-byte write is almost
+    # always a read-only dm node underneath. Clear it and try once more
+    # before blaming the filesystem for something it is not doing.
+    if unlock_device "$(device_of "$mp")"; then
+      ui_print "  $name refused a write; cleared its read-only flag, retrying"
+      mount -o rw,remount "$mp" 2>/dev/null || true
+    fi
+  fi
   if echo joan > "$wt" 2>/dev/null; then
     got=$(cat "$wt" 2>/dev/null)
     rm -f "$wt"
@@ -132,7 +186,8 @@ mount_part() {
     if mount | grep " $mp " | grep -q "[(,]ro[,)]"; then
       error "$name is mounted read-only; cannot install"
     else
-      error "$name is writable but the write failed (${free:-?} KB free); cannot install"
+      inodes=$(df -ki "$mp" 2>/dev/null | tail -1 | tr -s " " | cut -d" " -f4)
+      error "$name reports writable but refuses a 5-byte write (${free:-?} KB and ${inodes:-?} inodes free). This package needs about 210 KB and 8 inodes, so free space is not the limit. Its device-mapper node is read-only and could not be cleared; report this line."
     fi
   fi
 }
