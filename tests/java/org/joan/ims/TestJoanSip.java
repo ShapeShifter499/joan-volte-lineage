@@ -2173,6 +2173,65 @@ public final class TestJoanSip {
                 "a stream that keeps arriving late grows the buffer");
         check(adapt.depth() <= JoanJitter.MAX_DEPTH,
                 "and never past the ceiling");
+
+        /* The sizing follows AOSP's JitterNetworkAnalyser, and these are
+         * the three things the first port got wrong. 16 kHz: 320 ticks
+         * is one 20 ms frame, 16 ticks one millisecond. */
+
+        /* 1. A big spike is exactly what needs the depth. The old rule
+         * only grew for a delta UNDER 200 ms, so a 300 ms arrival -- the
+         * one that will certainly be discarded next time -- grew the
+         * buffer by nothing at all. */
+        JoanJitter spike = new JoanJitter();
+        spike.setClockRate(16000);
+        spike.offer(1, 0, 0, p, 0L);
+        spike.poll(0L);
+        int beforeSpike = spike.depth();
+        spike.offer(2, 320L, 320L + 300 * 16L, p, 20L);
+        check(spike.depth() > beforeSpike,
+                "a 300 ms arrival grows the buffer instead of being ignored");
+
+        /* 2. Growth goes straight to the computed size. A 150 ms offset
+         * wants (150 + 10) / 20 = 8 frames, and stepping one frame at a
+         * time would discard audio on the way there. */
+        JoanJitter jump = new JoanJitter();
+        jump.setClockRate(16000);
+        jump.offer(1, 0, 0, p, 0L);
+        jump.poll(0L);
+        jump.offer(2, 320L, 320L + 150 * 16L, p, 20L);
+        check(jump.depth() >= 8,
+                "growth reaches the computed target in one step");
+        check(jump.depth() <= JoanJitter.MAX_DEPTH, "and still respects the cap");
+
+        /* 3. The decision is the worst offset in the WINDOW, not the
+         * newest arrival. Calm packets must not talk the buffer back down
+         * while the window still remembers the spike -- sizing from the
+         * latest sample alone is what let one quiet packet undo it. */
+        int jumpHeld = jump.depth();
+        for (int i = 3; i < 60; i++) {
+            jump.offer(i, i * 320L, i * 320L + 150 * 16L, p, i * 20L);
+            jump.poll(i * 20L);
+        }
+        check(jump.depth() == jumpHeld,
+                "calm packets do not shrink the buffer while the window holds the spike");
+
+        /* 4. Once the spike ages out of the window and the link has been
+         * quiet for the dwell, it does come back down -- stepped, and
+         * never below the floor. */
+        JoanJitter relax = new JoanJitter();
+        relax.setClockRate(16000);
+        relax.offer(1, 0, 0, p, 0L);
+        relax.poll(0L);
+        relax.offer(2, 320L, 320L + 150 * 16L, p, 20L);
+        int relaxGrown = relax.depth();
+        for (int i = 3; i < 400; i++) {
+            relax.offer(i, i * 320L, i * 320L, p, i * 20L);
+            relax.poll(i * 20L);
+        }
+        check(relax.depth() < relaxGrown,
+                "a quiet link eventually gets the depth back");
+        check(relax.depth() >= JoanJitter.MIN_DEPTH,
+                "but never below the floor");
         /* The ceiling is latency the call never gets back. AOSP's IMS
          * media stack caps its audio jitter buffer at 9 frames; ours was
          * 50, a full second at 20 ms a frame. */

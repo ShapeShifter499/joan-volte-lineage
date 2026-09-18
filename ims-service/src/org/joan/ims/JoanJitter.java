@@ -28,8 +28,17 @@ final class JoanJitter {
     static final int MAX_HISTORY = 150;
     /** Nominal packet interval, milliseconds. */
     static final int PACKET_INTERVAL_MS = 20;
-    /** A late packet grows the buffer if seen within this window. */
-    static final int INCREASE_THRESHOLD_MS = 200;
+    /**
+     * Weight applied to the worst offset in the window before the
+     * round-up margin. AOSP's MARGIN_WEIGHT, 1.0 and configurable there.
+     *
+     * <p>Its BUFFER_INCREASE_TH (200 ms) is deliberately absent. AOSP
+     * plumbs that constant through SetJitterOptions and then does not
+     * consult it when sizing, and our first port turned it into an upper
+     * bound on which arrivals may grow the buffer -- so a delta of 200 ms
+     * or more, exactly the kind that needs the depth, grew it by nothing.
+     */
+    static final int BUFFER_WEIGHT = 1;
     /** The buffer only shrinks after this long without needing to grow. */
     static final int DECREASE_THRESHOLD_MS = 2000;
     /** Frames removed at a time when shrinking. */
@@ -120,6 +129,33 @@ final class JoanJitter {
     private boolean haveTransit;
 
     private long lastGrowAtMs;
+
+    /* --- AOSP JitterNetworkAnalyser sizing state ---------------------
+     *
+     * The window holds each packet's accumulated arrival offset in
+     * milliseconds -- how far its arrival has drifted from its nominal
+     * slot since the stream began -- normalised to the smallest offset
+     * seen while the window was still filling. The buffer is sized from
+     * the WORST offset still in the window, not from the newest arrival.
+     *
+     * That distinction is the whole point. Sizing from the latest delta
+     * alone, as the first port did, means one calm packet can talk the
+     * buffer back down while the link is still misbehaving, and a single
+     * outlier can talk it up when nothing else agrees. MAX_HISTORY was
+     * declared for this and then never used.
+     */
+    private final int[] offsets = new int[MAX_HISTORY];
+    private int offsetCount;
+    private int offsetAt;
+    private long firstTransit;
+    private boolean haveFirstTransit;
+    private int minOffsetMs = Integer.MAX_VALUE;
+    /** Whether the last sizing decision judged the network GOOD. */
+    private boolean inGood;
+    private long goodSinceMs;
+    /** When a packet last missed its slot; 0 for never. */
+    private long lastLateAtMs;
+
     /** Arrived after its slot had already played: the depth was short. */
     private int late;
     /** Given up to bound the latency: the buffer doing its job. */
@@ -203,6 +239,15 @@ final class JoanJitter {
         lastTransit = 0;
         haveTransit = false;
         lastGrowAtMs = 0;
+        java.util.Arrays.fill(offsets, 0);
+        offsetCount = 0;
+        offsetAt = 0;
+        firstTransit = 0;
+        haveFirstTransit = false;
+        minOffsetMs = Integer.MAX_VALUE;
+        inGood = false;
+        goodSinceMs = 0;
+        lastLateAtMs = 0;
         late = 0;
         trimmed = 0;
         reordered = 0;
@@ -353,6 +398,9 @@ final class JoanJitter {
              * emitting audio out of order, which is worse than the gap
              * it would fill. */
             late++;
+            /* AudioJitterBuffer calls SetLateArrivals here; the shrink
+             * refuses to act while one is this recent. */
+            lastLateAtMs = nowMs;
             noteDrop(nowMs);
             return false;
         }
@@ -547,8 +595,12 @@ final class JoanJitter {
             }
             /* RFC 3550 A.8: a first-order estimator with 1/16 gain. */
             jitter += (d - jitter) / 16.0;
-            adapt(d, nowMs);
         }
+        if (!haveFirstTransit) {
+            firstTransit = transit;
+            haveFirstTransit = true;
+        }
+        noteOffset((int) ((transit - firstTransit) / ticksPerMs()), nowMs);
         lastTransit = transit;
         haveTransit = true;
         long expectedNow = maxSeq - baseSeq + 1;
@@ -563,23 +615,93 @@ final class JoanJitter {
      * necessary, so it only happens after a long stretch with no packet
      * needing it.
      */
-    private void adapt(long deltaTicks, long nowMs) {
-        long deltaMs = deltaTicks / Math.max(1, ticksPerMs());
-        if (deltaMs + ROUNDUP_MARGIN_MS > (long) depth * PACKET_INTERVAL_MS
-                && deltaMs < INCREASE_THRESHOLD_MS) {
-            if (depth < MAX_DEPTH) {
-                depth++;
+    /**
+     * Record one packet's normalised arrival offset and re-size.
+     *
+     * <p>The normalisation baseline only falls while the window is still
+     * filling, which is what AOSP does: once there is a full window to
+     * judge from, moving the baseline would quietly re-scale every
+     * comparison underneath it.
+     */
+    private void noteOffset(int offsetMs, long nowMs) {
+        offsets[offsetAt] = minOffsetMs == Integer.MAX_VALUE
+                ? offsetMs : offsetMs - minOffsetMs;
+        offsetAt = (offsetAt + 1) % MAX_HISTORY;
+        if (offsetCount < MAX_HISTORY) {
+            offsetCount++;
+            if (offsetMs < minOffsetMs) {
+                minOffsetMs = offsetMs;
             }
-            lastGrowAtMs = nowMs;
+        }
+        adapt(nowMs);
+    }
+
+    /**
+     * AOSP's {@code JitterNetworkAnalyser::GetNextJitterBufferSize}.
+     *
+     * <p>The target is the worst offset in the window, weighted, plus a
+     * round-up margin, divided by the packet interval. Three outcomes,
+     * and they are deliberately asymmetric: growth is immediate and goes
+     * straight to the computed size, because audio that needed the depth
+     * is already being discarded by the time we notice; shrinking is
+     * slow, stepped, and refuses to act at all until the network has been
+     * quiet for {@code DECREASE_THRESHOLD_MS} with no late arrival in
+     * that window, because giving depth back too eagerly is how a buffer
+     * oscillates.
+     *
+     * <p>One divergence from AOSP, on purpose: it lets a negative
+     * computed size fall into an unsigned divide, which cannot end well.
+     * The target floors at zero here and the ordinary bounds take it from
+     * there.
+     */
+    private void adapt(long nowMs) {
+        if (offsetCount == 0) {
             return;
         }
-        if (lastGrowAtMs > 0 && nowMs - lastGrowAtMs > DECREASE_THRESHOLD_MS) {
-            depth -= DECREASE_STEP;
+        int worst = 0;
+        for (int i = 0; i < offsetCount; i++) {
+            if (offsets[i] > worst) {
+                worst = offsets[i];
+            }
+        }
+        int target = (worst * BUFFER_WEIGHT + ROUNDUP_MARGIN_MS)
+                / PACKET_INTERVAL_MS;
+        if (target > depth) {
+            depth = target > MAX_DEPTH ? MAX_DEPTH : target;
             if (depth < MIN_DEPTH) {
                 depth = MIN_DEPTH;
             }
             lastGrowAtMs = nowMs;
+            inGood = false;
+            return;
         }
+        if (target < depth - 1) {
+            if (!inGood) {
+                inGood = true;
+                goodSinceMs = nowMs;
+                return;
+            }
+            if (nowMs - goodSinceMs < DECREASE_THRESHOLD_MS) {
+                return;
+            }
+            if (lastLateAtMs != 0
+                    && nowMs - lastLateAtMs <= DECREASE_THRESHOLD_MS) {
+                return;
+            }
+            int step = depth - target;
+            if (step > DECREASE_STEP) {
+                step = DECREASE_STEP;
+            }
+            depth -= step;
+            if (depth < MIN_DEPTH) {
+                depth = MIN_DEPTH;
+            }
+            /* AOSP drops back to NORMAL after a decrease, so the dwell
+             * has to be earned again before the next one. */
+            inGood = false;
+            return;
+        }
+        inGood = false;
     }
 
     /** Timestamp ticks per millisecond; set by the caller's clock rate. */
