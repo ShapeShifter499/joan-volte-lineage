@@ -1860,6 +1860,23 @@ public final class TestJoanSip {
         check(rep != null && rep.jitter == 600, "interarrival jitter is read");
         check(rep != null && rep.jitter != 0x1afa0000,
                 "the LSR word is never mistaken for jitter");
+        /* RFC 3550 6.4.1: cumulative loss is SIGNED 24-bit, and duplicates
+         * legitimately drive it negative. Read unsigned, a peer's -1 came
+         * back as 16777215 -- sixteen million lost on a healthy call. Our
+         * own sender has always written this field signed. */
+        byte[] dup = rr.clone();
+        dup[13] = (byte) 0xff; dup[14] = (byte) 0xff; dup[15] = (byte) 0xff;
+        JoanRtcp.Report neg = JoanRtcp.parse(dup, dup.length);
+        check(neg != null && neg.cumulativeLost == -1,
+                "a negative cumulative loss reads as negative, not 16777215");
+        dup[13] = (byte) 0x80; dup[14] = 0; dup[15] = 0;
+        JoanRtcp.Report most = JoanRtcp.parse(dup, dup.length);
+        check(most != null && most.cumulativeLost == -8388608,
+                "the most negative cumulative loss sign-extends");
+        dup[13] = 0x7f; dup[14] = (byte) 0xff; dup[15] = (byte) 0xff;
+        JoanRtcp.Report pos = JoanRtcp.parse(dup, dup.length);
+        check(pos != null && pos.cumulativeLost == 8388607,
+                "the largest positive cumulative loss is untouched");
         /* A truncated or unknown packet must be ignored, never read past. */
         check(JoanRtcp.parse(new byte[] { (byte) 0x81, (byte) 201, 0, 7 }, 4) == null,
                 "a truncated RTCP packet yields no report");
@@ -2156,6 +2173,15 @@ public final class TestJoanSip {
                 "a stream that keeps arriving late grows the buffer");
         check(adapt.depth() <= JoanJitter.MAX_DEPTH,
                 "and never past the ceiling");
+        /* The ceiling is latency the call never gets back. AOSP's IMS
+         * media stack caps its audio jitter buffer at 9 frames; ours was
+         * 50, a full second at 20 ms a frame. */
+        check(JoanJitter.MAX_DEPTH <= 9,
+                "the buffer cannot grow past AOSP's 9-frame ceiling");
+        check(JoanJitter.MAX_DEPTH * JoanJitter.PACKET_INTERVAL_MS <= 180,
+                "the deepest buffer is at most 180 ms of held audio");
+        check(JoanJitter.MAX_QUEUE >= JoanJitter.MAX_DEPTH + JoanJitter.SLACK,
+                "the arrival guard never cuts below the drain bound");
         check(JoanJitter.MIN_DEPTH >= 2,
                 "the floor keeps at least one packet of slack");
 

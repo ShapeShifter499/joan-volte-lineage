@@ -56,9 +56,41 @@ final class JoanJitter {
      */
     static final int SLACK = 3;
 
-    /** Buffer depth bounds, in packets. */
+    /**
+     * Buffer depth bounds, in packets.
+     *
+     * <p>The ceiling was 50 -- a full second of held audio at a 20 ms
+     * frame. Nothing ever asked for that: the buffer only grows one frame
+     * at a time, so reaching it takes a sustained bad stretch, and what it
+     * buys at the far end is delay the call never gets back. ITU-T G.114
+     * puts the one-way budget for unimpaired conversation at 150 ms
+     * end-to-end, and the jitter buffer is only one term in that sum.
+     *
+     * <p>AOSP's own IMS media stack caps the audio jitter buffer at 9
+     * frames (packages/modules/ImsMedia,
+     * AudioJitterBuffer.cpp AUDIO_JITTER_BUFFER_MAX_SIZE), starting at 4
+     * and floored at 3. We already borrowed that file's tuning constants
+     * -- 20 ms interval, 10 ms round-up margin, 200/2000 ms thresholds,
+     * step 2 -- so the ceiling matching is the rule rather than the
+     * exception. This file's own SLACK comment already called nine frames
+     * against a target of two "about 180 ms of latency the call never gets
+     * back", which is the same judgement from the other direction.
+     */
     static final int MIN_DEPTH = 2;
-    static final int MAX_DEPTH = 50;
+    static final int MAX_DEPTH = 9;
+
+    /**
+     * Hard ceiling on queued frames, independent of the playout target.
+     *
+     * <p>Two different jobs used to share MAX_DEPTH: the cap on how deep
+     * the adaptive target may grow, and the absolute guard on the arrival
+     * queue. They are not the same number -- the queue legitimately sits a
+     * little above the target while a frame waits for its slot, which is
+     * what SLACK is for. Lowering the target cap to 9 without splitting
+     * them would have tightened the arrival guard below the drain bound of
+     * depth + SLACK and started trimming frames that were about to play.
+     */
+    static final int MAX_QUEUE = MAX_DEPTH + SLACK;
 
     /**
      * Beyond this many packets ahead, a sequence number is treated as a
@@ -331,7 +363,7 @@ final class JoanJitter {
         if (sid) {
             sidSeqs.add(ext);
         }
-        while (queue.size() > MAX_DEPTH) {
+        while (queue.size() > MAX_QUEUE) {
             queue.remove(queue.firstKey());
             trimmed++;
             noteDrop(nowMs);

@@ -39,6 +39,26 @@ final class JoanRtcp {
     private JoanRtcp() {}
 
     /**
+     * Sign-extend the report block's 24-bit cumulative-loss field.
+     *
+     * <p>RFC 3550 6.4.1 makes this "the total number of packets lost ...
+     * defined to be the number expected less the number received", and
+     * says plainly that duplicates can make it **negative**. It is a
+     * signed 24-bit two's-complement value, and our own sender has always
+     * written it as one -- {@code JoanMedia} splits a negative count
+     * across the three bytes on purpose and says so in a comment.
+     *
+     * <p>Reading it back unsigned turned the peer's -1 into 16777215:
+     * a healthy call with a handful of duplicate packets reported as
+     * sixteen million lost. The value only feeds diagnostics, which is
+     * exactly why it went unnoticed -- the same shape as the LSR word
+     * being read as jitter.
+     */
+    static int signed24(int v) {
+        return (v & 0x800000) != 0 ? v | 0xff000000 : v;
+    }
+
+    /**
      * First report block in a compound RTCP packet, or null.
      *
      * <p>Compound packets chain several sub-packets, each with its own
@@ -98,9 +118,9 @@ final class JoanRtcp {
             if (blocks > 0 && rc > 0 && blocks + 24 <= off + plen) {
                 return new Report(
                         b[blocks + 4] & 0xff,
-                        ((b[blocks + 5] & 0xff) << 16)
+                        signed24(((b[blocks + 5] & 0xff) << 16)
                                 | ((b[blocks + 6] & 0xff) << 8)
-                                | (b[blocks + 7] & 0xff),
+                                | (b[blocks + 7] & 0xff)),
                         /* RFC 3550 6.4.1 report block: SSRC(4), fraction
                          * (1), cumulative (3), extended max seq (4),
                          * jitter (4) at +12, LSR (4) at +16, DLSR (4).
