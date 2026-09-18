@@ -532,10 +532,11 @@ final class JoanMedia {
                 net.bindSocket(sSock);
             }
             sSock.bind(new InetSocketAddress(local, JoanSipUa.RTP_PORT));
-            /* Only needs to be short enough to notice sRun going false,
-             * and stop() closes the socket which unblocks receive anyway.
-             * 40 ms was 25 pointless wakeups a second on the audio thread. */
-            sSock.setSoTimeout(500);
+            /* Short enough to notice sRun going false, and to pace the
+             * PCMU track feed when no packet arrives; stop() closes the
+             * socket which unblocks receive anyway. 40 ms bounds a
+             * receive-starved track to two frames behind real time. */
+            sSock.setSoTimeout(40);
         } catch (Exception e) {
             JoanTrace.note("media sock " + e.getClass().getSimpleName());
             return false;
@@ -846,13 +847,19 @@ final class JoanMedia {
 
     private static void playback(Context app) {
         AudioTrack trk = null;
-        int dl = 0;
-        long dlSumSq = 0;
-        long dlSamples = 0;
-        long dlActSq = 0;
-        long dlActSamples = 0;
-        int dlPeak = 0;
-        boolean dlLogged = false;
+        /* Downlink accounting, shared by every write path below and read
+         * by the stop summary in the finally block. */
+        final Dl d = new Dl();
+        /* PCMU pacing state. The pace clock anchors when the first real
+         * frame is written; from then the track is owed one frame per
+         * frameMs of wall clock -- real when the buffer has one,
+         * concealed when it does not -- so a lost frame is heard as a
+         * decaying voice rather than a tear, and the stream does not
+         * slip. AMR is deliberately excluded (see the drain below). */
+        boolean anchored = false;
+        long anchorMs = 0;
+        long loopStartMs = System.currentTimeMillis();
+        long firstRxMs = -1;
         audioPriority("play");
         try {
             AudioManager am = app.getSystemService(AudioManager.class);
@@ -877,143 +884,165 @@ final class JoanMedia {
             boolean concealWarned = false;
             int lastCmr = JoanAmr.CMR_NONE;
             DatagramPacket in = new DatagramPacket(down, down.length);
+            final int frameMs = Math.max(1, sFrame * 1000 / sRate);
+            int written = 0;
+            int concealRun = 0;
+            short[] lastReal = new short[sFrame];
+            boolean haveLast = false;
+            int validOffers = 0;
+            long lastNoAudioNoteMs = loopStartMs;
             JoanTrace.note("media play rolling voice mode="
                     + (am == null ? -1 : am.getMode()));
             while (sRun) {
+                long nowMs = System.currentTimeMillis();
+                boolean arrived = true;
                 try {
                     sock.receive(in);
                 } catch (SocketTimeoutException e) {
-                    continue;
+                    arrived = false;
                 }
-                /* With rtcp-mux the peer's reports share this port.
-                 * RFC 5761 4: RTCP types 200-204 sit at 72-76 in the
-                 * payload-type octet, which no audio payload type we
-                 * negotiate can collide with. */
-                byte[] raw = in.getData();
-                int rawLen = in.getLength();
-                if (sMux && JoanRtcp.isRtcp(raw, rawLen)) {
-                    onRtcp(raw, rawLen);
-                    continue;
-                }
-                InetAddress from = in.getAddress();
-                if (from != null && from.equals(sDest)) {
-                    sRtpFromDest++;
-                } else {
-                    sRtpFromOther++;
-                }
-                int m = in.getLength();
-                if (m < RTP_HDR) {
-                    continue;
-                }
-                /* RTCP packet types live in the whole second octet
-                 * (200..204). RTP's payload type is the low 7 bits of that
-                 * octet because bit 7 is the marker, so masking 0x7f before
-                 * the comparison folded an SR (200) to 72 and the test
-                 * could never be true -- every report the peer sent was
-                 * decoded as u-law and played. With a=rtcp-mux, which this
-                 * UA both offers and answers, those reports arrive on this
-                 * very socket. Version must be 2; anything else is not
-                 * ours. */
-                if ((down[0] & 0xc0) != 0x80) {
-                    continue;
-                }
-                int type = down[1] & 0xff;
-                if (type >= 200 && type <= 204) {
-                    continue; /* RTCP, not audio */
-                }
-                /* Payload type, without the marker bit. Until alpha25 we
-                 * never offered telephone-event, so nothing but audio
-                 * arrived and this was never checked. We now negotiate it
-                 * in both directions, which means a far-end keypress or an
-                 * IVR sends four-byte RFC 4733 events to this socket --
-                 * and handing those to the AMR decoder as speech is
-                 * audible noise, not a silent mismatch. */
-                int inPt = down[1] & 0x7f;
-                if (sTePt > 0 && inPt == sTePt) {
-                    int ev = JoanDtmf.eventOf(down, RTP_HDR, m - RTP_HDR);
-                    if (ev >= 0 && !sDtmfRxSeen) {
-                        /* Once per call: an event repeats every packet for
-                         * the length of the tone, and a line per packet
-                         * would bury the call in the trace. */
-                        sDtmfRxSeen = true;
-                        JoanTrace.note("dtmf inbound event=" + ev
-                                + " pt=" + inPt + " (not decoded as audio)");
-                    }
-                    continue;
-                }
-                if (inPt != sPt) {
-                    /* Some other payload type we did not agree to carry.
-                     * Dropping it is right; decoding it is how a codec
-                     * mismatch becomes a burst of noise. */
-                    sRtpWrongPt++;
-                    continue;
-                }
-                /* Account for it before decoding. The statistics are owed
-                 * to the far end whether or not we go on to play it, and
-                 * they are what fills the RTCP report block. */
-                int inSeq = ((down[2] & 0xff) << 8) | (down[3] & 0xff);
-                long inTs = get32(down, 4) & 0xffffffffL;
-                if (sPeerSsrc == 0) {
-                    sPeerSsrc = get32(down, 8);
-                }
-                long nowMs = System.currentTimeMillis();
-                if (sRx.onSsrc(get32(down, 8))) {
-                    JoanTrace.note("media dl: peer SSRC changed; buffer reset");
-                }
-                int off = RTP_HDR;
-                m -= RTP_HDR;
-                if (m <= 0) {
-                    continue;
-                }
-                /* Into the buffer, not straight to the decoder. What comes
-                 * back out is in sequence order and has been held long
-                 * enough to absorb the arrival jitter this link actually
-                 * has -- measured at about 14 ms, most of a packet
-                 * interval, which straight-through playback passes
-                 * directly to the speaker. */
-                byte[] held = new byte[m];
-                System.arraycopy(down, off, held, 0, m);
-                boolean isSid = amr != null
-                        && JoanAmr.isSid(held, 0, m, sAmrOct, amr.wideband());
-                sRx.offer(inSeq, inTs,
-                        (System.nanoTime() / 1000000L)
-                                * Math.max(1, sRate / 1000),
-                        held, isSid, nowMs);
-                byte[] play = sRx.poll(nowMs);
-                if (play == null) {
-                    if (!sRx.lastWasGap()) {
-                        /* Still filling: the call has not started, and
-                         * concealing here would invent audio before the
-                         * first real frame. */
+                if (arrived) {
+                    /* With rtcp-mux the peer's reports share this port.
+                     * RFC 5761 4: RTCP types 200-204 sit at 72-76 in the
+                     * payload-type octet, which no audio payload type we
+                     * negotiate can collide with. */
+                    byte[] raw = in.getData();
+                    int rawLen = in.getLength();
+                    if (sMux && JoanRtcp.isRtcp(raw, rawLen)) {
+                        onRtcp(raw, rawLen);
                         continue;
                     }
-                    /* A frame is missing. Tell the decoder so, rather
-                     * than writing nothing and letting the track
-                     * underrun -- an AMR decoder runs the concealment
-                     * 3GPP specifies for it, which is a better
-                     * reconstruction than this application could make.
-                     * AOSP does the same: onDataFrame(nullptr, 0,
-                     * NO_DATA) and let the codec decide. */
-                    sConcealed++;
-                    if (amr == null) {
-                        continue;   /* PCMU has no concealment to ask for */
+                    InetAddress from = in.getAddress();
+                    if (from != null && from.equals(sDest)) {
+                        sRtpFromDest++;
+                    } else {
+                        sRtpFromOther++;
                     }
-                    int ll = JoanAmr.lostFrame(storage);
-                    int cm = ll < 0 ? -1 : amr.decode(storage, ll, pcm);
-                    if (cm <= 0) {
-                        if (!concealWarned) {
-                            concealWarned = true;
-                            JoanTrace.note("media dl: decoder will not conceal"
-                                    + " a lost frame; gaps stay silent");
+                    int m = in.getLength();
+                    if (m < RTP_HDR) {
+                        continue;
+                    }
+                    /* RTCP packet types live in the whole second octet
+                     * (200..204). RTP's payload type is the low 7 bits of
+                     * that octet because bit 7 is the marker, so masking
+                     * 0x7f before the comparison folded an SR (200) to 72
+                     * and the test could never be true -- every report the
+                     * peer sent was decoded as u-law and played. With
+                     * a=rtcp-mux, which this UA both offers and answers,
+                     * those reports arrive on this very socket. Version
+                     * must be 2; anything else is not ours. */
+                    if ((down[0] & 0xc0) != 0x80) {
+                        continue;
+                    }
+                    int type = down[1] & 0xff;
+                    if (type >= 200 && type <= 204) {
+                        continue; /* RTCP, not audio */
+                    }
+                    /* Payload type, without the marker bit. Until alpha25
+                     * we never offered telephone-event, so nothing but
+                     * audio arrived and this was never checked. We now
+                     * negotiate it in both directions, which means a
+                     * far-end keypress or an IVR sends four-byte RFC 4733
+                     * events to this socket -- and handing those to the
+                     * AMR decoder as speech is audible noise, not a
+                     * silent mismatch. */
+                    int inPt = down[1] & 0x7f;
+                    if (sTePt > 0 && inPt == sTePt) {
+                        int ev = JoanDtmf.eventOf(down, RTP_HDR, m - RTP_HDR);
+                        if (ev >= 0 && !sDtmfRxSeen) {
+                            /* Once per call: an event repeats every packet
+                             * for the length of the tone, and a line per
+                             * packet would bury the call in the trace. */
+                            sDtmfRxSeen = true;
+                            JoanTrace.note("dtmf inbound event=" + ev
+                                    + " pt=" + inPt
+                                    + " (not decoded as audio)");
                         }
                         continue;
                     }
-                    trk.write(pcm, 0, cm);
-                    continue;
+                    if (inPt != sPt) {
+                        /* Some other payload type we did not agree to
+                         * carry. Dropping it is right; decoding it is how
+                         * a codec mismatch becomes a burst of noise. */
+                        sRtpWrongPt++;
+                        continue;
+                    }
+                    /* Account for it before decoding. The statistics are
+                     * owed to the far end whether or not we go on to play
+                     * it, and they are what fills the RTCP report block. */
+                    int inSeq = ((down[2] & 0xff) << 8) | (down[3] & 0xff);
+                    long inTs = get32(down, 4) & 0xffffffffL;
+                    if (sPeerSsrc == 0) {
+                        sPeerSsrc = get32(down, 8);
+                    }
+                    if (sRx.onSsrc(get32(down, 8))) {
+                        JoanTrace.note("media dl: peer SSRC changed; buffer reset");
+                    }
+                    int off = RTP_HDR;
+                    m -= RTP_HDR;
+                    if (m <= 0) {
+                        continue;
+                    }
+                    /* Into the buffer, not straight to the decoder. What
+                     * comes back out is in sequence order and has been
+                     * held long enough to absorb the arrival jitter this
+                     * link actually has -- measured at about 14 ms, most
+                     * of a packet interval, which straight-through
+                     * playback passes directly to the speaker. */
+                    byte[] held = new byte[m];
+                    System.arraycopy(down, off, held, 0, m);
+                    boolean isSid = amr != null
+                            && JoanAmr.isSid(held, 0, m, sAmrOct, amr.wideband());
+                    sRx.offer(inSeq, inTs,
+                            (System.nanoTime() / 1000000L)
+                                    * Math.max(1, sRate / 1000),
+                            held, isSid, nowMs);
+                    validOffers++;
+                    if (firstRxMs < 0) {
+                        firstRxMs = nowMs - loopStartMs;
+                    }
                 }
-                System.arraycopy(play, 0, down, off, play.length);
-                m = play.length;
                 if (amr != null) {
+                    if (!arrived) {
+                        /* DTX: an AMR sender transmits nothing while the
+                         * line is silent, so a timeout is not loss. Polling
+                         * here would also advance the buffer past frames
+                         * the sender has yet to send. */
+                        continue;
+                    }
+                    byte[] play = sRx.poll(nowMs);
+                    if (play == null) {
+                        if (!sRx.lastWasGap()) {
+                            /* Still filling: the call has not started, and
+                             * concealing here would invent audio before the
+                             * first real frame. */
+                            continue;
+                        }
+                        /* A frame is missing. Tell the decoder so, rather
+                         * than writing nothing and letting the track
+                         * underrun -- an AMR decoder runs the concealment
+                         * 3GPP specifies for it, which is a better
+                         * reconstruction than this application could make.
+                         * AOSP does the same: onDataFrame(nullptr, 0,
+                         * NO_DATA) and let the codec decide. */
+                        sConcealed++;
+                        int ll = JoanAmr.lostFrame(storage);
+                        int cm = ll < 0 ? -1 : amr.decode(storage, ll, pcm);
+                        if (cm <= 0) {
+                            if (!concealWarned) {
+                                concealWarned = true;
+                                JoanTrace.note("media dl: decoder will not"
+                                        + " conceal a lost frame; gaps stay"
+                                        + " silent");
+                            }
+                            continue;
+                        }
+                        trk.write(pcm, 0, cm);
+                        continue;
+                    }
+                    int off = RTP_HDR;
+                    System.arraycopy(play, 0, down, off, play.length);
+                    int m = play.length;
                     /* The peer can ask us to change mode in every packet.
                      * We advertise mode-change-capability and then ignore
                      * it, and MediaCodec offers no runtime bitrate key for
@@ -1052,44 +1081,98 @@ final class JoanMedia {
                     if (m == 0) {
                         continue;
                     }
-                } else {
-                    if (m > sFrame) {
-                        m = sFrame;
+                    long dFrameSq = 0;
+                    for (int i = 0; i < m; i++) {
+                        short v = pcm[i];
+                        int a = v < 0 ? -v : v;
+                        dFrameSq += (long) a * a;
+                        if (a > d.peak) {
+                            d.peak = a;
+                        }
                     }
-                }
-                long dFrameSq = 0;
-                for (int i = 0; i < m; i++) {
-                    short v = (amr != null) ? pcm[i]
-                            : ulawToLinear(down[off + i]);
-                    int a = v < 0 ? -v : v;
-                    dFrameSq += (long) a * a;
-                    if (a > dlPeak) {
-                        dlPeak = a;
+                    d.sumSq += dFrameSq;
+                    d.samples += m;
+                    if (dFrameSq / m > ACTIVE_MEAN_SQ) {
+                        d.actSq += dFrameSq;
+                        d.actSamples += m;
                     }
-                    pcm[i] = v;
+                    int wr = trk.write(pcm, 0, m);
+                    sRecv++;
+                    d.frames++;
+                    if (d.frames == 1) {
+                        /* Downlink has started. Nothing else is traced
+                         * from this loop: JoanTrace.note() opens, writes
+                         * and closes a FileWriter under a process-global
+                         * lock, and this loop runs every 20 ms. */
+                        JoanTrace.note("media dl first frame write=" + wr
+                                + " mode=" + (am == null ? -1 : am.getMode())
+                                + " spk=" + (am != null && am.isSpeakerphoneOn()));
+                    }
+                    if (!d.logged && d.samples >= sRate * 5L) {
+                        JoanTrace.note("media dl level " + level(d.sumSq,
+                                d.samples, d.peak, d.actSq, d.actSamples));
+                        d.logged = true;
+                    }
+                    continue;
                 }
-                dlSumSq += dFrameSq;
-                dlSamples += m;
-                if (m > 0 && dFrameSq / m > ACTIVE_MEAN_SQ) {
-                    dlActSq += dFrameSq;
-                    dlActSamples += m;
+                if (!anchored) {
+                    if (!arrived) {
+                        /* Blackout visibility: until this, a call answered
+                         * into minutes of silence was indistinguishable in
+                         * the trace from one that never rang. */
+                        long silent = nowMs - loopStartMs;
+                        if (silent > 2000
+                                && nowMs - lastNoAudioNoteMs >= 2000) {
+                            lastNoAudioNoteMs = nowMs;
+                            JoanTrace.note("media dl: no audio " + silent
+                                    + "ms after answer (rx=" + validOffers
+                                    + " wrong_pt=" + sRtpWrongPt
+                                    + " other_src=" + sRtpFromOther + ")");
+                        }
+                        continue;
+                    }
+                    byte[] play = sRx.poll(nowMs);
+                    if (play == null) {
+                        /* Still filling: the call has not started, and
+                         * concealing here would invent audio before the
+                         * first real frame. */
+                        continue;
+                    }
+                    writePcmuFrame(play, pcm, trk, lastReal, d, am);
+                    haveLast = true;
+                    concealRun = 0;
+                    anchored = true;
+                    anchorMs = nowMs;
+                    written = 1;
+                    continue;
                 }
-                if (!dlLogged && dlSamples >= sRate * 5L) {
-                    JoanTrace.note("media dl level " + level(dlSumSq,
-                            dlSamples, dlPeak, dlActSq, dlActSamples));
-                    dlLogged = true;
+                /* Anchored PCMU: the track is owed frames by wall clock,
+                 * not by arrivals. Draining here on timeouts as well is
+                 * what keeps the queue from backing up into trims during
+                 * loss -- measured on a call at 42% loss where 167 arrived
+                 * frames were trimmed while the speaker starved. */
+                int owed = JoanPcmu.framesOwed(anchorMs, frameMs, written,
+                        nowMs);
+                if (owed < 0) {
+                    /* The stall is history, not jitter; replaying it as
+                     * frames of silence only delays the audio still
+                     * coming. Skip it and keep the pace from now. */
+                    anchorMs = nowMs - (long) written * frameMs;
+                    owed = 0;
                 }
-                int wr = trk.write(pcm, 0, m);
-                sRecv++;
-                dl++;
-                if (dl == 1) {
-                    /* Downlink has started. Nothing else is traced from
-                     * this loop: JoanTrace.note() opens, writes and closes
-                     * a FileWriter under a process-global lock, and this
-                     * loop runs every 20 ms. */
-                    JoanTrace.note("media dl first frame write=" + wr
-                            + " mode=" + (am == null ? -1 : am.getMode())
-                            + " spk=" + (am != null && am.isSpeakerphoneOn()));
+                while (owed-- > 0) {
+                    byte[] play = sRx.poll(nowMs);
+                    if (play != null) {
+                        writePcmuFrame(play, pcm, trk, lastReal, d, am);
+                        haveLast = true;
+                        concealRun = 0;
+                    } else {
+                        JoanPcmu.conceal(pcm, haveLast ? lastReal : null,
+                                concealRun++);
+                        sConcealed++;
+                        trk.write(pcm, 0, pcm.length);
+                    }
+                    written++;
                 }
             }
         } catch (Throwable t) {
@@ -1099,8 +1182,12 @@ final class JoanMedia {
             }
         } finally {
             try { if (trk != null) trk.release(); } catch (Throwable ignored) {}
-            JoanTrace.note("media dl stopped frames=" + dl + " "
-                    + level(dlSumSq, dlSamples, dlPeak, dlActSq, dlActSamples)
+            long blackoutMs = (anchored ? anchorMs : System.currentTimeMillis())
+                    - loopStartMs;
+            JoanTrace.note("media dl stopped frames=" + d.frames + " "
+                    + level(d.sumSq, d.samples, d.peak, d.actSq, d.actSamples)
+                    + " first_rx=" + (firstRxMs >= 0 ? firstRxMs + "ms" : "none")
+                    + (blackoutMs > 500 ? " blackout_ms=" + blackoutMs : "")
                     + " " + rtpSourceSummary(sRtpFromDest, sRtpFromOther)
                     + " " + rtcpSummary()
                     + " rx{" + sRx.summary() + "}"
@@ -1176,6 +1263,63 @@ final class JoanMedia {
             }
         } catch (Throwable ignored) {
             // platform default stands
+        }
+    }
+
+    /** Downlink accounting shared by the PCMU write paths in playback(). */
+    private static final class Dl {
+        int frames;
+        long sumSq;
+        long samples;
+        long actSq;
+        long actSamples;
+        int peak;
+        boolean logged;
+    }
+
+    /**
+     * Decode, measure and write one real PCMU frame, keeping the last
+     * real frame for concealment. The once-per-call notes live here so
+     * every write path reports them identically.
+     */
+    private static void writePcmuFrame(byte[] play, short[] pcm,
+            AudioTrack trk, short[] lastReal, Dl d, AudioManager am) {
+        int m = play.length;
+        if (m > sFrame) {
+            m = sFrame;
+        }
+        if (m <= 0) {
+            return;
+        }
+        long frameSq = 0;
+        for (int i = 0; i < m; i++) {
+            short v = ulawToLinear(play[i]);
+            int a = v < 0 ? -v : v;
+            frameSq += (long) a * a;
+            if (a > d.peak) {
+                d.peak = a;
+            }
+            pcm[i] = v;
+            lastReal[i] = v;
+        }
+        d.sumSq += frameSq;
+        d.samples += m;
+        if (frameSq / m > ACTIVE_MEAN_SQ) {
+            d.actSq += frameSq;
+            d.actSamples += m;
+        }
+        int wr = trk.write(pcm, 0, m);
+        sRecv++;
+        d.frames++;
+        if (d.frames == 1) {
+            JoanTrace.note("media dl first frame write=" + wr
+                    + " mode=" + (am == null ? -1 : am.getMode())
+                    + " spk=" + (am != null && am.isSpeakerphoneOn()));
+        }
+        if (!d.logged && d.samples >= sRate * 5L) {
+            JoanTrace.note("media dl level " + level(d.sumSq, d.samples,
+                    d.peak, d.actSq, d.actSamples));
+            d.logged = true;
         }
     }
 

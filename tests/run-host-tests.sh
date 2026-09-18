@@ -40,6 +40,7 @@ javac -d "$JAVA_OUT" \
     "$JAVA_SRC/JoanSessionTimer.java" \
     "$JAVA_SRC/JoanRegInfo.java" \
     "$JAVA_SRC/JoanJitter.java" \
+    "$JAVA_SRC/JoanPcmu.java" \
     "$JAVA_TEST/org/joan/ims/TestJoanSip.java"
 java -cp "$JAVA_OUT" org.joan.ims.TestJoanSip
 

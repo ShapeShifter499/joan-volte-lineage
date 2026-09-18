@@ -26,6 +26,7 @@ public final class TestJoanSip {
         testSessionBandwidth();
         testRegInfo();
         testJitterBuffer();
+        testPcmu();
         testCarrierCodecs();
         testRegisterRedirect();
         testRegisterShape();
@@ -2302,6 +2303,60 @@ public final class TestJoanSip {
         }
         check(dup.cumulativeLost() < 0,
                 "duplicates make cumulative lost negative, as the RFC allows");
+    }
+
+    /**
+     * PCMU gap concealment and pacing. Until this existed a lost PCMU
+     * frame wrote nothing at all and the track underran -- on a call
+     * measured at 42% loss the far side came through as torn bursts.
+     */
+    private static void testPcmu() {
+        /* The fade: a short hole is bridged with something voice-shaped,
+         * a long one must not repeat a syllable forever. */
+        short[] last = { 400, -800, 1200, 0 };
+        short[] dst = new short[4];
+        JoanPcmu.conceal(dst, last, 0);
+        check(dst[0] == 400 && dst[1] == -800 && dst[2] == 1200,
+                "the first concealed frame is the last real frame");
+        JoanPcmu.conceal(dst, last, 1);
+        check(dst[0] == 300 && dst[1] == -600 && dst[2] == 900,
+                "the second fades to three quarters");
+        JoanPcmu.conceal(dst, last, 2);
+        check(dst[0] == 200 && dst[1] == -400 && dst[2] == 600,
+                "the third to a half");
+        JoanPcmu.conceal(dst, last, 3);
+        check(dst[0] == 100 && dst[1] == -200 && dst[2] == 300,
+                "the fourth to a quarter");
+        JoanPcmu.conceal(dst, last, 4);
+        check(dst[0] == 0 && dst[1] == 0 && dst[2] == 0,
+                "past the fade the frame is silence, not an echo");
+        JoanPcmu.conceal(dst, null, 0);
+        check(dst[0] == 0 && dst[2] == 0,
+                "no last frame yet means silence, not an exception");
+        JoanPcmu.conceal(dst, new short[8], 0);
+        check(dst[0] == 0,
+                "a mismatched last-frame length is silence, not a copy");
+
+        /* The pace: the track is owed frames by wall clock, not by
+         * arrivals, and a stall too long to replay re-anchors instead. */
+        check(JoanPcmu.framesOwed(1000, 20, 0, 1000) == 0,
+                "at anchor nothing is owed");
+        check(JoanPcmu.framesOwed(1000, 20, 0, 1019) == 0,
+                "19 ms in, not yet one frame");
+        check(JoanPcmu.framesOwed(1000, 20, 0, 1020) == 1,
+                "20 ms owes exactly one");
+        check(JoanPcmu.framesOwed(1000, 20, 5, 1120) == 1,
+                "written frames are subtracted, not replayed");
+        check(JoanPcmu.framesOwed(1000, 20, 3, 1060) == 0,
+                "being ahead owes nothing back");
+        check(JoanPcmu.framesOwed(1000, 20, 0, 200) == 0,
+                "a clock behind the anchor owes nothing");
+        check(JoanPcmu.framesOwed(1000, 20, 0, 1200) == 10,
+                "behind by exactly the cap is still catch-up");
+        check(JoanPcmu.framesOwed(1000, 20, 0, 1500) == -1,
+                "behind by more than the cap re-anchors, not replays");
+        check(JoanPcmu.framesOwed(1000, 0, 5, 5000) == -1,
+                "a zero frame period is guarded, not divided by");
     }
 
     private static void testRegInfo() {
