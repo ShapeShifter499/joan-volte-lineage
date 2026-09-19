@@ -119,34 +119,61 @@ platform AEC behind it.
 uses `AudioRecord`/`AudioTrack` at defaults with
 `MediaRecorder.AudioSource.VOICE_COMMUNICATION`.
 
-## Built-in call recording cannot work, and no permission fixes it
+## Call recording: wireable, with one real risk to test
 
-Asked whether granting joan the microphone would make the Dialer's call
-recording work. It will not, and the reason is structural rather than a
-missing grant.
+An earlier version of this section said built-in call recording could not
+work here. That was half right and stated too broadly, and the half that
+was wrong matters.
 
-`useAndroidAudioHandler()` calls `setCallAudioHandler(AUDIO_HANDLER_ANDROID)`,
-which makes the Telephony Connection report `audioModeIsVoip=true`, which
-Telecom turns into **`MODE_IN_COMMUNICATION`** rather than
-`MODE_IN_CALL`. That is correct for joan: the RTP runs in joan's own
-process, so there is no modem voice path for the radio mixer to own.
+What is true: `useAndroidAudioHandler()` calls
+`setCallAudioHandler(AUDIO_HANDLER_ANDROID)`, the Connection reports
+`audioModeIsVoip=true`, and Telecom therefore uses
+**`MODE_IN_COMMUNICATION`** rather than `MODE_IN_CALL`. There is no modem
+voice path on a joan call, so `AudioSource.VOICE_CALL` -- the
+bidirectional tap -- has nothing on it. `AUDIO_HANDLER_BASEBAND` is not
+an alternative; it is for stacks whose media really is on the modem.
 
-Built-in call recording taps `AudioSource.VOICE_CALL` (or the
-`VOICE_DOWNLINK`/`VOICE_UPLINK` variants), which the HAL wires to that
-modem voice path and which only carries audio in `MODE_IN_CALL`. On a
-joan call there is nothing on it to record. The Dialer holds its own
-`RECORD_AUDIO`; the permission was never the obstacle, and granting joan
-anything does not change what the Dialer can tap.
+What is wrong: LineageOS does not default to `VOICE_CALL`. From its
+Dialer's `callrecord/res/values/config.xml`:
 
-`AUDIO_HANDLER_BASEBAND` is not a knob to flip either. It is for stacks
-whose media really does run on the modem; selecting it would leave the
-mixer expecting audio joan is not putting there.
+    call_recording_enabled      = false
+    call_recording_audio_source = 1      // MIC; 4 = VOICE_CALL is the
+                                         // alternative for devices with
+                                         // bidirectional capture
 
-joan *could* record its own calls -- it holds both the decoded downlink
-and the captured uplink in process and could mix them -- but that is a
-feature with its own consent and legal questions, not a fix. Recorded
-here so the next report of "call recording is broken" is not chased as a
-permissions bug.
+`CallRecorderService` reads both as resources -- `getAudioSource()`
+returns `R.integer.call_recording_audio_source` -- and checks
+`RECORD_AUDIO` for itself. **MIC captures perfectly well in
+`MODE_IN_COMMUNICATION`**, so the Dialer's recorder is not structurally
+incompatible with a joan call at all.
+
+So the wiring is three resource overrides, all RRO-able, and joan already
+ships RROs (`joan-ims-rro.apk`, `joan-fw-volte.apk`):
+
+- `call_recording_enabled` -> true
+- `call_record_states.xml` -- LineageOS gates on the **current country by
+  MCC**, per-country entries, which is the gating Lance asked about and is
+  overridable the same way
+- `call_recording_audio_source` -- leave at MIC
+
+**The risk, which is why this is not shipped yet.** joan holds an
+`AudioRecord` on `VOICE_COMMUNICATION` for the whole call. The Dialer
+would open a second capture on `MIC`. Android's concurrent-capture policy
+decides which client gets real audio and which gets silence, and the
+outcome is not obvious from here: if the Dialer wins, **joan's uplink
+goes silent and the call breaks**, which is a far worse failure than not
+having recording.
+
+That has to be tested on a handset before it ships, and the test is
+cheap: enable the two resources, place a call, record, and read
+`media ul level` from the trace. If the uplink levels collapse when
+recording starts, the answer is no.
+
+A recording made this way is also near-end only on the earpiece; the far
+end is captured only acoustically on speakerphone. joan holds both
+directions in process and could mix a true two-way recording itself, but
+that is a feature with consent and legal questions attached, not a
+wiring change.
 
 ## What is absent
 
