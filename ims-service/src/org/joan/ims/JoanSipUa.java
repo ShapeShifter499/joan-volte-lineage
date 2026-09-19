@@ -3468,6 +3468,12 @@ final class JoanSipUa {
 
     private static void send(DatagramSocket s, InetAddress dest, int port,
                              byte[] pkt) throws Exception {
+        /* Every outgoing SIP message on the call leg passes here, so this
+         * is the one place worth recording it. A tester reporting that a
+         * call "got stuck" was, until now, reporting something the capture
+         * could say nothing about. */
+        JoanSipCapture.call("sent",
+                new String(pkt, java.nio.charset.StandardCharsets.US_ASCII));
         if (sTcpClient != null && !sTcpClient.isClosed()) {
             OutputStream os = sTcpClient.getOutputStream();
             os.write(pkt);
@@ -3483,14 +3489,24 @@ final class JoanSipUa {
         }
         String tcp = recvTcpClient(Math.min(200, timeoutMs));
         if (tcp != null) {
+            JoanSipCapture.call("received", tcp);
             return tcp;
         }
         byte[] buf = new byte[4096];
         String a = JoanAppRegister.tryRecv(sSockC, buf, Math.min(200, timeoutMs));
         if (a != null) {
+            JoanSipCapture.call("received", a);
             return a;
         }
-        return JoanAppRegister.tryRecv(sSockS, buf, Math.min(200, timeoutMs));
+        /* The server socket is where the P-CSCF delivers requests TO us,
+         * so this is the inbound-call path. Missing it would leave a
+         * capture that explains outgoing calls and says nothing about
+         * incoming ones. */
+        String b = JoanAppRegister.tryRecv(sSockS, buf, Math.min(200, timeoutMs));
+        if (b != null) {
+            JoanSipCapture.call("received", b);
+        }
+        return b;
     }
 
     private static String recvTcpClient(int timeoutMs) {

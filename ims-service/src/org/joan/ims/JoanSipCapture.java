@@ -37,6 +37,18 @@ final class JoanSipCapture {
 
     /** One message. Past this a capture is not evidence, it is a hazard. */
     private static final int MAX_MESSAGE = 32 * 1024;
+    /* The call leg, kept separately from the registration.
+     *
+     * A REGISTER refresh clears the registration section by design -- it
+     * is one exchange kept whole -- and a refresh can land in the middle
+     * of a call, so sharing one list would throw away the INVITE that was
+     * being investigated. A ring rather than a cleared list for the same
+     * reason: there is no boundary in an outgoing INVITE that reliably
+     * says "new call" without dialog bookkeeping this class should not be
+     * doing. 16 covers an INVITE, its provisional responses, a PRACK and
+     * an UPDATE exchange, the final response and the ACK. */
+    private static final List<String> sCall = new ArrayList<>();
+    private static final int MAX_CALL = 16;
     /** The whole file. Four messages of a REGISTER cycle fit far inside. */
     private static final int MAX_ENTRIES = 8;
 
@@ -97,6 +109,62 @@ final class JoanSipCapture {
         }
     }
 
+    /**
+     * One SIP message on the call leg, in either direction.
+     *
+     * The tester said the outgoing call "got stuck" and the capture could
+     * not say a word about it: it held the REGISTER exchange and nothing
+     * else, so a call that never progressed looked identical to one that
+     * was never placed. Registration is not the feature.
+     *
+     * REGISTER traffic is skipped here because record() already keeps it
+     * whole, and duplicating it would push the call out of the ring.
+     */
+    static void call(String direction, String text) {
+        if (text == null || text.isEmpty() || isRegister(text)) {
+            return;
+        }
+        String facts = JoanSipRedact.lineEndings(text);
+        String body = text.length() > MAX_MESSAGE
+                ? text.substring(0, MAX_MESSAGE) + "\n<truncated at "
+                        + MAX_MESSAGE + " of " + text.length() + " bytes>\n"
+                : text;
+        String entry = "==== call " + direction + ": " + firstLine(text) + " ====\n"
+                + "---- as sent: " + facts + "\n"
+                + JoanSipRedact.normalize(JoanSipRedact.redact(body));
+        synchronized (LOCK) {
+            if (sCall.size() >= MAX_CALL) {
+                sCall.remove(0);
+            }
+            sCall.add(entry);
+            write();
+        }
+    }
+
+    /** The request line or status line, for the section heading. */
+    private static String firstLine(String msg) {
+        int e = msg.indexOf('\n');
+        String l = (e < 0 ? msg : msg.substring(0, e)).trim();
+        return l.length() > 80 ? l.substring(0, 80) : l;
+    }
+
+    /** True for a REGISTER request or a reply to one. */
+    private static boolean isRegister(String msg) {
+        if (msg.startsWith("REGISTER ")) {
+            return true;
+        }
+        for (String line : msg.split("\r?\n")) {
+            if (line.isEmpty()) {
+                return false;
+            }
+            int c = line.indexOf(':');
+            if (c > 0 && "cseq".equalsIgnoreCase(line.substring(0, c).trim())) {
+                return line.toUpperCase(Locale.US).endsWith("REGISTER");
+            }
+        }
+        return false;
+    }
+
     /** Caller holds LOCK. */
     private static void write() {
         if (sFile == null) {
@@ -131,6 +199,17 @@ final class JoanSipCapture {
                 fw.write(e);
                 if (!e.endsWith("\n")) {
                     fw.write("\n");
+                }
+            }
+            if (!sCall.isEmpty()) {
+                fw.write("\n\n# ---- call leg: the last " + sCall.size()
+                        + " SIP messages that were not REGISTER ----\n");
+                for (String e : sCall) {
+                    fw.write("\n");
+                    fw.write(e);
+                    if (!e.endsWith("\n")) {
+                        fw.write("\n");
+                    }
                 }
             }
             fw.close();
