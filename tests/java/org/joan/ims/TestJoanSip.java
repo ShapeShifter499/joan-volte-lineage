@@ -1728,6 +1728,51 @@ public final class TestJoanSip {
         check(JoanSipBuilder.buildRegister(id2, txn2, 1, null, null)
                         .contains("Expires: 600\r\n"),
                 "a carrier profile carrying 600000 is read the same way");
+
+        /* 423 Interval Too Brief. Digi.Mobil RO answered joan's 600 with
+         * Min-Expires: 3600, and RFC 3261 10.2.8 says to retry at or above
+         * what the response names rather than treat it as a rejection. */
+        String r423 = "SIP/2.0 423 Interval Too Brief\r\n"
+                + "CSeq: 4 REGISTER\r\n"
+                + "Min-Expires: 3600\r\n"
+                + "Content-Length: 0\r\n\r\n";
+        check(JoanSipBuilder.minExpiresOf(r423) == 3600,
+                "Min-Expires is read from a 423");
+        check(JoanSipBuilder.minExpiresOf(
+                        "SIP/2.0 423\r\nmin-expires:  120 \r\n\r\n") == 120,
+                "the header name is case-insensitive and the value may be padded");
+        check(JoanSipBuilder.minExpiresOf("SIP/2.0 423\r\n\r\n") == 0,
+                "a 423 with no Min-Expires yields nothing to adopt");
+        check(JoanSipBuilder.minExpiresOf(
+                        "SIP/2.0 423\r\nMin-Expires: 999999\r\n\r\n") == 0,
+                "an absurd Min-Expires does not get to set our interval");
+        check(JoanSipBuilder.minExpiresOf(
+                        "SIP/2.0 423\r\nMin-Expires: abc\r\n\r\n") == 0,
+                "a non-numeric Min-Expires is refused");
+        check(JoanSipBuilder.minExpiresOf(null) == 0, "no reply, no floor");
+
+        // The floor is PLMN-scoped: one network's term must not follow the
+        // SIM onto another.
+        JoanSipBuilder.setCarrierTransport(226, 5, -1, 0, 0);
+        JoanSipBuilder.setCarrierRegisterExpires(0);
+        JoanSipBuilder.adoptMinExpires(3600, 226, 5);
+        check(JoanSipBuilder.registerExpires() == 3600,
+                "an adopted Min-Expires raises what we ask for");
+        check(JoanSipBuilder.buildRegister(id2, txn2, 1, null, null)
+                        .contains("Expires: 3600\r\n"),
+                "and it reaches the wire");
+        JoanSipBuilder.setCarrierTransport(310, 260, -1, 0, 0);
+        check(JoanSipBuilder.registerExpires() == 600,
+                "on a different PLMN the floor does not apply");
+        JoanSipBuilder.setCarrierTransport(226, 5, -1, 0, 0);
+        JoanSipBuilder.adoptMinExpires(60, 226, 5);
+        check(JoanSipBuilder.registerExpires() == 600,
+                "a floor BELOW what we already ask for does not lower it");
+        JoanSipBuilder.adoptMinExpires(999999, 226, 5);
+        check(JoanSipBuilder.registerExpires() == 600,
+                "and an absurd floor is not adopted at all");
+        JoanSipBuilder.setCarrierTransport(-1, -1, -1, 0, 0);
+
         JoanSipBuilder.setCarrierRegisterExpires(0);
 
         /* Platform SIP MTU outranks the link MTU: it is an updatable

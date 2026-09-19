@@ -861,6 +861,19 @@ public class TestJoanRegistration {
                 "flip: dual-family REG2 timeout earns a retry");
         check(!JoanAppRegister.shouldFlipIpVersion(reg1Silence, false),
                 "flip: v4-only PDN (NOS trace) never flips");
+
+        /* A 423 the network explained is not a failure to back off from:
+         * Digi.Mobil RO answered 600 with Min-Expires 3600, and once that
+         * is adopted the next request is correct by construction. */
+        check(JoanAppRegister.expiryRaised(
+                        "reg2=423 min_expires=3600 expires_raised"),
+                "423: a cycle that raised its expiry is visible to the driver");
+        check(!JoanAppRegister.expiryRaised("reg2=423 min_expires=absent"),
+                "423: nothing to adopt is not a prompt retry");
+        check(!JoanAppRegister.expiryRaised("reg2=500 FAIL"),
+                "423: an unrelated failure is not mistaken for one");
+        check(!JoanAppRegister.expiryRaised(null),
+                "423: no summary at all is not a prompt retry");
         check(!JoanAppRegister.shouldFlipIpVersion(null, true),
                 "flip: no result yet never flips");
         check(!JoanAppRegister.shouldFlipIpVersion(

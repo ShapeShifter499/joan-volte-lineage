@@ -356,7 +356,20 @@ final class JoanDriver {
                  * an exponential to discover. */
                 long asked = JoanAppRegister.retryAfterMs(sLastRegister);
                 long waitMs = sRegisterBackoffMs;
-                if (asked > 0L) {
+                if (asked <= 0L && JoanAppRegister.expiryRaised(sLastRegister)) {
+                    /* A 423 whose Min-Expires we took. The network told us
+                     * precisely what to change, so waiting out a backoff
+                     * would only delay a request that is now correct. The
+                     * step is left where it is rather than advanced: this
+                     * cycle failed for a reason that no longer applies,
+                     * and counting it would push a real failure later on
+                     * into a long wait it did not earn. A Retry-After
+                     * still outranks this. */
+                    waitMs = REG_RETRY_MIN_MS;
+                    logState("app REGISTER expiry raised to "
+                            + JoanSipBuilder.registerExpires()
+                            + "s; retrying");
+                } else if (asked > 0L) {
                     waitMs = Math.min(asked, REG_RETRY_RETRY_AFTER_MAX_MS);
                     sRetryNotBeforeMs = System.currentTimeMillis() + waitMs;
                     sRetryPlmn = sPlmn;

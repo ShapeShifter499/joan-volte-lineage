@@ -1382,9 +1382,93 @@ final class JoanSipBuilder {
      * already plausible is never touched, which is what protects the
      * profiles that really do say 3600.
      */
+    /* A Min-Expires the network insisted on, and the PLMN that insisted.
+     * Kept per-PLMN so the 423 round trip happens once rather than every
+     * cycle, and so one network's floor never follows the SIM to another. */
+    private static volatile int sNetMinExpires;
+    private static volatile int sNetMinMcc = -1;
+    private static volatile int sNetMinMnc = -1;
+
+    /**
+     * Adopt a {@code Min-Expires} from a 423 Interval Too Brief.
+     *
+     * <p>RFC 3261 10.2.8: the UA retries with an expiry at least as long
+     * as the one the response names. Digi.Mobil RO asks for 3600 and
+     * refused joan's 600 outright -- a registration that never happens
+     * because the request was thirty seconds too short is indistinguishable
+     * from one the network rejected on identity, until you read the code.
+     */
+    /** The PLMN a carrier profile was applied for, for scoping. */
+    static int profileMcc() {
+        return sProfileMcc;
+    }
+
+    static int profileMnc() {
+        return sProfileMnc;
+    }
+
+    static void adoptMinExpires(int seconds, int mcc, int mnc) {
+        if (seconds <= 0 || seconds > MAX_PLAUSIBLE_EXPIRES_SEC) {
+            return;
+        }
+        sNetMinExpires = seconds;
+        sNetMinMcc = mcc;
+        sNetMinMnc = mnc;
+    }
+
+    /** The floor in force for the current PLMN, or 0. */
+    static int networkMinExpires() {
+        if (sNetMinExpires <= 0) {
+            return 0;
+        }
+        return (sNetMinMcc == sProfileMcc && sNetMinMnc == sProfileMnc)
+                ? sNetMinExpires : 0;
+    }
+
     static int registerExpires() {
-        return plausibleExpiresSec(
+        int base = plausibleExpiresSec(
                 sProfileRegExpires > 0 ? sProfileRegExpires : DEFAULT_REG_EXPIRES);
+        int floor = networkMinExpires();
+        return floor > base ? floor : base;
+    }
+
+    /**
+     * The {@code Min-Expires} of a reply, or 0.
+     *
+     * <p>Header names are case-insensitive and the value may be padded,
+     * so neither is assumed. Only a plausible seconds value is returned:
+     * a network that answers with something absurd does not get to set
+     * joan's registration interval.
+     */
+    static int minExpiresOf(String reply) {
+        if (reply == null) {
+            return 0;
+        }
+        for (String line : reply.split("\r?\n")) {
+            int c = line.indexOf(':');
+            if (c <= 0) {
+                continue;
+            }
+            if (!"min-expires".equalsIgnoreCase(line.substring(0, c).trim())) {
+                continue;
+            }
+            String v = line.substring(c + 1).trim();
+            int end = 0;
+            while (end < v.length() && v.charAt(end) >= '0'
+                    && v.charAt(end) <= '9') {
+                end++;
+            }
+            if (end == 0) {
+                return 0;
+            }
+            try {
+                int n = Integer.parseInt(v.substring(0, end));
+                return (n > 0 && n <= MAX_PLAUSIBLE_EXPIRES_SEC) ? n : 0;
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
+        return 0;
     }
 
     /** Pure, so the host tests own this rule. */

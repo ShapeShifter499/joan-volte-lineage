@@ -150,6 +150,16 @@ final class JoanAppRegister {
         return sLastDualFamily;
     }
 
+    /**
+     * True when the last cycle raised its expiry on a 423, which the
+     * driver answers with a prompt retry instead of a backoff: the
+     * network named the term, we took it, and there is nothing for an
+     * exponential to discover.
+     */
+    static boolean expiryRaised(String lastRegister) {
+        return lastRegister != null && lastRegister.contains("expires_raised");
+    }
+
     /** Request the one flip retry (driver failure path). */
     static void requestFlipRetry() {
         sFlipPending = true;
@@ -998,6 +1008,23 @@ final class JoanAppRegister {
                 String to = JoanSipBuilder.redirectHost(r2);
                 if (to != null) {
                     sb.append(" redirect_host=").append(to);
+                }
+            }
+            if (p2.status == 423) {
+                /* RFC 3261 10.2.8: the network is not refusing us, it is
+                 * naming a term. Adopt it and retry rather than backing
+                 * off -- a registration that never happens because the
+                 * expiry was too short looks exactly like a rejection on
+                 * identity from the outside, which is where this lane
+                 * spent a while. */
+                int min = JoanSipBuilder.minExpiresOf(r2);
+                if (min > 0) {
+                    JoanSipBuilder.adoptMinExpires(min, JoanSipBuilder.profileMcc(),
+                            JoanSipBuilder.profileMnc());
+                    sb.append(" min_expires=").append(min)
+                            .append(" expires_raised");
+                } else {
+                    sb.append(" min_expires=absent");
                 }
             }
             if (p2.status >= 300) {
