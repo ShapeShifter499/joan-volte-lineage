@@ -450,6 +450,19 @@ final class JoanAppRegister {
         JoanSipBuilder.Id sipId = new JoanSipBuilder.Id(
                 id.impi, id.impu, id.realm, n.localHost,
                 JoanSipBuilder.REG1_PORT, JoanSipBuilder.REG1_PORT, id.imei);
+        /* The preloaded Route names the P-CSCF this attempt goes
+         * through. Set per attempt, because joan walks the discovered
+         * list and the second try is a different P-CSCF; the reference
+         * likewise re-adds it from whichever one GetNextPcscf handed
+         * back. The port stays the signalling port -- the protected
+         * REGISTER routes through the same P-CSCF, and
+         * AosRegistration keeps m_nPcscfPort across the SA. */
+        String routeHost = pcscf.getHostAddress();
+        int routeScope = routeHost.indexOf('%');
+        if (routeScope >= 0) {
+            routeHost = routeHost.substring(0, routeScope);
+        }
+        JoanSipBuilder.setPcscfRoute(routeHost, 0);
         StringBuilder sb = new StringBuilder();
         String reg1Udp = JoanSipBuilder
                 .buildRegister(sipId, txn, reg1Cseq, null, null, null, null, pani,

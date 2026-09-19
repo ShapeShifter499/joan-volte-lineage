@@ -73,6 +73,21 @@ public final class JoanCarrierProfile {
      */
     public final boolean sendAuthAlgorithm;
     /**
+     * Whether this carrier expects a preloaded {@code Route} on the
+     * REGISTER -- {@code common_sip_features} bit 20, which AOSP names
+     * {@code SIP_FEATURE_CAPS_ROUTE_HEADER_IN_REG} and
+     * {@code RegParameter::FormHeaders} tests before it adds the header
+     * at all.
+     *
+     * <p>Only 7 of 136 shipped profiles set it, T-Mobile among them and
+     * China Mobile not. TS 24.229 5.1.1.2 describes the preloaded route
+     * set, but the reference stack makes emitting it a per-carrier
+     * decision rather than a rule, so joan follows the carrier and not
+     * the paraphrase: false where nothing says otherwise, which is the
+     * behaviour every network joan registers on today already has.
+     */
+    public final boolean routeHeaderInReg;
+    /**
      * Ut/XCAP: where this carrier keeps the subscriber's supplementary
      * services, and whether it expects them controlled that way.
      *
@@ -102,6 +117,7 @@ public final class JoanCarrierProfile {
                                int pcscfPort, boolean sendUserAgent,
                                int ipsecAlgs,
                                boolean sendAuthAlgorithm,
+                               boolean routeHeaderInReg,
                                String xcapServer, int xcapPort,
                                boolean xcapTls, String xcapPdn,
                                String utControl,
@@ -125,6 +141,7 @@ public final class JoanCarrierProfile {
         this.sendUserAgent = sendUserAgent;
         this.ipsecAlgs = ipsecAlgs;
         this.sendAuthAlgorithm = sendAuthAlgorithm;
+        this.routeHeaderInReg = routeHeaderInReg;
         this.xcapServer = xcapServer;
         this.xcapPort = xcapPort;
         this.xcapTls = xcapTls;
@@ -182,7 +199,7 @@ public final class JoanCarrierProfile {
                 pad3(mnc), mcc);
         return new JoanCarrierProfile(factory, true, true, false,
                 2, 1, true, 183, -1, 0, 0, 0, null, 0, true, -1, true,
-                "", 0, false, "", "", "3gpp-default");
+                false, "", 0, false, "", "", "3gpp-default");
     }
 
     /**
@@ -195,6 +212,13 @@ public final class JoanCarrierProfile {
      * opts into. 130 of LG's 136 profiles leave it off.
      */
     private static final long SIP_FEATURE_AUTH_ALGORITHM_PARAM = 0x01000000L;
+
+    /**
+     * {@code common_sip_features} bit 20, AOSP's
+     * {@code SIP_FEATURE_CAPS_ROUTE_HEADER_IN_REG}. Gates the preloaded
+     * Route on a REGISTER in {@code RegParameter::FormHeaders}.
+     */
+    private static final long SIP_FEATURE_ROUTE_HEADER_IN_REG = 0x00100000L;
 
     /**
      * Test one bit of a profile's {@code sip_features} mask.
@@ -339,6 +363,8 @@ public final class JoanCarrierProfile {
                         o.optInt("ipsec_algs", -1),
                         hasSipFeature(o.optString("sip_features", ""),
                                 SIP_FEATURE_AUTH_ALGORITHM_PARAM),
+                        hasSipFeature(o.optString("sip_features", ""),
+                                SIP_FEATURE_ROUTE_HEADER_IN_REG),
                         o.optString("xcap_server", ""),
                         o.optInt("xcap_port", 0),
                         o.optBoolean("xcap_tls", false),

@@ -868,6 +868,36 @@ public final class TestJoanSip {
             check(row.contains("spi-c=") && row.contains("port-s="),
                     "and each row is a whole mechanism, not a fragment");
         }
+        /* The preloaded Route is a per-carrier decision, not a rule.
+         * RegParameter::FormHeaders adds the route set only when
+         * SIP_FEATURE_CAPS_ROUTE_HEADER_IN_REG -- common_sip_features
+         * bit 20 -- is set. 7 of 136 profiles set it: T-Mobile does
+         * (0x151A001B), China Mobile does not (0x16000000). Emitting it
+         * unconditionally would have made joan LESS like stock on 129
+         * carriers, China Mobile among them. */
+        check(!msg.contains("Route:"),
+                "no Route on a REGISTER when the carrier bit is clear");
+        JoanSipBuilder.setPcscfRoute("2001:db8::1", 5060);
+        JoanSipBuilder.setRouteHeaderInReg(true);
+        String routed = JoanSipBuilder.buildRegister(id, txn, 1, null, null,
+                null, null, "3GPP-E-UTRAN-FDD", false);
+        check(routed.contains("Route: <sip:[2001:db8::1]:5060;lr>"),
+                "the carrier bit adds a preloaded Route naming the P-CSCF");
+        check(countHeaderRows(routed, "Route") == 1,
+                "one Route row, as the reference adds one per route entry");
+        JoanSipBuilder.setPcscfRoute("198.51.100.7", 0);
+        check(JoanSipBuilder.buildRegister(id, txn, 1, null, null, null, null,
+                        "3GPP-E-UTRAN-FDD", false)
+                        .contains("Route: <sip:198.51.100.7:5060;lr>"),
+                "a v4 P-CSCF is unbracketed and falls back to the SIP port");
+        JoanSipBuilder.setPcscfRoute(null, 0);
+        check(!JoanSipBuilder.buildRegister(id, txn, 1, null, null, null, null,
+                        "3GPP-E-UTRAN-FDD", false).contains("Route:"),
+                "the bit alone adds nothing when no P-CSCF was recorded");
+        JoanSipBuilder.setRouteHeaderInReg(false);
+        check(!JoanSipBuilder.routeHeaderInReg(),
+                "and the default stays off, which is what joan sends today");
+
         check(msg.contains("P-Access-Network-Info: 3GPP-E-UTRAN-FDD"),
                 "reg1 default PANI is radio token");
         check(msg.contains("Via: SIP/2.0/UDP "),

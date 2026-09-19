@@ -493,6 +493,65 @@ final class JoanSipBuilder {
         return sProfilePcscfPort > 0 ? sProfilePcscfPort : PCSCF_SIP_PORT;
     }
 
+    /* The preloaded Route: the P-CSCF this registration goes through. */
+    private static volatile String sPcscfRoute;
+
+    /**
+     * Record the P-CSCF a REGISTER is being sent through, as a preloaded
+     * Route.
+     *
+     * <p>TS 24.229 5.1.1.2 has the UE build a preloaded Route set whose
+     * first entry is the P-CSCF URI from discovery, and the reference
+     * stack does exactly that: {@code AosRegistration::UpdatePreloadedRoute}
+     * calls {@code RegParameter::AddPreloadedRoute(pcscf, port)}, which
+     * builds a sip: address with an {@code lr} parameter and no user
+     * part, and {@code RegParameter} then emits one Route header per
+     * entry. It is refreshed on every registration path, including after
+     * an IPsec restore.
+     *
+     * <p>joan emitted Route on in-dialog requests and never on a
+     * REGISTER. The request still reaches the P-CSCF -- it is addressed
+     * to it on the socket -- which is why two networks never complained,
+     * but a core that routes or validates on the header sees a REGISTER
+     * no handset it was qualified against would send.
+     *
+     * <p>Pushed in rather than read here, like the transport criterion
+     * and the P-CSCF port, because this class compiles without
+     * android.jar for the host suite.
+     */
+    static void setPcscfRoute(String host, int port) {
+        if (host == null || host.isEmpty()) {
+            sPcscfRoute = null;
+            return;
+        }
+        int p = port > 0 ? port : pcscfSipPort();
+        sPcscfRoute = "<sip:" + bracket(host) + ":" + p + ";lr>";
+    }
+
+    static String pcscfRoute() {
+        return sPcscfRoute;
+    }
+
+    /* Whether this carrier wants the preloaded Route on a REGISTER. */
+    private static volatile boolean sRouteInReg;
+
+    /**
+     * Adopt the carrier's {@code SIP_FEATURE_CAPS_ROUTE_HEADER_IN_REG}.
+     *
+     * <p>{@code RegParameter::FormHeaders} adds the preloaded route set
+     * only when this bit is set, so the header is a per-carrier decision
+     * in the reference rather than a rule. 7 of 136 profiles set it --
+     * T-Mobile does, China Mobile does not -- and false is the default,
+     * which is what joan has always sent.
+     */
+    static void setRouteHeaderInReg(boolean on) {
+        sRouteInReg = on;
+    }
+
+    static boolean routeHeaderInReg() {
+        return sRouteInReg;
+    }
+
     /* The platform's SIP MTU per family, 0 = unset. */
     private static volatile int sPlatMtuV4;
     private static volatile int sPlatMtuV6;
@@ -1470,6 +1529,9 @@ final class JoanSipBuilder {
                 .append(id.viaPort).append(";branch=").append(txn.branch)
                 .append(";rport\r\n");
         a.append("Max-Forwards: 70\r\n");
+        if (sRouteInReg && sPcscfRoute != null) {
+            a.append("Route: ").append(sPcscfRoute).append("\r\n");
+        }
         a.append("From: <").append(aor).append(">;tag=")
                 .append(txn.fromTag).append("\r\n");
         a.append("To: <").append(aor).append(">\r\n");

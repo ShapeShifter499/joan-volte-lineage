@@ -777,6 +777,7 @@ final class JoanDriver {
          * nothing already registering changes what it offers. */
         JoanSipCrypto.setOfferMask(cp.ipsecAlgs);
         JoanSipBuilder.setSendAuthAlgorithm(cp.sendAuthAlgorithm);
+        JoanSipBuilder.setRouteHeaderInReg(cp.routeHeaderInReg);
         JoanSipBuilder.setCarrierRegisterExpires(
                 platformExpirySec > 0 ? platformExpirySec
                         : cp.regExpiration);
@@ -791,6 +792,8 @@ final class JoanDriver {
                 + " ua=" + (JoanSipBuilder.sendUserAgent() ? "yes" : "no")
                 + " auth_algo="
                 + (JoanSipBuilder.sendAuthAlgorithm() ? "yes" : "no")
+                + " reg_route="
+                + (JoanSipBuilder.routeHeaderInReg() ? "yes" : "no")
                 + " src=" + cp.srcKey;
         return cs;
     }
