@@ -99,6 +99,29 @@ TMPDM=$(stat -c %d /tmp 2>/dev/null)
 # node "could not be cleared" when the truth might equally have been that
 # there was no dm node, no force_ro in sysfs, or a node already writable.
 # One screenshot should be enough to tell those apart; it was not.
+# dm-verity is a different animal from a read-only dm-linear node.
+#
+# force_ro is about a logical partition the bootloader handed over
+# read-only; clearing it makes writes land. A verity target is a
+# hash-verified read-only mapping, and there is no flag that makes it
+# writable -- a write that did land would simply make the next read fail
+# verification. An InfinityX tester reported a dm-verity error on dm-0,
+# which is the device saying exactly that.
+#
+# ro.boot.veritymode is NOT how to tell the two apart, and a check that
+# said it was very nearly shipped. The joan bench, where installs work,
+# also reports veritymode=enforcing: its dm-0 is name=system ro=1, a
+# plain dm-linear partition whose force_ro clears and which then mounts
+# rw with no overlay. veritymode is the bootloader's cmdline, not a
+# statement about how /system is mapped.
+#
+# The honest signal is what was observed: a clear that was REFUSED. So
+# veritymode is reported as context, never as a verdict, and the
+# guidance hangs off the refusal.
+verity_mode() {
+  getprop ro.boot.veritymode 2>/dev/null
+}
+
 UNLOCK_WHY=""
 unlock_device() {
   ud_dev=$(readlink -f "$1" 2>/dev/null)
@@ -211,7 +234,13 @@ mount_part() {
     else
       inodes=$(df -ki "$mp" 2>/dev/null | tail -1 | tr -s " " | cut -d" " -f4)
       opts=$(mount | grep " $mp " | head -1 | sed 's/.*type [^ ]* (//;s/).*//')
-      error "$name reports writable but refuses a 5-byte write (${free:-?} KB and ${inodes:-?} inodes free). This package needs about 210 KB and 8 inodes, so free space is not the limit. Unlock: ${UNLOCK_WHY:-not-attempted}. Mount opts: ${opts:-?}. Report this line."
+      vm=$(verity_mode)
+      case "${UNLOCK_WHY:-}" in
+        *clear-refused*)
+          error "$name refused a write and its read-only flag could not be cleared (Unlock: $UNLOCK_WHY, veritymode: ${vm:-unknown}). A dm-verity target looks exactly like this: no recovery zip can write one, because the mapping is hash verified and a write would only make the next read fail. Nothing was written. Install over adb instead, which needs no root manager: adb root; adb disable-verity; adb reboot; then adb root; adb remount; adb push. Report this line."
+          ;;
+      esac
+      error "$name reports writable but refuses a 5-byte write (${free:-?} KB and ${inodes:-?} inodes free). This package needs about 210 KB and 8 inodes, so free space is not the limit. Unlock: ${UNLOCK_WHY:-not-attempted}. Mount opts: ${opts:-?}. Veritymode: ${vm:-unknown}. Report this line."
     fi
   fi
 }
