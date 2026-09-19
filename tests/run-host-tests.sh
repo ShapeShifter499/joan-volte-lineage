@@ -45,8 +45,19 @@ javac -d "$JAVA_OUT" \
     "$JAVA_SRC/JoanEfDir.java" \
     "$JAVA_SRC/JoanIsim.java" \
     "$JAVA_SRC/JoanXcap.java" \
+    "$JAVA_SRC/JoanT140.java" \
     "$JAVA_TEST/org/joan/ims/TestJoanSip.java"
 java -cp "$JAVA_OUT" org.joan.ims.TestJoanSip
+
+echo "== rtt wire format + carrier config"
+SDK_JAR=${ANDROID_SDK:-$HOME/Android/Sdk}/platforms/android-36/android.jar
+RTT_OUT="$ROOT/native/build/java-rtt-host"
+mkdir -p "$RTT_OUT"
+javac -cp "$SDK_JAR" -d "$RTT_OUT" \
+    "$JAVA_SRC/JoanT140.java" \
+    "$JAVA_SRC/JoanImsRttConfig.java" \
+    "$JAVA_TEST/org/joan/ims/TestJoanRtt.java"
+java -cp "$RTT_OUT:$SDK_JAR" org.joan.ims.TestJoanRtt
 
 echo "== viettel volte carrier gate"
 SDK_JAR=${ANDROID_SDK:-$HOME/Android/Sdk}/platforms/android-36/android.jar
