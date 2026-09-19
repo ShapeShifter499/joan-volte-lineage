@@ -161,10 +161,7 @@ files = {
         'permissions/default-permissions-org.joan.ims.xml') if os.path.exists(
             os.path.join(root,
                 'permissions/default-permissions-org.joan.ims.xml')) else None,
-    'root/etc/init/joan-grant.rc': os.path.join(root,
-        'root/system/etc/init/joan-grant.rc'),
-    'root/bin/joan-grant.sh': os.path.join(root,
-        'root/system/bin/joan-grant.sh'),
+
     'apn/viettel-45204.xml': os.path.join(root, 'apn/viettel-45204.xml'),
     'scripts/merge-viettel-apns.sh': os.path.join(root,
         'scripts/merge-viettel-apns.sh'),
