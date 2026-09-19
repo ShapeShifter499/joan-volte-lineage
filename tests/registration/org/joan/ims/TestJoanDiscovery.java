@@ -77,6 +77,42 @@ public class TestJoanDiscovery {
         JoanAppRegister.selectAttemptPlan(Arrays.asList(v4),Arrays.asList(p4));
         JoanAppRegister.noteLastAttemptDualFamily(false);
         check(!JoanAppRegister.scheduleFamilyRetry("FAIL: reg2 timeout"), "single-family timeout never queues impossible flip");
+
+        /* A P-CSCF may be NAMED rather than addressed -- the ISIM's
+         * EF_PCSCF commonly carries one. Names are kept separately so the
+         * registration path can resolve them on the IMS network, while
+         * the literal fast path stays exactly as it was. */
+        JoanImsDiscovery.Pcscfs named = JoanImsDiscovery.selectPcscfs(
+                null, "empty",
+                new String[]{"pcscf.ims.mnc002.mcc460.3gppnetwork.org"});
+        check(named.addresses.isEmpty() && named.names.size() == 1,
+                "a named P-CSCF is captured as a name, not dropped");
+        check(named.source.equals("isim-name"), "and the source says so");
+        JoanImsDiscovery.Pcscfs lit = JoanImsDiscovery.selectPcscfs(
+                null, "empty", new String[]{"192.0.2.99"});
+        check(lit.addresses.size() == 1 && lit.names.isEmpty(),
+                "a literal is still taken directly, with no name recorded");
+
+        /* The validator decides whether anything is looked up at all, so a
+         * false positive means a DNS query for garbage. */
+        check(JoanImsDiscovery.isHostname("pcscf.example.com"),
+                "a dotted name is a hostname");
+        check(!JoanImsDiscovery.isHostname("192.0.2.99"),
+                "a dotted quad is NOT a hostname");
+        check(!JoanImsDiscovery.isHostname("2001:db8::1"),
+                "an IPv6 literal is not a hostname");
+        check(!JoanImsDiscovery.isHostname("host.example.com:5060"),
+                "a host:port is refused rather than half-parsed");
+        check(!JoanImsDiscovery.isHostname("sip://x.example.com"),
+                "anything URI-shaped is refused");
+        check(!JoanImsDiscovery.isHostname("-bad.example.com")
+                        && !JoanImsDiscovery.isHostname("bad-.example.com"),
+                "a label may not start or end with a hyphen");
+        check(!JoanImsDiscovery.isHostname("nodot"),
+                "a single label is not enough");
+        check(JoanImsDiscovery.resolveOn(null, "x.example.com", 100).isEmpty(),
+                "no network means no lookup and no exception");
+
         System.out.println("DISCOVERY_CHECKS=" + checks + " FAILURES=0");
     }
 }

@@ -1,6 +1,7 @@
 package org.joan.ims;
 
 import android.net.LinkProperties;
+import android.net.Network;
 import android.telephony.TelephonyManager;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
@@ -10,10 +11,14 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
-/** Shared driver/REGISTER discovery. No DNS, APN writes, or subscriber logging.
+/** Shared driver/REGISTER discovery. No APN writes or subscriber logging.
  * LinkProperties is framework evidence, NOT a raw modem PCO capture.
  * Stock LG AoSPCSCF::GetFromISIM and AOSP getIsimPcscf establish the SIM
- * source; only literal addresses are supported in this conservative fallback.
+ * source.
+ *
+ * <p>A P-CSCF may arrive as a NAME rather than an address -- the ISIM's
+ * EF_PCSCF commonly carries one. Names are resolved, but only on the IMS
+ * {@link Network} and only behind a deadline; see {@link #resolveOn}.
  */
 final class JoanImsDiscovery {
     private static final int MAX_PEERS = 10;
@@ -23,19 +28,34 @@ final class JoanImsDiscovery {
         final List<InetAddress> addresses;
         final String source, linkStatus, isimStatus;
         final int isimEntries;
+        /** Entries that named a host instead of addressing one, in order. */
+        final List<String> names;
         Pcscfs(List<InetAddress> a, String s, String link, String isim, int count) {
+            this(a, s, link, isim, count, Collections.<String>emptyList());
+        }
+        Pcscfs(List<InetAddress> a, String s, String link, String isim, int count,
+               List<String> hostNames) {
             addresses = Collections.unmodifiableList(new ArrayList<>(a));
             source = s; linkStatus = link; isimStatus = isim; isimEntries = count;
+            names = Collections.unmodifiableList(new ArrayList<>(hostNames));
         }
         String summary() {
             return "source=" + source + " link_api=" + linkStatus
                     + " isim_api=" + isimStatus + " isim_entries=" + isimEntries
                     + " pcscf4=" + count(addresses, false)
-                    + " pcscf6=" + count(addresses, true);
+                    + " pcscf6=" + count(addresses, true)
+                    + (names.isEmpty() ? "" : " pcscf_names=" + names.size());
         }
     }
 
+    /** How long a P-CSCF name may take before registration moves on. */
+    static final int DNS_TIMEOUT_MS = 2000;
+
     static Pcscfs read(LinkProperties lp, TelephonyManager tm) {
+        return read(lp, tm, null);
+    }
+
+    static Pcscfs read(LinkProperties lp, TelephonyManager tm, Network network) {
         List<?> advertised = null;
         String status;
         try {
@@ -69,8 +89,24 @@ final class JoanImsDiscovery {
             isimStatus = "error";
         }
         Pcscfs result = selectPcscfs(advertised, status, isim);
+        if (result.addresses.isEmpty() && !result.names.isEmpty()
+                && network != null) {
+            List<InetAddress> resolved = new ArrayList<>();
+            for (String name : result.names) {
+                for (InetAddress a : resolveOn(network, name, DNS_TIMEOUT_MS)) {
+                    add(resolved, a);
+                }
+                if (!resolved.isEmpty()) {
+                    break;   /* the first name that answers is enough */
+                }
+            }
+            if (!resolved.isEmpty()) {
+                return new Pcscfs(resolved, "isim-dns", status, isimStatus,
+                        result.isimEntries, result.names);
+            }
+        }
         return new Pcscfs(result.addresses, result.source, status,
-                isimStatus, result.isimEntries);
+                isimStatus, result.isimEntries, result.names);
     }
 
     static Pcscfs selectPcscfs(List<?> advertised, String status, String[] isim) {
@@ -82,13 +118,23 @@ final class JoanImsDiscovery {
             }
         }
         if (!addresses.isEmpty()) return new Pcscfs(addresses, "link", status, "not_needed", 0);
+        List<String> names = new ArrayList<>();
         if (isim != null) {
             for (int i = 0; i < Math.min(isim.length, MAX_PEERS); i++) {
-                add(addresses, literal(isim[i]));
+                InetAddress a = literal(isim[i]);
+                if (a != null) {
+                    add(addresses, a);
+                } else if (isHostname(isim[i]) && !names.contains(isim[i])
+                        && names.size() < MAX_PEERS) {
+                    names.add(isim[i]);
+                }
             }
         }
-        return new Pcscfs(addresses, addresses.isEmpty() ? "none" : "isim",
-                status, isim == null ? "unread" : "ok", isim == null ? 0 : isim.length);
+        String src = !addresses.isEmpty() ? "isim"
+                : (names.isEmpty() ? "none" : "isim-name");
+        return new Pcscfs(addresses, src,
+                status, isim == null ? "unread" : "ok",
+                isim == null ? 0 : isim.length, names);
     }
 
     private static void add(List<InetAddress> list, InetAddress a) {
@@ -117,6 +163,109 @@ final class JoanImsDiscovery {
             } else return null;
             return usable(a) ? a : null;
         } catch (Exception e) { return null; }
+    }
+
+    /**
+     * True for something that names a host rather than addressing one.
+     *
+     * <p>Deliberately strict, because the consequence of a false positive
+     * is a DNS lookup for garbage. At least one letter is required, so a
+     * dotted quad is never mistaken for a name, and anything carrying a
+     * colon or a slash is rejected outright rather than half-parsed as a
+     * host:port or a URI.
+     */
+    static boolean isHostname(String text) {
+        if (text == null) {
+            return false;
+        }
+        String s = text.trim();
+        if (s.length() < 4 || s.length() > 255) {
+            return false;
+        }
+        if (s.indexOf(':') >= 0 || s.indexOf('/') >= 0 || s.indexOf(' ') >= 0) {
+            return false;
+        }
+        if (s.startsWith(".") || s.endsWith(".") || s.indexOf('.') < 0) {
+            return false;
+        }
+        boolean letter = false;
+        for (String label : s.split("\\.", -1)) {
+            int n = label.length();
+            if (n == 0 || n > 63) {
+                return false;
+            }
+            if (label.charAt(0) == '-' || label.charAt(n - 1) == '-') {
+                return false;
+            }
+            for (int i = 0; i < n; i++) {
+                char c = label.charAt(i);
+                boolean alpha = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+                if (alpha) {
+                    letter = true;
+                } else if (!((c >= '0' && c <= '9') || c == '-')) {
+                    return false;
+                }
+            }
+        }
+        return letter;
+    }
+
+    /**
+     * Resolve a P-CSCF name on the IMS network, never the default one.
+     *
+     * <p>{@code InetAddress.getByName} would use whatever resolver the
+     * default network has, which on this device is the one serving
+     * ordinary data -- a different network from the IMS PDN, with
+     * different servers and no reason to know the carrier's internal
+     * names. {@link Network#getAllByName} is the API that asks the right
+     * resolver, and it is why this takes a Network rather than a hostname
+     * alone.
+     *
+     * <p>It runs on a daemon thread behind a deadline because the
+     * objection that kept names unsupported was a real one: a lookup on
+     * this path would otherwise block registration behind the network's
+     * DNS. AOSP answers the same problem the same way, resolving
+     * asynchronously behind a retry timer
+     * ({@code AosPcscf::IsAsyncDnsDiscovery}). We return what arrived in
+     * time and let the caller continue; a slow resolver costs one
+     * deadline, never the registration.
+     */
+    static List<InetAddress> resolveOn(final Network network,
+                                       final String host, int timeoutMs) {
+        final List<InetAddress> out = new ArrayList<>();
+        if (network == null || !isHostname(host) || timeoutMs <= 0) {
+            return out;
+        }
+        Thread t = new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    InetAddress[] r = network.getAllByName(host);
+                    if (r == null) {
+                        return;
+                    }
+                    synchronized (out) {
+                        for (InetAddress a : r) {
+                            if (usable(a) && !out.contains(a)
+                                    && out.size() < MAX_PEERS) {
+                                out.add(a);
+                            }
+                        }
+                    }
+                } catch (Throwable ignored) {
+                    /* An unresolvable name is an ordinary outcome here. */
+                }
+            }
+        }, "joan-ims-dns");
+        t.setDaemon(true);
+        t.start();
+        try {
+            t.join(timeoutMs);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        synchronized (out) {
+            return new ArrayList<>(out);
+        }
     }
 
     static boolean usable(InetAddress a) {

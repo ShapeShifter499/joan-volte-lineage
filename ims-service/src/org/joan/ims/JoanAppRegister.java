@@ -1000,7 +1000,12 @@ final class JoanAppRegister {
                 continue;
             }
             TelephonyManager tm0 = ctx.getSystemService(TelephonyManager.class);
-            JoanImsDiscovery.Pcscfs pcscfInfo = JoanImsDiscovery.read(lp, tm0);
+            /* The registration path passes the IMS network, so a P-CSCF
+             * that arrives as a name is resolved against the right
+             * resolver. The diagnostic sweeps deliberately do not: a
+             * trace pass must not put a DNS lookup on the wire. */
+            JoanImsDiscovery.Pcscfs pcscfInfo =
+                    JoanImsDiscovery.read(lp, tm0, network);
             if (pcscfInfo.addresses.isEmpty()) {
                 continue;
             }
