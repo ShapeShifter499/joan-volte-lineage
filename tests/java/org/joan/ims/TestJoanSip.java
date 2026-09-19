@@ -898,6 +898,22 @@ public final class TestJoanSip {
         check(!JoanSipBuilder.routeHeaderInReg(),
                 "and the default stays off, which is what joan sends today");
 
+        /* Option tags go one per row, which is how FormHeaders adds
+         * them, and gruu is carrier-gated on common_sip_features bit 1 --
+         * set in 87 of 136 profiles, T-Mobile among them, China Mobile
+         * not. joan advertised it to nobody. */
+        check(msg.contains("Supported: path\r\n")
+                        && msg.contains("Supported: sec-agree\r\n"),
+                "option tags are written one per row");
+        check(!msg.contains("Supported: gruu"),
+                "no gruu when the carrier bit is clear");
+        JoanSipBuilder.setSupportsGruu(true);
+        check(JoanSipBuilder.buildRegister(id, txn, 1, null, null, null, null,
+                        "3GPP-E-UTRAN-FDD", false)
+                        .contains("Supported: gruu\r\n"),
+                "the carrier bit adds gruu as its own row");
+        JoanSipBuilder.setSupportsGruu(false);
+
         check(msg.contains("P-Access-Network-Info: 3GPP-E-UTRAN-FDD"),
                 "reg1 default PANI is radio token");
         check(msg.contains("Via: SIP/2.0/UDP "),

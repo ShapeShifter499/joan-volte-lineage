@@ -88,6 +88,16 @@ public final class JoanCarrierProfile {
      */
     public final boolean routeHeaderInReg;
     /**
+     * Whether this carrier expects {@code Supported: gruu} on the
+     * REGISTER -- {@code common_sip_features} bit 1, AOSP's
+     * {@code SIP_FEATURE_CAPS_GRUU}, which
+     * {@code RegParameter::FormHeaders} tests before adding the tag.
+     *
+     * <p>87 of 136 shipped profiles set it; T-Mobile does, China Mobile
+     * does not. joan advertised it to nobody.
+     */
+    public final boolean supportsGruu;
+    /**
      * Ut/XCAP: where this carrier keeps the subscriber's supplementary
      * services, and whether it expects them controlled that way.
      *
@@ -118,6 +128,7 @@ public final class JoanCarrierProfile {
                                int ipsecAlgs,
                                boolean sendAuthAlgorithm,
                                boolean routeHeaderInReg,
+                               boolean supportsGruu,
                                String xcapServer, int xcapPort,
                                boolean xcapTls, String xcapPdn,
                                String utControl,
@@ -142,6 +153,7 @@ public final class JoanCarrierProfile {
         this.ipsecAlgs = ipsecAlgs;
         this.sendAuthAlgorithm = sendAuthAlgorithm;
         this.routeHeaderInReg = routeHeaderInReg;
+        this.supportsGruu = supportsGruu;
         this.xcapServer = xcapServer;
         this.xcapPort = xcapPort;
         this.xcapTls = xcapTls;
@@ -199,7 +211,7 @@ public final class JoanCarrierProfile {
                 pad3(mnc), mcc);
         return new JoanCarrierProfile(factory, true, true, false,
                 2, 1, true, 183, -1, 0, 0, 0, null, 0, true, -1, true,
-                false, "", 0, false, "", "", "3gpp-default");
+                false, false, "", 0, false, "", "", "3gpp-default");
     }
 
     /**
@@ -219,6 +231,9 @@ public final class JoanCarrierProfile {
      * Route on a REGISTER in {@code RegParameter::FormHeaders}.
      */
     private static final long SIP_FEATURE_ROUTE_HEADER_IN_REG = 0x00100000L;
+
+    /** {@code common_sip_features} bit 1, AOSP's SIP_FEATURE_CAPS_GRUU. */
+    private static final long SIP_FEATURE_GRUU = 0x00000002L;
 
     /**
      * Test one bit of a profile's {@code sip_features} mask.
@@ -365,6 +380,8 @@ public final class JoanCarrierProfile {
                                 SIP_FEATURE_AUTH_ALGORITHM_PARAM),
                         hasSipFeature(o.optString("sip_features", ""),
                                 SIP_FEATURE_ROUTE_HEADER_IN_REG),
+                        hasSipFeature(o.optString("sip_features", ""),
+                                SIP_FEATURE_GRUU),
                         o.optString("xcap_server", ""),
                         o.optInt("xcap_port", 0),
                         o.optBoolean("xcap_tls", false),

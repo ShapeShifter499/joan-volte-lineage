@@ -778,6 +778,7 @@ final class JoanDriver {
         JoanSipCrypto.setOfferMask(cp.ipsecAlgs);
         JoanSipBuilder.setSendAuthAlgorithm(cp.sendAuthAlgorithm);
         JoanSipBuilder.setRouteHeaderInReg(cp.routeHeaderInReg);
+        JoanSipBuilder.setSupportsGruu(cp.supportsGruu);
         JoanSipBuilder.setCarrierRegisterExpires(
                 platformExpirySec > 0 ? platformExpirySec
                         : cp.regExpiration);
@@ -794,6 +795,8 @@ final class JoanDriver {
                 + (JoanSipBuilder.sendAuthAlgorithm() ? "yes" : "no")
                 + " reg_route="
                 + (JoanSipBuilder.routeHeaderInReg() ? "yes" : "no")
+                + " gruu="
+                + (JoanSipBuilder.supportsGruu() ? "yes" : "no")
                 + " src=" + cp.srcKey;
         return cs;
     }

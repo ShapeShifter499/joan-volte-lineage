@@ -552,6 +552,25 @@ final class JoanSipBuilder {
         return sRouteInReg;
     }
 
+    /* Whether this carrier wants the gruu option tag on a REGISTER. */
+    private static volatile boolean sSupportsGruu;
+
+    /**
+     * Adopt the carrier's {@code SIP_FEATURE_CAPS_GRUU}.
+     *
+     * <p>{@code RegParameter::FormHeaders} adds {@code Supported: gruu}
+     * only when the bit is set, as its own header row rather than joined
+     * to the others. 87 of 136 profiles set it; joan advertised it to
+     * nobody, so 87 carriers were told this handset cannot take a GRUU.
+     */
+    static void setSupportsGruu(boolean on) {
+        sSupportsGruu = on;
+    }
+
+    static boolean supportsGruu() {
+        return sSupportsGruu;
+    }
+
     /* The platform's SIP MTU per family, 0 = unset. */
     private static volatile int sPlatMtuV4;
     private static volatile int sPlatMtuV6;
@@ -1549,7 +1568,16 @@ final class JoanSipBuilder {
         if (sSendUa) {
             a.append("User-Agent: ").append(userAgent()).append("\r\n");
         }
-        a.append("Supported: path, sec-agree\r\n");
+        /* One row per option tag, which is how FormHeaders adds them:
+         * a separate AddHeader(SUPPORTED, ...) for sec-agree, for gruu
+         * and for outbound. `path` is joan's own -- the reference never
+         * sends it, and it is kept because a registrar that inserts a
+         * Path header is entitled to know we understand one. */
+        a.append("Supported: path\r\n");
+        a.append("Supported: sec-agree\r\n");
+        if (sSupportsGruu) {
+            a.append("Supported: gruu\r\n");
+        }
         a.append("Require: sec-agree\r\n");
         a.append("Proxy-Require: sec-agree\r\n");
         appendSecAgree(a, "Security-Client", securityClientValue(txn.mine));
