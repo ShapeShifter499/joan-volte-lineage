@@ -55,10 +55,34 @@ a *dangerous runtime* permission, not `signature|privileged`:
 privapp-permissions neither grants it nor requires it to be listed, so the
 line is never consulted. It is left in place as harmless, but it is not
 what makes microphone capture work, and this file previously claimed it
-was. **How `RECORD_AUDIO` is actually granted on the bench has not been
-established** -- `dumpsys package org.joan.ims` on a working handset would
-settle it in one line, and it is worth settling, because a tester whose
-uplink is silent may simply not have it.
+was.
+
+**Nothing in this package has ever granted it, and until 2026-09-19 that
+went unnoticed because only one handset ever reached a completed call.**
+
+- The bench had it. A 2026-08-29 trace records
+  `media ul level rms=-31.2dBFS peak=-11.6dBFS speech=-24.0dBFS
+  active=19%` -- real capture. The bench is installed by `adb remount` +
+  push, which needs `adb root`, so a `pm grant` during bring-up is the
+  likely source. Runtime grants persist in
+  `/data/system/users/0/runtime-permissions.xml` keyed by package name,
+  surviving reinstalls and reboots, so one forgotten command stays in
+  force indefinitely and invisibly. **Not confirmed**; one
+  `dumpsys package org.joan.ims | grep -A2 RECORD_AUDIO` settles it.
+- No external tester ever had it. The Digi.Mobil RO capture reads
+  `rms=-99.0dBFS peak=-99.0dBFS speech=silent` -- every sample zero, on
+  both audio sources -- alongside `pani_cell=no-permission`.
+- No external tester was ever in a position to notice. The T-Mobile
+  tester's log carries "Zero INVITE / MO / MT / createCallSession /
+  hangup lines": three successful REGISTRATIONS and no call. The other
+  lanes never registered.
+
+Without the permission the appops layer returns **digital silence rather
+than an error**: `AudioRecord` constructs, reports `STATE_INITIALIZED`,
+and `read()` fills the buffer with zeros. So `media record ok` appears in
+the trace on a handset that cannot record, which is how this was read as
+a working microphone and a network fault. Since alpha68 the trace states
+`media capture record_audio=granted|DENIED` before opening anything.
 
 ### 2b. The one runtime permission, pre-granted
 
