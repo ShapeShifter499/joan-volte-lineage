@@ -627,6 +627,7 @@ final class JoanMedia {
         if (amr != null) {
             amr.close();
         }
+        releaseEffects();
         JoanTrace.note("media stop");
     }
 
@@ -1373,15 +1374,36 @@ final class JoanMedia {
      * libaudiopreprocessing.so is on the device but nothing in
      * audio_effects.xml points at it.
      */
+    /* The attached effects, held for the life of the capture.
+     *
+     * AudioEffect is a handle to a native effect, and letting the handle
+     * be collected releases it. These were locals: the effect was created,
+     * enabled, and then left to the garbage collector, which could tear it
+     * down at any point DURING a call -- so processing that was on at the
+     * start could silently stop partway through, at a time decided by GC
+     * pressure rather than by anything audible. They also leaked one pair
+     * per call.
+     *
+     * Worth stating what the reference does, because it is the opposite:
+     * AOSP's ImsMedia attaches no AEC, NS or AGC in either direction and
+     * relies entirely on the voice-communication preset routing through
+     * the platform's own processing. joan attaching two of them on top is
+     * an unmeasured divergence, which is why the trace now names what is
+     * actually running. */
+    private static android.media.audiofx.AutomaticGainControl sAgcFx;
+    private static android.media.audiofx.AcousticEchoCanceler sAecFx;
+
     private static void attachEffects(int sessionId) {
+        releaseEffects();
         sPlatformAgc = false;
+        boolean aecOn = false;
         try {
             if (android.media.audiofx.AutomaticGainControl.isAvailable()) {
-                android.media.audiofx.AutomaticGainControl agc =
-                        android.media.audiofx.AutomaticGainControl.create(sessionId);
-                if (agc != null) {
-                    agc.setEnabled(true);
-                    sPlatformAgc = true;
+                sAgcFx = android.media.audiofx.AutomaticGainControl
+                        .create(sessionId);
+                if (sAgcFx != null) {
+                    sAgcFx.setEnabled(true);
+                    sPlatformAgc = sAgcFx.getEnabled();
                 }
             }
         } catch (Throwable t) {
@@ -1389,15 +1411,42 @@ final class JoanMedia {
         }
         try {
             if (android.media.audiofx.AcousticEchoCanceler.isAvailable()) {
-                android.media.audiofx.AcousticEchoCanceler aec =
-                        android.media.audiofx.AcousticEchoCanceler.create(sessionId);
-                if (aec != null) {
-                    aec.setEnabled(true);
+                sAecFx = android.media.audiofx.AcousticEchoCanceler
+                        .create(sessionId);
+                if (sAecFx != null) {
+                    sAecFx.setEnabled(true);
+                    aecOn = sAecFx.getEnabled();
                 }
             }
         } catch (Throwable ignored) {
             // platform default stands
         }
+        /* Read back rather than assume: setEnabled can be refused, and a
+         * device whose platform already does this in the HAL may report
+         * the effect unavailable entirely. AOSP attaches neither. */
+        JoanTrace.note("media effects agc=" + (sPlatformAgc ? "on" : "off")
+                + " aec=" + (aecOn ? "on" : "off")
+                + " (reference attaches neither)");
+    }
+
+    /** Release both handles. Safe to call when nothing is attached. */
+    private static void releaseEffects() {
+        try {
+            if (sAgcFx != null) {
+                sAgcFx.release();
+            }
+        } catch (Throwable ignored) {
+            // already gone
+        }
+        try {
+            if (sAecFx != null) {
+                sAecFx.release();
+            }
+        } catch (Throwable ignored) {
+            // already gone
+        }
+        sAgcFx = null;
+        sAecFx = null;
     }
 
     /** Downlink accounting shared by the PCMU write paths in playback(). */
