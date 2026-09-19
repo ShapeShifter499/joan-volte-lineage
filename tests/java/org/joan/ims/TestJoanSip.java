@@ -37,6 +37,7 @@ public final class TestJoanSip {
         testRetryAfter();
         testDialIdentity();
         testUeSpiPortConvention();
+        testEfDir();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -51,6 +52,56 @@ public final class TestJoanSip {
             System.out.println("FAIL " + name);
             gFail++;
         }
+    }
+
+    private static byte[] hexb(String h) {
+        byte[] o = new byte[h.length() / 2];
+        for (int i = 0; i < o.length; i++) {
+            o[i] = (byte) Integer.parseInt(h.substring(i * 2, i * 2 + 2), 16);
+        }
+        return o;
+    }
+
+    /**
+     * EF_DIR is the card's own statement of what it holds.
+     *
+     * <p>We used to guess a 16-byte AID and read the failure, which
+     * cannot tell "this card has no ISIM" apart from "not under the
+     * identifier you asked for" -- and the bench card proves those differ,
+     * since its USIM AID is not the one we shipped.
+     */
+    private static void testEfDir() {
+        /* TS 102 221 11.1.1.3: 61 <len> { 4F <len> AID, 50 <len> label }.
+         * This is the bench card's real USIM entry, labelled "USIM". */
+        byte[] rec = hexb("61184F10A0000000871002FFFFFFFF8906190000"
+                + "50045553494D");
+        java.util.List<String> aids = JoanEfDir.parseRecord(rec);
+        check(aids.size() == 1
+                        && aids.get(0).equals("A0000000871002FFFFFFFF8906190000"),
+                "an EF_DIR record yields the card's real AID");
+        check(JoanEfDir.firstWithPrefix(aids, JoanEfDir.USIM_PREFIX) != null,
+                "and it is matched by the 3GPP USIM prefix");
+        check(JoanEfDir.firstWithPrefix(aids, JoanEfDir.ISIM_PREFIX) == null,
+                "while the ISIM prefix does not match a USIM entry");
+
+        /* An unused record is 0xFF padding, which is not an error. */
+        check(JoanEfDir.parseRecord(hexb("FFFFFFFFFFFF")).isEmpty(),
+                "a padded record yields nothing and does not throw");
+        check(JoanEfDir.parseRecord(null).isEmpty(),
+                "a null record yields nothing");
+        /* A truncated length must not read past the buffer. */
+        check(JoanEfDir.parseRecord(hexb("61FF4F10A000")).isEmpty(),
+                "a record claiming more than it holds is refused");
+
+        /* File Descriptor: 82 05 <fd> <coding> <reclen hi> <reclen lo> <n> */
+        int[] g = JoanEfDir.parseFcpRecordInfo(
+                hexb("621A8205422100260483022F00"));
+        check(g != null && g[0] == 0x26 && g[1] == 4,
+                "the FCP names the record length and count");
+        check(JoanEfDir.parseFcpRecordInfo(hexb("62048202412100")) == null,
+                "a two-byte descriptor is not record-based and is refused");
+        check(JoanEfDir.parseFcpRecordInfo(null) == null,
+                "a null SELECT response is refused");
     }
 
     /**

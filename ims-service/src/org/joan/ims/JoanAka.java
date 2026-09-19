@@ -210,6 +210,47 @@ final class JoanAka {
     }
 
     /**
+     * The card's real AIDs, read from EF_DIR, or an empty list.
+     *
+     * <p>This is the difference between asking the card what it has and
+     * guessing. `iccExchangeSimIO` is reached by reflection because the
+     * six-argument form is not in every platform's public surface; a
+     * missing method, a refused permission or an odd card all answer the
+     * same way -- empty -- and the AID candidates below still run.
+     *
+     * <p>AIDs are application identifiers, not subscriber data: nothing
+     * read here identifies the user, and nothing else from the card is
+     * touched.
+     */
+    private static java.util.List<String> readEfDir(TelephonyManager tm) {
+        java.util.List<String> aids = new java.util.ArrayList<>();
+        try {
+            java.lang.reflect.Method m = TelephonyManager.class.getMethod(
+                    "iccExchangeSimIO", int.class, int.class, int.class,
+                    int.class, int.class, String.class);
+            byte[] fcp = (byte[]) m.invoke(tm, JoanEfDir.EF_DIR,
+                    JoanEfDir.CMD_GET_RESPONSE, 0, 0, 15, JoanEfDir.MF);
+            int[] geom = JoanEfDir.parseFcpRecordInfo(fcp);
+            if (geom == null) {
+                JoanTrace.note("ef_dir: no record geometry");
+                return aids;
+            }
+            int n = Math.min(geom[1], JoanEfDir.MAX_RECORDS);
+            for (int rec = 1; rec <= n; rec++) {
+                byte[] r = (byte[]) m.invoke(tm, JoanEfDir.EF_DIR,
+                        JoanEfDir.CMD_READ_RECORD, rec,
+                        JoanEfDir.READ_ABSOLUTE, geom[0], JoanEfDir.MF);
+                aids.addAll(JoanEfDir.parseRecord(r));
+            }
+            JoanTrace.note("ef_dir: records=" + n + " aids=" + aids);
+        } catch (Throwable t) {
+            JoanTrace.note("ef_dir: unavailable ("
+                    + t.getClass().getSimpleName() + ")");
+        }
+        return aids;
+    }
+
+    /**
      * AUTHENTICATE against the first AID candidate the card accepts.
      *
      * <p>The trace names which one worked, because "ISIM apdu" alone
@@ -220,6 +261,17 @@ final class JoanAka {
     private static String apduAuthenticateAny(TelephonyManager tm,
                                               byte[] randAutn,
                                               String[] aids, String what) {
+        /* What the card says it has beats anything we can guess. */
+        String prefix = "ISIM".equals(what)
+                ? JoanEfDir.ISIM_PREFIX : JoanEfDir.USIM_PREFIX;
+        String real = JoanEfDir.firstWithPrefix(readEfDir(tm), prefix);
+        if (real != null) {
+            String r = apduAuthenticate(tm, randAutn, 0, 0, real);
+            if (r != null) {
+                JoanTrace.note("aka via " + what + " apdu aid=ef_dir");
+                return r;
+            }
+        }
         for (int i = 0; i < aids.length; i++) {
             String r = apduAuthenticate(tm, randAutn, 0, 0, aids[i]);
             if (r != null) {
