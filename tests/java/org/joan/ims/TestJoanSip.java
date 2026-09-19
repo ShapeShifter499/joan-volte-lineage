@@ -3144,11 +3144,34 @@ public final class TestJoanSip {
         for (int i = 30; i < 60; i++) {
             sid.offer(70000 + i, i * 320L, i * 320L, p, true, i * 20L);
         }
+        /* Measure from here, not from `grown`. The buffer also grows on
+         * the OFFER path when a burst overruns MAX_QUEUE, which has
+         * nothing to do with comfort noise, and comparing against the
+         * pre-offer depth quietly folded that in. This assertion passed
+         * for the wrong reason for a long time: depth reached 7 during
+         * these offers and the polls below dragged it to MIN_DEPTH, so
+         * what was being tested was that the shrink outran the growth. */
+        int afterSid = sid.depth();
+        int sidTrimmedBefore = sid.trimmed();
         for (int t = 0; t < 80; t++) {
             sid.poll(2000L + t * 20L);
         }
-        check(sid.depth() <= grown,
+        check(sid.depth() <= afterSid,
                 "playing comfort noise does not grow the buffer");
+        /* And it must not collapse it either. The old shrink deleted the
+         * oldest QUEUED frame per comfort-noise frame played -- a future
+         * frame, often speech -- which walked the target down to its
+         * floor and threw away audio on a link with no loss at all.
+         * Digi.Mobil RO: loss=0% jitter=0, trimmed=191 of 981 frames,
+         * depth=2. AOSP shrinks only when the head of the queue is
+         * itself SID and the analyser asked for less delay
+         * (ImsMedia AudioJitterBuffer.cpp, "decrease delay"). */
+        check(sid.depth() > JoanJitter.MIN_DEPTH,
+                "and does not collapse the buffer to its floor");
+        check(sid.trimmed() - sidTrimmedBefore <= 30,
+                "and gives latency back without deleting a frame per "
+                + "comfort-noise frame (trimmed "
+                + (sid.trimmed() - sidTrimmedBefore) + " over 30 SID frames)");
         check(sid.depth() >= JoanJitter.MIN_DEPTH,
                 "and never shrinks past the floor");
 

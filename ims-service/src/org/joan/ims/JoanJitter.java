@@ -493,7 +493,7 @@ final class JoanJitter {
         if (sidSeqs.remove(first.getKey())) {
             /* Playing comfort noise: shorten now, while it cannot be
              * heard, rather than carrying congestion-era depth forward. */
-            shrinkOnSilence();
+            shrinkOnSilence(nowMs);
         }
         return first.getValue();
     }
@@ -545,16 +545,54 @@ final class JoanJitter {
      * is returned while nobody is speaking rather than held for the rest
      * of the call.
      */
-    private void shrinkOnSilence() {
-        if (sawSid && depth > MIN_DEPTH) {
-            depth--;
-            /* Give the frame back as well as the target. Lowering the
-             * depth alone leaves the audio queued and the latency
-             * exactly where it was. */
-            if (!queue.isEmpty()) {
-                queue.remove(queue.firstKey());
-                trimmed++;
-            }
+    private void shrinkOnSilence(long nowMs) {
+        if (!sawSid || depth <= MIN_DEPTH) {
+            return;
+        }
+        /* Only when the buffer has not needed to grow recently.
+         *
+         * DECREASE_THRESHOLD_MS and lastGrowAtMs already existed for
+         * exactly this, and this path did not consult either: every
+         * comfort-noise frame shrank the target, so on a stream with
+         * ordinary DTX the depth walked straight down to MIN_DEPTH and
+         * stayed there. The Digi.Mobil RO trace shows the end state,
+         * depth=2 with a clean link.
+         *
+         * AOSP guards the same decision with mUpdatedDelay < 0 -- it
+         * shrinks only when the analyser actually asked for less delay,
+         * not merely because comfort noise is playing
+         * (ImsMedia AudioJitterBuffer.cpp, "decrease delay"). */
+        if (lastGrowAtMs != 0 && nowMs >= lastGrowAtMs
+                && nowMs - lastGrowAtMs < DECREASE_THRESHOLD_MS) {
+            return;
+        }
+        depth--;
+        /* Give the frame back as well as the target, but only if that
+         * frame is itself comfort noise.
+         *
+         * This used to drop queue.firstKey() unconditionally, on the
+         * reasoning that a shrink during silence cannot be heard. The
+         * frame being PLAYED is silent; the one being deleted is the
+         * oldest QUEUED frame, which is a future frame and may well be
+         * speech. So the shrink was paying for its latency with audio
+         * the caller was about to hear.
+         *
+         * Measured on Digi.Mobil RO: loss=0% jitter=0 on the wire and
+         * trimmed=191 of 981 frames on a call whose speech activity was
+         * 81% -- the discard rate tracked the silence rate, which is
+         * this path and not the network. It was reported as "quality
+         * wasn't that great".
+         *
+         * Lowering the target alone is not a no-op: the queue drains
+         * naturally against the new bound as later frames arrive, which
+         * returns the same latency without deleting anything. */
+        if (queue.isEmpty()) {
+            return;
+        }
+        long oldest = queue.firstKey();
+        if (sidSeqs.remove(oldest)) {
+            queue.remove(oldest);
+            trimmed++;
         }
     }
 
