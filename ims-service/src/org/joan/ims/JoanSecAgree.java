@@ -170,6 +170,30 @@ final class JoanSecAgree {
         return null;
     }
 
+    /**
+     * How many comma-separated mechanisms the header actually contains,
+     * parsed or not.
+     *
+     * <p>Against {@link #parseAll}'s size this says whether anything was
+     * dropped. A P-CSCF that writes several values into one parameter
+     * without quoting them -- {@code ealg=aes-cbc,null} -- has its single
+     * mechanism split in two here, and both halves are then unreadable:
+     * one has no SPIs, the other has no mechanism name. Two counts that
+     * disagree is the signal to go and read the raw header.
+     */
+    static int rawMechanismCount(String value) {
+        if (value == null) {
+            return 0;
+        }
+        String body = value.trim();
+        if (body.regionMatches(true, 0, "Security-Server:", 0, 16)) {
+            body = body.substring(16).trim();
+        } else if (body.regionMatches(true, 0, "Security-Client:", 0, 16)) {
+            body = body.substring(16).trim();
+        }
+        return splitMechanisms(body).size();
+    }
+
     static List<JoanSecAgree> parseAll(String value) {
         List<JoanSecAgree> out = new ArrayList<>();
         if (value == null) {

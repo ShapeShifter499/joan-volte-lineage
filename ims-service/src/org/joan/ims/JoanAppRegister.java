@@ -566,6 +566,30 @@ final class JoanAppRegister {
             }
             sb.append("aka=").append(algo).append(' ');
 
+            /* The P-CSCF's Security-Server header, verbatim.
+             *
+             * offered= prints only what parsed, so a mechanism we failed
+             * to split or read has always been invisible -- and we cannot
+             * tell "the network offered one row" from "the network
+             * offered three and we understood one". A real header shape
+             * exists that does exactly that: mechanisms are separated by
+             * commas, so a P-CSCF that writes multiple values into one
+             * parameter (ealg=aes-cbc,null, unquoted) has its single
+             * mechanism split into two fragments, one losing its SPIs and
+             * the other losing its mechanism name, and both are dropped.
+             *
+             * The header carries no subscriber identity -- mechanism
+             * names, algorithms, SPIs, ports and q-values -- and the SPIs
+             * in it are the network's own, for an SA that is torn down
+             * before any log is read. Printed once per attempt so a
+             * tester's trace answers the question without a capture. */
+            JoanTrace.note("sec-server raw: "
+                    + (p1.secServer == null ? "(absent)" : p1.secServer));
+            sb.append("sec_rows=")
+                    .append(JoanSecAgree.rawMechanismCount(p1.secServer))
+                    .append(" sec_parsed=")
+                    .append(JoanSecAgree.parseAll(p1.secServer).size())
+                    .append(' ');
             pcscfSec = JoanSecAgree.select(p1.secServer);
             if (pcscfSec == null) {
                 return sb + "FAIL: no supported Security-Server mechanism";
@@ -602,12 +626,24 @@ final class JoanAppRegister {
             }
             parts = JoanAka.parseAuthResponse(authHex);
             if (parts != null) {
+                /* The card accepted the AUTN and returned RES/CK/IK: no
+                 * synchronisation failure, so no AUTS and no resync
+                 * REGISTER. Stamped rather than left absent, because a
+                 * missing field and a field that says zero read the same
+                 * to anyone holding only the log. */
+                sb.append("aka_sync=0 ");
                 break;
             }
             if (!JoanAka.isSyncFailure(authHex)) {
                 return sb + "FAIL: aka parse len=" + authHex.length()
                         + " aka_ms=" + akaMs;
             }
+            /* Reached only on a real card-reported sync failure. The
+             * success path stamps aka_sync=0 where the card accepted the
+             * AUTN, so a trace can prove the UE never asked for a
+             * resynchronisation -- which is the whole question when a
+             * core answers "AKA sync proc timeout" and we need to say,
+             * to an operator, that the request did not come from us. */
             /* SYNCHRONISATION FAILURE: the card computed AUTS because its
              * SQN is behind the HSS. Nothing retries out of this -- the
              * HSS keeps issuing vectors from the same stale batch -- so

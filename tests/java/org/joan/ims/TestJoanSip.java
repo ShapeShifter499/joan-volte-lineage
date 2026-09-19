@@ -8,6 +8,7 @@ public final class TestJoanSip {
         testAkaV1();
         testAkaV2();
         testEspKeys();
+        testRawMechanismCount();
         testSecAgreeSelect();
         testRegisterOffer();
         testGlobalCriterion();
@@ -599,6 +600,35 @@ public final class TestJoanSip {
             threw = true;
         }
         check(threw, "3DES refused: not in IpSecManager");
+    }
+
+    private static void testRawMechanismCount() {
+        /* The count that says whether offered= told the whole story. */
+        String two = "ipsec-3gpp; alg=hmac-sha-1-96; ealg=aes-cbc; prot=esp; "
+                + "mod=trans; spi-c=1; spi-s=2; port-c=5061; port-s=5062, "
+                + "ipsec-3gpp; alg=hmac-md5-96; ealg=null; prot=esp; "
+                + "mod=trans; spi-c=3; spi-s=4; port-c=5063; port-s=5064";
+        check(JoanSecAgree.rawMechanismCount(two) == 2
+                        && JoanSecAgree.parseAll(two).size() == 2,
+                "two well-formed mechanisms count and parse alike");
+        check(JoanSecAgree.rawMechanismCount("Security-Server: " + two) == 2,
+                "the header name is stripped before counting");
+
+        /* The shape reported in the wild: several values in one unquoted
+         * parameter. RFC 3329 separates MECHANISMS by comma, so this one
+         * mechanism splits in two and neither half survives -- the first
+         * loses its SPIs, the second its mechanism name. Before the count
+         * existed, offered= showed nothing and the header looked empty. */
+        String merged = "ipsec-3gpp; alg=hmac-sha-1-96; ealg=aes-cbc,null; "
+                + "prot=esp; mod=trans; spi-c=1; spi-s=2; port-c=5061; "
+                + "port-s=5062";
+        check(JoanSecAgree.rawMechanismCount(merged) == 2,
+                "a comma inside a parameter splits the mechanism in two");
+        check(JoanSecAgree.parseAll(merged).isEmpty(),
+                "and neither half parses, so the count exposes the loss");
+        check(JoanSecAgree.rawMechanismCount(null) == 0
+                        && JoanSecAgree.rawMechanismCount("") == 0,
+                "an absent header counts zero rather than throwing");
     }
 
     private static void testSecAgreeSelect() {
