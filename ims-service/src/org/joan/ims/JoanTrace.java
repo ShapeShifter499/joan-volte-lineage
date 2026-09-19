@@ -91,6 +91,27 @@ final class JoanTrace {
         }
     }
 
+    /**
+     * The trace file, or the rotated one next to it. A tester without root
+     * cannot reach device-protected storage, so the provider serves this
+     * over `content read` instead; see JoanStateProvider.openFile.
+     *
+     * Returns null before init() has run, which is the honest answer:
+     * there is no file yet, and inventing a path would hand back a name
+     * that nothing ever wrote to.
+     */
+    static File file(Context ctx, boolean rotated) {
+        init(ctx);
+        synchronized (LOCK) {
+            if (sFile == null) {
+                return null;
+            }
+            return rotated
+                    ? new File(sFile.getParentFile(), sFile.getName() + ".1")
+                    : sFile;
+        }
+    }
+
     static String akaStage() {
         return sLastAkaStage;
     }

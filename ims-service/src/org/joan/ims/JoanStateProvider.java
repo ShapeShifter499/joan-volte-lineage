@@ -7,13 +7,21 @@ import android.database.Cursor;
 import android.database.MatrixCursor;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.ParcelFileDescriptor;
 import android.os.Process;
+
+import java.io.File;
+import java.io.FileNotFoundException;
 
 /**
  * Non-secret diagnostics/start provider. Querying this provider forces Android
  * to instantiate package code, starts the guarded driver, and returns only
  * coarse state. It never exposes IMS identity, nonce, RES, CK, IK, local IP,
  * or P-CSCF.
+ *
+ * openFile additionally serves the bring-up trace, which records outcomes
+ * and field lengths rather than values for the same reason. Both paths are
+ * gated by enforceCaller: exported for the shell, not for installed apps.
  */
 public class JoanStateProvider extends ContentProvider {
     static final String AUTHORITY = "org.joan.ims.state";
@@ -157,6 +165,51 @@ public class JoanStateProvider extends ContentProvider {
         } catch (Throwable t) {
             return "unknown";
         }
+    }
+
+    /**
+     * Serve the trace to `adb shell content read`.
+     *
+     * The trace lives in device-protected storage under the app's own uid,
+     * which a tester cannot reach without root -- and a tester who cannot
+     * send the trace is a lane that cannot be diagnosed. Every remaining
+     * question in this project has to be answered from someone else's
+     * handset, so "pull the file as root" was not a workable ask.
+     *
+     *   adb shell content read --uri content://org.joan.ims.state/trace
+     *   adb shell content read --uri content://org.joan.ims.state/trace.1
+     *
+     * enforceCaller keeps this to the platform, root and the shell, so
+     * opening the file up to adb does not open it to installed apps. It is
+     * read-only: this provider hands out no writable descriptor.
+     */
+    @Override
+    public ParcelFileDescriptor openFile(Uri uri, String mode)
+            throws FileNotFoundException {
+        enforceCaller();
+        if (!"r".equals(mode)) {
+            throw new SecurityException("the trace is read-only");
+        }
+        Context ctx = getContext();
+        if (ctx == null) {
+            throw new FileNotFoundException("provider has no context");
+        }
+        String seg = uri == null ? null : uri.getLastPathSegment();
+        boolean rotated = "trace.1".equals(seg);
+        if (!rotated && !"trace".equals(seg)) {
+            throw new FileNotFoundException("no such trace: " + seg);
+        }
+        File f = JoanTrace.file(ctx, rotated);
+        if (f == null || !f.exists()) {
+            // Say which one is missing. The rotated file only exists once
+            // the live one has passed its size limit, and a tester reading
+            // "not found" for trace.1 on a fresh install should not read
+            // that as the install being broken.
+            throw new FileNotFoundException(
+                    (rotated ? "no rotated trace yet" : "no trace yet")
+                            + "; query the state uri first to start the driver");
+        }
+        return ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY);
     }
 
     @Override
