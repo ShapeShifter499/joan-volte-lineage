@@ -63,7 +63,25 @@ final class JoanJitter {
      * bench as nine frames held against a target of two, which is about
      * 180 ms of latency the call never gets back.
      */
-    static final int SLACK = 3;
+    /* Headroom above the adapted depth before a frame is discarded.
+     *
+     * Raised from 3 after a tester reported bad stutter with
+     * depth=9 queued=4 jitter=402 loss=0% late=0 trimmed=16 of 575
+     * frames. depth=9 is MAX_DEPTH: the adaptation had already decided
+     * this link needed the deepest buffer allowed, the network delivered
+     * everything, and the bound then threw away sixteen frames anyway --
+     * sixteen 20 ms holes, which is what a stutter sounds like. Trimming
+     * at depth+3 to save 60 ms while spending an audible gap is the wrong
+     * trade at the ceiling.
+     *
+     * AOSP's equivalent cap is MAX_QUEUE_SIZE, 150 frames or three
+     * seconds, and it does not trim toward the target at all -- latency
+     * comes back through the comfort-noise skip and a reset when the drop
+     * rate spikes, both of which joan now has. 6 is a deliberate middle:
+     * 300 ms of worst-case hold against AOSP's 3000, chosen to be sized
+     * properly next round rather than guessed at twice. qpeak below is
+     * what will size it. */
+    static final int SLACK = 6;
 
     /**
      * Buffer depth bounds, in packets.
@@ -85,7 +103,14 @@ final class JoanJitter {
      * against a target of two "about 180 ms of latency the call never gets
      * back", which is the same judgement from the other direction.
      */
-    static final int MIN_DEPTH = 2;
+    /* AOSP's AUDIO_JITTER_BUFFER_MIN_SIZE. joan used 2 and everything
+     * around it already matched: MAX_DEPTH 9 is AUDIO_JITTER_BUFFER_MAX_SIZE,
+     * the initial 4 is AUDIO_JITTER_BUFFER_START_SIZE, DROP_WINDOW_MS 5000
+     * and the 80/35 DTX thresholds are RESET_THRESHOLD_IN_DTX_ENABLED and
+     * _DISABLED, and adapt() is GetNextJitterBufferSize. One frame below
+     * the reference floor is 20 ms of headroom the reference keeps, and
+     * the Digi.Mobil RO trace shows the buffer sitting exactly there. */
+    static final int MIN_DEPTH = 3;
     static final int MAX_DEPTH = 9;
 
     /**
@@ -99,6 +124,15 @@ final class JoanJitter {
      * them would have tightened the arrival guard below the drain bound of
      * depth + SLACK and started trimming frames that were about to play.
      */
+    /* Deliberately NOT AOSP's MAX_QUEUE_SIZE, which is 150 frames -- a
+     * three-second safety valve rather than a latency control. AOSP holds
+     * latency down by skipping a frame during comfort noise and by
+     * resetting when the drop rate spikes; joan bounds the queue directly
+     * because that was measured not to be enough here, queued=9 against
+     * depth=2, about 180 ms of permanent undrainable latency. Kept as a
+     * known divergence rather than aligned blind: the shrink fix has
+     * already taken the observed trim rate from 19% to under 3%, so the
+     * bound is doing far less work than it was. */
     static final int MAX_QUEUE = MAX_DEPTH + SLACK;
 
     /**
@@ -160,6 +194,14 @@ final class JoanJitter {
     private int late;
     /** Given up to bound the latency: the buffer doing its job. */
     private int trimmed;
+    /* The deepest the queue ever got. queued= is the instantaneous value
+     * at report time, which says nothing about the burst that caused a
+     * trim; without this the bound above can only be guessed at. */
+    private int queuePeak;
+    /* The depth adapt() last computed from observed transit offsets.
+     * AOSP calls this mUpdatedDelay and gates the comfort-noise shrink on
+     * it being negative; without it a shrink can fight the adaptation. */
+    private int lastTarget = -1;
     private int reordered;
 
     /**
@@ -250,6 +292,7 @@ final class JoanJitter {
         lastLateAtMs = 0;
         late = 0;
         trimmed = 0;
+        queuePeak = 0;
         reordered = 0;
         lastExpected = 0;
         lastReceived = 0;
@@ -408,6 +451,9 @@ final class JoanJitter {
             reordered++;
         }
         queue.put(ext, payload);
+        if (queue.size() > queuePeak) {
+            queuePeak = queue.size();
+        }
         if (sid) {
             sidSeqs.add(ext);
         }
@@ -566,6 +612,17 @@ final class JoanJitter {
                 && nowMs - lastGrowAtMs < DECREASE_THRESHOLD_MS) {
             return;
         }
+        /* And only when the adaptation actually wants less depth.
+         *
+         * This is AOSP's mUpdatedDelay < 0. Without it the comfort-noise
+         * shrink fights adapt(): on a link whose observed transit offsets
+         * still justify the current depth, every SID frame pulled the
+         * buffer down one anyway, and it walked to the floor while the
+         * measurements said to stay. Comfort noise is the moment latency
+         * can be handed back cheaply, not a reason to hand it back. */
+        if (lastTarget >= depth) {
+            return;
+        }
         depth--;
         /* Give the frame back as well as the target, but only if that
          * frame is itself comfort noise.
@@ -704,6 +761,7 @@ final class JoanJitter {
         }
         int target = (worst * BUFFER_WEIGHT + ROUNDUP_MARGIN_MS)
                 / PACKET_INTERVAL_MS;
+        lastTarget = target;
         if (target > depth) {
             depth = target > MAX_DEPTH ? MAX_DEPTH : target;
             if (depth < MIN_DEPTH) {
@@ -759,6 +817,7 @@ final class JoanJitter {
                 + " lost=" + lostCumulative
                 + " reordered=" + reordered
                 + " late=" + late
+                + " qpeak=" + queuePeak
                 + " trimmed=" + trimmed;
     }
 }

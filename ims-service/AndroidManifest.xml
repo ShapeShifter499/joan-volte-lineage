@@ -1,12 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.joan.ims"
-    android:versionCode="81"
-    android:versionName="0.4.0-alpha71">
+    android:versionCode="82"
+    android:versionName="0.4.0-alpha72">
     <!-- pm install rejects an APK with no uses-sdk ("found 0");
          the zip sideloads into priv-app, which does not check. -->
     <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="34" />
-    <uses-permission android:name="android.permission.BIND_IMS_SERVICE" />
+    <!-- BIND_IMS_SERVICE is deliberately NOT requested.
+         It belongs on the <service> below as android:permission, which
+         says who may BIND to us; the framework holds it, we do not need
+         to. Neither reference declares it: AOSP's ImsStack guards its
+         service with it and requests nothing, and LG's com.lge.ims does
+         not list it at all. ImsResolver checks serviceInfo.permission,
+         not what this package holds.
+         Requesting it cost something real. It is signature|privileged,
+         so it forced an entry in org.joan.ims.xml, and under
+         ro.control_privapp_permissions=enforce a privileged permission
+         requested without an allowlist entry is a FATAL BOOT ERROR. That
+         was a bootloop dependency carried for a permission we never
+         needed to hold. -->
     <uses-permission android:name="android.permission.MODIFY_PHONE_STATE" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.READ_PRIVILEGED_PHONE_STATE" />

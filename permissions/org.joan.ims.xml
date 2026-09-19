@@ -6,7 +6,11 @@
         <permission name="android.permission.READ_PRIVILEGED_PHONE_STATE" />
         <permission name="android.permission.READ_PRECISE_PHONE_STATE" />
         <permission name="android.permission.CONNECTIVITY_USE_RESTRICTED_NETWORKS" />
-        <permission name="android.permission.BIND_IMS_SERVICE" />
+        <!-- BIND_IMS_SERVICE removed with the uses-permission that
+             needed it: the service guards itself with android:permission
+             and the app never held it for any purpose. AOSP's
+             privapp-permissions_com.android.imsstack.xml does not list
+             it either. -->
         <!-- Load-bearing: the manifest requests LOCATION_BYPASS, and a
              requested signature|privileged permission with no entry here
              is a fatal boot error under ro.control_privapp_permissions=
