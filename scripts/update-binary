@@ -524,6 +524,23 @@ if [ -f "$TMP/etc/permissions/org.joan.ims.xml" ]; then
   copy_file "$TMP/etc/permissions/org.joan.ims.xml" \
     "$SYS/etc/permissions/org.joan.ims.xml" 644 u:object_r:system_file:s0
 fi
+# The runtime permission behind utran-cell-id-3gpp. This is a DIFFERENT
+# mechanism from the file above: privapp-permissions allowlists
+# signature|privileged permissions and does nothing for a dangerous
+# runtime one, which is what ACCESS_FINE_LOCATION is.
+#
+# Best effort by design. If DefaultPermissionGrantPolicy does not apply
+# it to a package added after the device was provisioned, the header
+# falls back to the bare access type, the state row says
+# pani_cell=no-permission, and one adb command fixes it without root.
+# Nothing here is load-bearing for registration.
+if [ -f "$TMP/etc/default-permissions/org.joan.ims.xml" ]; then
+  mkdir -p "$SYS/etc/default-permissions"
+  chmod 755 "$SYS/etc/default-permissions" 2>/dev/null || true
+  chcon u:object_r:system_file:s0 "$SYS/etc/default-permissions" 2>/dev/null || true
+  copy_file "$TMP/etc/default-permissions/org.joan.ims.xml" \
+    "$SYS/etc/default-permissions/org.joan.ims.xml" 644 u:object_r:system_file:s0
+fi
 # The IMS feature declaration needs an ownership record, or uninstall
 # cannot put the device back as it found it. A ROM that already declares
 # android.hardware.telephony.ims must get ITS file back; a ROM that does

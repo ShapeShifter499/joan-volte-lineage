@@ -48,7 +48,39 @@ the framework builds its IMS machinery in the first place.
 `org.joan.ims.xml` allowlists the signature|privileged permissions the app
 requests: `MODIFY_PHONE_STATE`, `READ_PRIVILEGED_PHONE_STATE`,
 `READ_PRECISE_PHONE_STATE`, `CONNECTIVITY_USE_RESTRICTED_NETWORKS`,
-`BIND_IMS_SERVICE`, `RECORD_AUDIO`, `MODIFY_AUDIO_SETTINGS`.
+`BIND_IMS_SERVICE`, `MODIFY_AUDIO_SETTINGS`.
+
+**`RECORD_AUDIO` is also listed there and that entry does nothing.** It is
+a *dangerous runtime* permission, not `signature|privileged`:
+privapp-permissions neither grants it nor requires it to be listed, so the
+line is never consulted. It is left in place as harmless, but it is not
+what makes microphone capture work, and this file previously claimed it
+was. **How `RECORD_AUDIO` is actually granted on the bench has not been
+established** -- `dumpsys package org.joan.ims` on a working handset would
+settle it in one line, and it is worth settling, because a tester whose
+uplink is silent may simply not have it.
+
+### 2b. The one runtime permission, pre-granted
+
+`etc/default-permissions/org.joan.ims.xml` is the mechanism that *does*
+apply to runtime permissions, and it carries exactly one:
+`ACCESS_FINE_LOCATION`, which `getAllCellInfo` has required since API 29
+and which P-Access-Network-Info needs so it can carry
+`utran-cell-id-3gpp`. Nothing else in the package uses location, and the
+grant is `fixed="false"` so it can be revoked.
+
+This one is **best effort and unverified on a handset**:
+`DefaultPermissionGrantPolicy` applies these when it runs, and whether it
+re-runs for a package added to `/system` after the device was provisioned
+has not been tested. If it does not apply, the header falls back to the
+bare access type, the `pani_cell` state row reads `no-permission`, and one
+command fixes it with no root:
+
+```
+adb shell pm grant org.joan.ims android.permission.ACCESS_FINE_LOCATION
+```
+
+Nothing about registration depends on it.
 
 **This file is load-bearing in a dangerous way.**
 `ro.control_privapp_permissions=enforce` (the LineageOS default) makes a
