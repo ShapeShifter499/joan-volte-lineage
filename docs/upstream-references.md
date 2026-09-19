@@ -85,6 +85,53 @@ joan keeps one deliberate divergence: a challenge offering only
 `auth-int` yields no qop rather than `auth-int`, because our HA2 hashes
 no entity body. The reference stack implements auth-int properly.
 
+### Both reference stacks ask for location (2026-09-19)
+
+The question was whether an IMS app carrying a location permission is
+normal. It is, in both stacks joan compares against.
+
+**AOSP ImsStack** (`java/AndroidManifest.xml`) declares
+`ACCESS_COARSE_LOCATION`, `ACCESS_FINE_LOCATION`,
+`ACCESS_BACKGROUND_LOCATION` and `LOCATION_BYPASS`, and reads the cell
+through `getAllCellInfo` / `CellInfoLte` / `CellIdentityLte` in
+`core/agents/CellInfoAgent.java` -- the same API joan uses.
+
+**LG's shipped app**, read out of the H932 KDZ rather than assumed:
+
+    debugfs -R "dump /product/priv-app/Ims6/Ims6.apk out.apk" 0.system.img
+    aapt2 dump permissions out.apk
+
+`com.lge.ims` 6.1.0.20180701, targetSdk 28, declares
+`ACCESS_COARSE_LOCATION`, `ACCESS_FINE_LOCATION` and
+`ACCESS_LOCATION_EXTRA_COMMANDS`. No BACKGROUND and no LOCATION_BYPASS,
+which is not a choice -- BACKGROUND arrived at API 29 and LOCATION_BYPASS
+at API 34, and this targets 28. Comparing joan against a 2018 app on
+those two is anachronistic; AOSP is the live reference.
+
+Two things fall out of the same image that are worth keeping.
+
+**LG's privapp allowlist confirms what privapp-permissions is for.**
+`/product/etc/permissions/privapp-permissions-lge-joan.xml` grants
+`com.lge.ims` nine permissions and every one is signature|privileged:
+CHANGE_COMPONENT_ENABLED_STATE, CONNECTIVITY_INTERNAL, GET_APP_OPS_STATS,
+INTERACT_ACROSS_USERS, MANAGE_USERS, READ_PRECISE_PHONE_STATE,
+READ_PRIVILEGED_PHONE_STATE, SUBSTITUTE_NOTIFICATION_APP_NAME,
+WRITE_SECURE_SETTINGS. **No location and no RECORD_AUDIO** -- third-party
+confirmation that a dangerous runtime permission does not belong in that
+file, and that joan's RECORD_AUDIO entry there does nothing.
+
+**Neither reference IMS app records audio.** LG declares
+`MODIFY_AUDIO_SETTINGS` and not `RECORD_AUDIO`; AOSP's stack does its
+media in `packages/modules/ImsMedia` behind `USE_IMSMEDIA`. joan runs its
+own RTP and therefore genuinely needs the microphone, so there is no
+upstream answer to copy here and **how joan's RECORD_AUDIO is granted on
+a working handset is still unestablished**. One `dumpsys package
+org.joan.ims` on the bench settles it.
+
+The device does ship `/etc/default-permissions/` (carrying Google's
+file), so the directory joan writes into is an ordinary part of this
+device family rather than something invented for it.
+
 ### P-Access-Network-Info always carries the cell id (2026-09-19, OPEN)
 
 `platform/util/AccessNetworkInfoFormatter.cpp` builds the header as the
