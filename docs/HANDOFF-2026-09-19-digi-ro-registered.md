@@ -69,6 +69,29 @@ Getting files *back* from the tester uses the same route in reverse
 (`ssh nym-fold-family 'cat ~/downloads/<file>' > local`), which is how the
 tester's fixed installer was retrieved.
 
+## Handling tester evidence
+
+A capture is deliberately **not** anonymous: it keeps the IMPI, IMPU,
+Call-ID and P-CSCF because that is what a 404 or a 500 is an argument
+about, and the file says so in its own first lines. That makes it fine to
+read and wrong to republish.
+
+So when a finding is written anywhere durable — a Deck card, a journal, a
+report, an issue — the subscriber goes and the **network stays**:
+
+    <IMPI user, Digi RO 226-05 lane A>
+    <MSISDN, Digi RO 226-05 lane A>
+    <IMEI, Digi RO 226-05 lane A>
+
+The lane is what a reader needs in order to know which carrier a finding
+came from and whether it applies to theirs. The person holding the SIM is
+not. `lane A` distinguishes two testers on one PLMN without naming either.
+
+Raw captures stay where they land (`~/.hermes/cache/documents/`), unedited
+and unpublished. Deck #148 was sanitized this way after the fact; the repo
+itself has never carried an identifier, which was checked before the push
+rather than assumed.
+
 ## Build, gate, ship
 
 ```
