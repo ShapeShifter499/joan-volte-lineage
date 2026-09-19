@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.joan.ims"
-    android:versionCode="70"
-    android:versionName="0.4.0-alpha60">
+    android:versionCode="71"
+    android:versionName="0.4.0-alpha61">
     <!-- pm install rejects an APK with no uses-sdk ("found 0");
          the zip sideloads into priv-app, which does not check. -->
     <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="34" />
@@ -21,10 +21,21 @@
     <!-- An ImsService has no UI and is always in the background, and since
          Android 10 a background process needs this as well or the cell
          cache reads back empty. AOSP's ImsStack declares all three of
-         COARSE, FINE and BACKGROUND for the same reason. It also holds
-         LOCATION_BYPASS, which is signature-only: we cannot have it, so
-         with the system location toggle OFF there is no cell id for us to
-         read and the header stays bare. -->
+         COARSE, FINE and BACKGROUND, so joan does too: the platform
+         expects FINE to be accompanied by COARSE, and the runtime dialog
+         is built around the pair.
+
+         AOSP additionally holds LOCATION_BYPASS. An earlier note here
+         said that one was signature-only and out of reach; that was
+         wrong. It is signature|privileged ; AOSP's own
+         privapp-permissions_com.android.imsstack.xml lists it, and that
+         file grants signature|privileged permissions to priv-apps, which
+         is the same mechanism org.joan.ims.xml already uses. joan does
+         not take it: it defeats the user's own location toggle, AOSP's
+         justification for it is emergency positioning, and joan does not
+         do emergency calling. With location off the header simply stays
+         bare. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />

@@ -3,7 +3,7 @@
 
      privapp-permissions (org.joan.ims.xml) cannot do this. That file
      allowlists signature|privileged permissions, and a dangerous runtime
-     permission is neither granted nor required to be listed there -- an
+     permission is neither granted nor required to be listed there ; an
      entry for one is simply never consulted.
 
      ACCESS_FINE_LOCATION is needed only by getAllCellInfo, which has
@@ -23,6 +23,7 @@
 -->
 <exceptions>
     <exception package="org.joan.ims">
+        <permission name="android.permission.ACCESS_COARSE_LOCATION" fixed="false"/>
         <permission name="android.permission.ACCESS_FINE_LOCATION" fixed="false"/>
         <permission name="android.permission.ACCESS_BACKGROUND_LOCATION" fixed="false"/>
     </exception>

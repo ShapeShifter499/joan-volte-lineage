@@ -67,6 +67,35 @@ javac -d "$REDACT_OUT" \
     "$JAVA_TEST/org/joan/ims/TestJoanSipCapture.java"
 java -cp "$REDACT_OUT" org.joan.ims.TestJoanSipCapture
 
+echo "== shipped xml is well formed"
+# A malformed XML in this package does not fail loudly. aapt2 catches the
+# manifest, but etc/permissions and etc/default-permissions are parsed by
+# the platform at boot and a broken one is simply ignored: the pre-grant
+# would never happen and nothing would say so. "--" inside a comment is
+# not legal XML and is exactly how this got shipped once.
+python3 - "$ROOT" <<'PYXML'
+import sys, os, glob
+import xml.etree.ElementTree as ET
+root = sys.argv[1]
+files = [os.path.join(root, "ims-service/AndroidManifest.xml")]
+files += sorted(glob.glob(os.path.join(root, "permissions/*.xml")))
+files += sorted(glob.glob(os.path.join(root, "rro/AndroidManifest.xml")))
+files += sorted(glob.glob(os.path.join(root, "rro-fw/AndroidManifest.xml")))
+files += sorted(glob.glob(os.path.join(root, "apn/*.xml")))
+bad = 0
+for f in files:
+    if not os.path.exists(f):
+        continue
+    try:
+        ET.parse(f)
+        print("ok   %s parses" % os.path.relpath(f, root))
+    except Exception as e:
+        print("FAIL %s: %s" % (os.path.relpath(f, root), e))
+        bad += 1
+if bad:
+    sys.exit(1)
+PYXML
+
 echo "== pani cell id"
 PANI_OUT="$ROOT/native/build/java-pani-host"
 mkdir -p "$PANI_OUT"
