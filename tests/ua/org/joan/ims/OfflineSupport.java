@@ -1,7 +1,12 @@
 package org.joan.ims;
 
 // Offline-only seams: no Android services, no audio, no carrier network.
-class JoanTrace { static void note(String s) {} }
+class JoanTrace {
+    static final java.util.concurrent.LinkedBlockingQueue<String> notes =
+            new java.util.concurrent.LinkedBlockingQueue<>();
+    static void note(String s) { notes.offer(s); }
+    static String build() { return "offline-test"; }
+}
 class JoanImsDiagnostics {
     static void noteAttemptContext() {}
     static String attemptContextLine() { return "IMS attempt listener=not_started network={unobserved} data={unobserved}"; }

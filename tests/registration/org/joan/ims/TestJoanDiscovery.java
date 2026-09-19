@@ -156,8 +156,13 @@ public class TestJoanDiscovery {
                 "and the algorithm parameter");
         check(JoanSipBuilder.pcscfSipPort() == 5060,
                 "and the P-CSCF port returns to the default");
-        check(JoanSipBuilder.registerExpires() == 600000,
-                "and the registration expiry");
+        /* 600, not 600000. The configured number is milliseconds; see
+         * plausibleExpiresSec. This assertion pinned the old behaviour and
+         * went red when that changed, in a suite run-host-tests.sh does
+         * not invoke -- so it stayed red across four tester builds and
+         * blocked a sibling's work before anyone noticed. */
+        check(JoanSipBuilder.registerExpires() == 600,
+                "and the registration expiry, in seconds");
 
         /* The platform's own value still outranks the vendor snapshot. */
         JoanDriver.applyCarrierProfile(none, "460", "02", 7200);

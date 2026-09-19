@@ -10,8 +10,16 @@ javac -cp "$SDK" -d "$OUT" \
     "$SRC/JoanSessionTimer.java" "$SRC/JoanRegInfo.java" \
  "$SRC/JoanSipCrypto.java" "$SRC/JoanSecAgree.java" \
  "$SRC/JoanAppRegister.java" "$SRC/JoanAka.java" "$SRC/JoanEfDir.java" "$SRC/JoanIsim.java" \
- "$SRC/JoanImsDiscovery.java" \
+ "$SRC/JoanImsDiscovery.java" "$SRC/JoanAccessInfo.java" \
+ "$SRC/JoanSipCapture.java" "$SRC/JoanSipRedact.java" \
  "$SRC/JoanCarrierProfile.java" "$SRC/JoanXfrmStats.java" tests/ua/org/joan/ims/*.java
+# Exercise the real sender, including Os.write's accepted-peer branch, on
+# memory-only sinks. Compile platform doubles AFTER the production classes,
+# and give them to this one test process only (never the APK or other suites).
+PLATFORM="$OUT/transport-platform"
+mkdir -p "$PLATFORM"
+javac -cp "$OUT:$SDK" -d "$PLATFORM" tests/ua/android/system/Os.java
+java -cp "$PLATFORM:$OUT:$SDK" org.joan.ims.TestJoanTransport
 java -cp "$OUT:$SDK" org.joan.ims.TestJoanUa
 java -cp "$OUT:$SDK" org.joan.ims.TestJoanXfrmStats
 java -cp "$OUT:$SDK" org.joan.ims.TestJoanMerge

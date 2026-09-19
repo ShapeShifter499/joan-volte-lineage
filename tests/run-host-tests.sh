@@ -26,6 +26,13 @@ echo "== carrier assets"
 "$ROOT/tests/carrier/run-carrier-tests.sh"
 "$ROOT/tests/installer/run-installer-tests.sh"
 
+# The UA suite was NOT run here, and that hole cost four tester builds.
+# A stale assertion on the registration expiry went red in alpha57 and
+# stayed red through alpha58, 62, 63 and 64 without anyone seeing it,
+# because the only gate being run was this file plus project-profile's
+# FAST check, and neither invoked it. It also blocked a sibling's work.
+"$ROOT/tests/run-ua-tests.sh"
+
 echo "== java sip/crypto (host javac)"
 JAVA_SRC="$ROOT/ims-service/src/org/joan/ims"
 JAVA_TEST="$ROOT/tests/java"
