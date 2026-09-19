@@ -1538,7 +1538,48 @@ final class JoanSipBuilder {
         }
         return new Reply(status, reason,
                 header(msg, "WWW-Authenticate"),
-                header(msg, "Security-Server"));
+                allSecurityServers(msg));
+    }
+
+    /**
+     * Every Security-Server mechanism the P-CSCF offered, as one value.
+     *
+     * <p>This read the FIRST header row only. RFC 3329 2.3.1 lets a
+     * server spread its mechanisms over several rows -- AOSP's ImsStack
+     * plainly expects that, storing them in an AStringArray and emitting
+     * one row per mechanism when it builds its own -- and taking row one
+     * broke the negotiation two ways at once. The mechanism was chosen
+     * from a truncated list, so a stronger offer further down was never
+     * considered and a card offering nothing supported in row one looked
+     * like a card offering nothing at all. And Security-Verify echoed
+     * only that row, where RFC 3329 wants the server's list returned
+     * whole so it can detect tampering; a P-CSCF comparing what it sent
+     * against what came back sees a mismatch.
+     *
+     * <p>Worse, it hid itself: the {@code offered=} field in the trace is
+     * built from this same truncated parse, so a log showing one
+     * mechanism could not be told apart from a log where we only ever
+     * looked at one.
+     *
+     * <p>RFC 3261 7.3.1 makes joining the rows with commas the same
+     * message, since a sec-mechanism list is comma-separated.
+     */
+    static String allSecurityServers(String msg) {
+        java.util.List<String> rows = headers(msg, "Security-Server");
+        if (rows.isEmpty()) {
+            return null;
+        }
+        StringBuilder b = new StringBuilder();
+        for (String r : rows) {
+            if (r == null || r.isEmpty()) {
+                continue;
+            }
+            if (b.length() > 0) {
+                b.append(", ");
+            }
+            b.append(r);
+        }
+        return b.length() == 0 ? null : b.toString();
     }
 
     static String extractNonce(String wwwAuth) {

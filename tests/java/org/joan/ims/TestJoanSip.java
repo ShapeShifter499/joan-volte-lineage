@@ -39,6 +39,7 @@ public final class TestJoanSip {
         testUeSpiPortConvention();
         testEfDir();
         testAuthAlgorithmGate();
+        testSecurityServerRows();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -53,6 +54,49 @@ public final class TestJoanSip {
             System.out.println("FAIL " + name);
             gFail++;
         }
+    }
+
+    /**
+     * A P-CSCF may spread its mechanisms over several Security-Server
+     * rows. Reading only the first chose from a truncated list AND
+     * echoed a partial Security-Verify, which RFC 3329 2.3.1 wants
+     * returned whole.
+     */
+    private static void testSecurityServerRows() {
+        String base = "SIP/2.0 401 Unauthorized\r\n"
+                + "Via: SIP/2.0/TCP [2001:db8::2]:38866\r\n"
+                + "WWW-Authenticate: Digest realm=\"ims.example\","
+                + " nonce=\"abcd\", algorithm=AKAv1-MD5\r\n";
+        String one = "Security-Server: ipsec-3gpp;alg=hmac-md5-96;"
+                + "ealg=null;prot=esp;mod=trans;spi-c=111;spi-s=222;"
+                + "port-c=5000;port-s=5001;q=0.1\r\n";
+        String two = "Security-Server: ipsec-3gpp;alg=hmac-sha-1-96;"
+                + "ealg=aes-cbc;prot=esp;mod=trans;spi-c=333;spi-s=444;"
+                + "port-c=6000;port-s=6001;q=0.9\r\n";
+
+        String split = base + one + two + "\r\n";
+        String got = JoanSipBuilder.allSecurityServers(split);
+        check(got != null && got.contains("hmac-md5-96")
+                        && got.contains("hmac-sha-1-96"),
+                "both Security-Server rows are collected, not just the first");
+        /* The stronger mechanism sits in the SECOND row with the higher
+         * q. Reading row one alone would have selected md5/null. */
+        JoanSecAgree best = JoanSecAgree.select(got);
+        check(best != null && best.alg.equals("hmac-sha-1-96")
+                        && best.ealg.equals("aes-cbc"),
+                "and the highest-q mechanism is chosen across rows");
+
+        /* One row carrying both, comma separated, must behave the same:
+         * RFC 3261 7.3.1 makes the two spellings one message. */
+        String folded = base + one.replace("q=0.1\r\n", "q=0.1, ")
+                + two.replaceFirst("Security-Server: ", "") + "\r\n";
+        JoanSecAgree f = JoanSecAgree.select(
+                JoanSipBuilder.allSecurityServers(folded));
+        check(f != null && f.alg.equals("hmac-sha-1-96"),
+                "a folded single row selects identically");
+
+        check(JoanSipBuilder.allSecurityServers(base + "\r\n") == null,
+                "a 401 with no Security-Server yields null, not empty");
     }
 
     /** The Authorization header line of a REGISTER, or "". */
