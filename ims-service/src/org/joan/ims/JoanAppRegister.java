@@ -886,6 +886,8 @@ final class JoanAppRegister {
                 if (!tcpReg2) {
                     sb.append("reg2send=").append(mine.portC).append("->")
                             .append(pcscfSec.portS).append(" tpt=udp ");
+                    JoanSipCapture.record("REG2 request (udp, protected)",
+                            reg2Udp);
                     JoanRegTransport.UdpResult ur = JoanRegTransport
                             .sendRecvUdp(sockC, sockS, pcscf, pcscfSec.portS,
                                     reg2Bytes, REG2_TIMEOUT_MS, reg2Udp);
@@ -896,6 +898,7 @@ final class JoanAppRegister {
                             sb.append(ur.stats.summary("reg2"));
                         }
                     }
+                    JoanSipCapture.record("REG2 response (udp, protected)", r2);
                     r2Identity = reg2Udp;
                 } else {
                     /* Same message, TCP Via. Stock reuses this client
@@ -909,6 +912,8 @@ final class JoanAppRegister {
                     sb.append("reg2send=").append(mine.portC).append("->")
                             .append(pcscfSec.portS).append(" tpt=tcp ");
                     try {
+                        JoanSipCapture.record("REG2 request (tcp, protected)",
+                                reg2Tcp);
                         JoanRegTransport.TcpResult tr = JoanRegTransport
                                 .sendRecvTcp(n.network, n.local, mine.portC,
                                         pcscf, pcscfSec.portS, tcpBytes,
@@ -916,6 +921,8 @@ final class JoanAppRegister {
                                         reg2Tcp);
                         r2 = tr.reply;
                         tcpKeep = tr.keep;
+                        JoanSipCapture.record("REG2 response (tcp, protected)",
+                                r2);
                     } catch (JoanRegTransport.TcpFail tf) {
                         sb.append("tcp_fail=").append(tf.phase);
                         Throwable cause = tf.getCause();
@@ -948,6 +955,9 @@ final class JoanAppRegister {
                                     + "(udp fallback off)";
                         }
                         sb.append("tpt=udp ");
+                        JoanSipCapture.record(
+                                "REG2 request (udp fallback, protected)",
+                                reg2Udp);
                         JoanRegTransport.UdpResult ur = JoanRegTransport
                                 .sendRecvUdp(sockC, sockS, pcscf,
                                         pcscfSec.portS, reg2Bytes,
@@ -959,6 +969,8 @@ final class JoanAppRegister {
                                 sb.append(ur.stats.summary("reg2"));
                             }
                         }
+                        JoanSipCapture.record(
+                                "REG2 response (udp fallback, protected)", r2);
                         r2Identity = reg2Udp;
                     }
                 }
@@ -1285,9 +1297,12 @@ final class JoanAppRegister {
         try {
             socket = source.open();
             phase = "send";
+            JoanSipCapture.record("REG1 request (udp)",
+                    new String(packet, StandardCharsets.US_ASCII));
             JoanRegTransport.UdpResult r = JoanRegTransport.sendRecvUdp(
                     socket, null, pcscf, JoanSipBuilder.pcscfSipPort(),
                     packet, timeoutMs, identity, stats);
+            JoanSipCapture.record("REG1 response (udp)", r.reply);
             String result = r.reply == null
                     ? "reg1_result=timeout FAIL: reg1 no matching final"
                     : "reg1_result=final ";
@@ -1315,10 +1330,12 @@ final class JoanAppRegister {
         byte[] packet = identity.getBytes(StandardCharsets.US_ASCII);
         String base = "reg1len=" + packet.length + " reg1_tpt=tcp ";
         try {
+            JoanSipCapture.record("REG1 request (tcp)", identity);
             JoanRegTransport.TcpResult tr = JoanRegTransport.sendRecvTcp(
                     n.network, n.local, JoanSipBuilder.REG1_PORT, pcscf,
                     JoanSipBuilder.pcscfSipPort(), packet, timeoutMs,
                     null, null, null, identity);
+            JoanSipCapture.record("REG1 response (tcp)", tr.reply);
             closeQuietly(tr.keep);
             return new Reg1Result(tr.reply,
                     base + "reg1_result=final ", null);

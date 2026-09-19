@@ -436,7 +436,27 @@ Useful rows:
 `last_register` is counts, status codes and algorithm names: P-CSCFs
 advertised/tried, reg1 result, AKA algorithm, cipher/integrity, RES/CK/IK
 *lengths*, whether IPsec SAs applied, `tpt=udp|tcp`, `tcp_fail=…`,
-retransmit counts, reg2 status. `ims_diag_data` is telephony’s view of
+retransmit counts, reg2 status.
+
+**1b. When the status code alone is not enough**, two files are readable
+over plain ADB with **no root** (they live in device-protected storage,
+which is why earlier builds needed it):
+
+```
+adb shell content read --uri content://org.joan.ims.state/trace   > joan-trace.log
+adb shell content read --uri content://org.joan.ims.state/capture > joan-capture.log
+```
+
+`joan-trace.log` is the running narrative (`trace.1` is the previous one,
+once it has rotated). `joan-capture.log` is the **last REGISTER exchange in
+full** — the messages as sent and received, which is the only way to
+explain an answer like `reg2=500` that names no field.
+
+The capture redacts `nonce`, `cnonce`, `response`, `rspauth`, `nextnonce`
+and `auts`, keeping their lengths. It does **not** redact your IMS
+identities (IMPI/IMPU), your Call-ID or your P-CSCF address, because those
+are what the remaining questions are about. Its first lines say so. Read it
+before you send it, and prefer a direct message over a public issue. `ims_diag_data` is telephony’s view of
 the IMS data call (configured vs negotiated protocol, cause, address
 families). Empty P-CSCF / `PDN advertised none` is a discovery clue, **not**
 proof the SIM lacks VoLTE provisioning.

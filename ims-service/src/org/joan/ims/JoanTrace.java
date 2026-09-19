@@ -27,6 +27,11 @@ final class JoanTrace {
     private JoanTrace() {}
 
     static void init(Context ctx) {
+        // The capture shares this lifecycle deliberately: it is written
+        // from the register path, which can run without the provider ever
+        // being queried, and a capture file that was never opened is
+        // indistinguishable from a registration that never happened.
+        JoanSipCapture.init(ctx);
         synchronized (LOCK) {
             if (sFile != null) {
                 return;
@@ -110,6 +115,11 @@ final class JoanTrace {
                     ? new File(sFile.getParentFile(), sFile.getName() + ".1")
                     : sFile;
         }
+    }
+
+    /** The build string the trace stamps, for anything else that labels a file. */
+    static String build() {
+        return sLastBuild;
     }
 
     static String akaStage() {

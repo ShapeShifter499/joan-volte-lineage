@@ -59,6 +59,14 @@ javac -cp "$SDK_JAR" -d "$RTT_OUT" \
     "$JAVA_TEST/org/joan/ims/TestJoanRtt.java"
 java -cp "$RTT_OUT:$SDK_JAR" org.joan.ims.TestJoanRtt
 
+echo "== sip capture redaction"
+REDACT_OUT="$ROOT/native/build/java-redact-host"
+mkdir -p "$REDACT_OUT"
+javac -d "$REDACT_OUT" \
+    "$JAVA_SRC/JoanSipRedact.java" \
+    "$JAVA_TEST/org/joan/ims/TestJoanSipCapture.java"
+java -cp "$REDACT_OUT" org.joan.ims.TestJoanSipCapture
+
 echo "== viettel volte carrier gate"
 SDK_JAR=${ANDROID_SDK:-$HOME/Android/Sdk}/platforms/android-36/android.jar
 GATE_OUT="$ROOT/native/build/java-gate-host"

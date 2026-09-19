@@ -178,6 +178,11 @@ public class JoanStateProvider extends ContentProvider {
      *
      *   adb shell content read --uri content://org.joan.ims.state/trace
      *   adb shell content read --uri content://org.joan.ims.state/trace.1
+     *   adb shell content read --uri content://org.joan.ims.state/capture
+     *
+     * The capture is the last REGISTER exchange in full, redacted of
+     * authentication material; the trace is the running narrative. They are
+     * separate files so a tester can send one without the other.
      *
      * enforceCaller keeps this to the platform, root and the shell, so
      * opening the file up to adb does not open it to installed apps. It is
@@ -196,18 +201,25 @@ public class JoanStateProvider extends ContentProvider {
         }
         String seg = uri == null ? null : uri.getLastPathSegment();
         boolean rotated = "trace.1".equals(seg);
-        if (!rotated && !"trace".equals(seg)) {
-            throw new FileNotFoundException("no such trace: " + seg);
+        boolean capture = "capture".equals(seg);
+        if (!rotated && !capture && !"trace".equals(seg)) {
+            throw new FileNotFoundException("no such file: " + seg);
         }
-        File f = JoanTrace.file(ctx, rotated);
+        File f = capture ? JoanSipCapture.file(ctx, false)
+                : JoanTrace.file(ctx, rotated);
         if (f == null || !f.exists()) {
-            // Say which one is missing. The rotated file only exists once
-            // the live one has passed its size limit, and a tester reading
-            // "not found" for trace.1 on a fresh install should not read
-            // that as the install being broken.
+            // Say which one is missing, and why it might legitimately not
+            // be there. The rotated trace appears only once the live one
+            // passes its size limit, and the capture only once a REGISTER
+            // has been attempted; a tester reading "not found" on a fresh
+            // install should not read that as a broken install.
+            String what = capture
+                    ? "no capture yet; it is written when a REGISTER is attempted"
+                    : rotated
+                            ? "no rotated trace yet; the live trace has not filled up"
+                            : "no trace yet";
             throw new FileNotFoundException(
-                    (rotated ? "no rotated trace yet" : "no trace yet")
-                            + "; query the state uri first to start the driver");
+                    what + "; query the state uri first to start the driver");
         }
         return ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY);
     }
