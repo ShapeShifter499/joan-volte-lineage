@@ -43,6 +43,63 @@ tag: `0xDB` is RES/CK/IK, `0xDC` is AUTS, anything else is a MAC failure.
 Ours collapsed every non-`0xDB` answer into `FAIL: aka parse`, so a card
 asking for an SQN resync read as a broken parser.
 
+### The same file also carries the qop rule (2026-09-19)
+
+`SipAuHelper.cpp` was read once for the AUTS rule below and the rule
+eighteen lines further down was missed, so it is worth stating plainly:
+**a challenge that offers no `qop` is answered with no `qop`,** and the
+reference stack carries that absence through four separate places.
+
+- parse: `SetQop(GetParameter(pSipHdr, STR_QOP))`, then quotes are
+  stripped only `if (strQop.StartsWith(CHAR_DQUOT))` — so a bare
+  unquoted token is accepted as readily as a quoted one;
+- select: `if (pChallenge->GetQop().GetLength() > 0)` guards the whole
+  block, and the nonce-count and cnonce are generated *inside* it, so no
+  offer means none of the three exist. `auth` wins over `auth-int`
+  wherever it appears in the list (`auth-int` is taken only
+  `if (m_strQop.GetLength() == 0)`);
+- encode: `if (objResponse.m_strQop.GetLength() > 0)` guards the `qop`
+  parameter and the nonce-count has its own identical guard;
+- digest: `ImsDigest_CalculateResponse`'s own signature documents the
+  empty case — `IN const AString& strQop, // qop-value : "", "auth",
+  "auth-int"` — and `if (strQop.GetLength() > 0)` selects between
+  RFC 2617's `MD5(HA1:nonce:nc:cnonce:qop:HA2)` and RFC 2069's
+  `MD5(HA1:nonce:HA2)`.
+
+joan had three places that turned "none offered" into `"auth"` and sent
+`qop=auth, nc, cnonce` to a Digi.Mobil RO challenge carrying none of
+them, which is a different digest and a header the RFC forbids. Fixed
+2026-09-19; see the qop tests in TestJoanSip.
+
+LG's binary is the same code. `libims.lge.so` exports
+`SIPAuHelperPrivate::FormCredentials` — AOSP's class and method, with
+LG's capitalisation of SIP — and `IMSDigest_CalculateResponse` with the
+same nine parameters in the same order, including the `strQop` slot.
+Both are import thunks in that library, so **their bodies were not read**;
+the claim here is a match of class, method and contract on top of the
+already-established finding that LG's AoS is AOSP's Aos. The only bare
+`"auth"` string in the binary belongs to `IPSec_CreateSA_FormBuffer`,
+which is the ESP algorithm and not the digest.
+
+joan keeps one deliberate divergence: a challenge offering only
+`auth-int` yields no qop rather than `auth-int`, because our HA2 hashes
+no entity body. The reference stack implements auth-int properly.
+
+### P-Access-Network-Info always carries the cell id (2026-09-19, OPEN)
+
+`platform/util/AccessNetworkInfoFormatter.cpp` builds the header as the
+access type *plus* `utran-cell-id-3gpp=`, and `GetAccessInfo` has no
+branch that emits nothing: a supplied cell string is used, else a cached
+`acUTRAN_CELL_ID`, else the PLMN/TAC/CellId are formatted by hand, with
+separate 2-digit and 3-digit MNC spellings.
+
+joan sends the bare `P-Access-Network-Info: 3GPP-E-UTRAN-FDD`. That is a
+real divergence from both reference stacks in the header a core reads for
+location, and it is **not fixed** — it needs the serving cell's
+MCC/MNC/TAC/ECI, which is a device-side change this bench cannot verify
+alone. It is the leading remaining candidate on the Digi.Mobil RO 500
+after qop.
+
 `native/libimsstack/engine/sipcore/SipAuHelper.cpp` carries the two rules
 the resync REGISTER needs, for when it is written:
 
