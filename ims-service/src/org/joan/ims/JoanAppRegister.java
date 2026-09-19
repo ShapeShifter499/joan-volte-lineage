@@ -81,6 +81,24 @@ final class JoanAppRegister {
     private static volatile boolean sLastDualFamily;
 
     /** Supersede any in-flight attempt (network lost / state change). */
+    /* The carrier's retry_pcscf_count: extra attempts against the same
+     * P-CSCF before moving to the next. 0 in 133 of 136 profiles, which
+     * is one attempt each -- what joan already did. */
+    private static volatile int sPcscfRetryCount;
+
+    /* Where the next cycle starts in the P-CSCF list, and the list size
+     * it refers to. A different size means a different list. */
+    private static volatile int sPcscfCursor;
+    private static volatile int sPcscfCursorSize;
+
+    static void setPcscfRetryCount(int count) {
+        sPcscfRetryCount = Math.max(0, count);
+    }
+
+    static int pcscfRetryCount() {
+        return sPcscfRetryCount;
+    }
+
     static void stop() {
         synchronized (EPOCH_LOCK) {
             sEpoch++;
@@ -277,7 +295,20 @@ final class JoanAppRegister {
         int tried = 0;
         boolean redirected = false;
         String last = null;
-        for (InetAddress cand : n.pcscfs) {
+        final int pcscfCount = n.pcscfs.size();
+        if (sPcscfCursorSize != pcscfCount) {
+            sPcscfCursor = 0;
+            sPcscfCursorSize = pcscfCount;
+        }
+        final int start = JoanRegLifecycle.pcscfStartIndex(sPcscfCursor,
+                pcscfCount);
+        /* Each node gets 1 + retry_pcscf_count attempts before the walk
+         * moves on; the vendor default of 0 is the single attempt joan
+         * already made. */
+        final int perNode = 1 + pcscfRetryCount();
+        for (int slot = 0; slot < pcscfCount * perNode; slot++) {
+            InetAddress cand = n.pcscfs.get(
+                    (start + (slot / perNode)) % pcscfCount);
             tried++;
             if (superseded(epoch)) {
                 sb.append("pcscf_tried=").append(tried).append(' ');
@@ -330,6 +361,11 @@ final class JoanAppRegister {
                 sb.append("pcscf_tried=").append(tried).append(' ');
                 return sb.append(one).toString();
             }
+        }
+        /* Every node failed: start the next cycle on the one after the
+         * node this cycle started with. */
+        if (pcscfCount > 0) {
+            sPcscfCursor = (start + 1) % pcscfCount;
         }
         sb.append("pcscf_tried=").append(tried).append(' ');
         if (last == null) {
@@ -2183,6 +2219,72 @@ final class JoanAppRegister {
 
         /** How long a READY SIM may owe us a PLMN before we go on. */
         static final long PLMN_WAIT_BACKSTOP_MS = 30000;
+
+        /**
+         * Where in the P-CSCF list this attempt should start.
+         *
+         * <p>{@code AosPcscf::GetNextPcscfIndex} walks forward from the
+         * node it used last and never returns to the front unless the
+         * carrier's retry policy is the circular one; it also skips a
+         * node marked unavailable. joan restarted at the first P-CSCF on
+         * every cycle, so a node that fails is the one hammered hardest
+         * and a second node is only ever the fallback.
+         *
+         * <p>Rotating the starting point keeps every node in the walk --
+         * joan tries them all in a cycle, which is more thorough than
+         * stopping at the end of the list -- while making the next cycle
+         * begin somewhere else. A list that changes size resets it,
+         * because the index no longer refers to the same node.
+         */
+        static int pcscfStartIndex(int cursor, int size) {
+            if (size <= 0) {
+                return 0;
+            }
+            int c = cursor % size;
+            return c < 0 ? c + size : c;
+        }
+
+        /**
+         * The delay before the next REGISTER attempt, from the carrier's
+         * own retry policy where it has one.
+         *
+         * <p>The vendor configuration carries three pieces of this and
+         * joan read none of them: {@code retry_interval}, an explicit
+         * curve in seconds -- T-Mobile's is 120,240,480,960,1920,3840,
+         * 7200 -- plus {@code retry_base_time} (30) and
+         * {@code retry_max_time} (1800) for the doubling form. joan used
+         * its own 60s doubling to a 15 minute ceiling, which is neither.
+         *
+         * <p>An explicit curve wins, clamping to its last entry once the
+         * steps run out, because that is what the carrier actually asked
+         * for. A base time doubles from there and is capped by the max
+         * time when one is given. With neither, the caller's own backoff
+         * stands, so a carrier joan holds no profile for keeps exactly
+         * the behaviour it has today.
+         *
+         * <p>None of this outranks a Retry-After: the network naming a
+         * delay is still the governing answer, handled before this is
+         * reached.
+         */
+        static long regBackoffMs(int step, int baseSec, int maxSec,
+                                 int[] intervals, long fallbackMs) {
+            int n = step < 0 ? 0 : step;
+            if (intervals != null && intervals.length > 0) {
+                int at = n < intervals.length ? n : intervals.length - 1;
+                return intervals[at] * 1000L;
+            }
+            if (baseSec > 0) {
+                long secs = baseSec;
+                for (int i = 0; i < n && secs < Integer.MAX_VALUE / 2; i++) {
+                    secs *= 2;
+                }
+                if (maxSec > 0 && secs > maxSec) {
+                    secs = maxSec;
+                }
+                return secs * 1000L;
+            }
+            return fallbackMs;
+        }
 
         /**
          * What is left of a Retry-After the network named, in ms, or 0.

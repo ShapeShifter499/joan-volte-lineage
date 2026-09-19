@@ -98,6 +98,39 @@ public final class JoanCarrierProfile {
      */
     public final boolean supportsGruu;
     /**
+     * The gap between the protected client and server ports,
+     * {@code aos_reg_0_ipsec_port_interval}. joan hardcoded 1000, which
+     * is what T-Mobile's shipping configuration carries -- verified in
+     * the raw LG XML -- but it is a vendor knob, not a constant.
+     */
+    public final int ipsecPortInterval;
+    /**
+     * How many times the same P-CSCF is retried before moving to the
+     * next, {@code aos_reg_0_retry_pcscf_count}. 0 in 133 of 136
+     * profiles, which is one attempt each and what joan already did.
+     */
+    public final int retryPcscfCount;
+    /** {@code aos_condition_0_isim_index_for_pcscf}; 1 everywhere seen. */
+    public final int isimIndexForPcscf;
+    /** {@code aos_condition_0_multiple_discovery_scheme}; 2 everywhere. */
+    public final int multipleDiscoveryScheme;
+    /** {@code aos_condition_0_pcscf_changed_control}; 0 everywhere. */
+    public final int pcscfChangedControl;
+    /** {@code aos_reg_0_retry_base_time}, seconds; 30 where carried. */
+    public final int regRetryBaseTime;
+    /** {@code aos_reg_0_retry_max_time}, seconds; 1800 where carried. */
+    public final int regRetryMaxTime;
+    /**
+     * {@code aos_reg_0_retry_interval}, the carrier's own backoff curve
+     * in seconds, or empty. T-Mobile's is 120,240,480,960,1920,3840,7200
+     * -- verified against the raw LG XML, which matches what we
+     * distilled. 70 of 136 profiles carry a value that does not parse as
+     * a doubling curve and whose source could not be checked here; those
+     * simply yield fewer usable steps rather than nonsense, because only
+     * positive entries are kept.
+     */
+    public final int[] regRetryIntervals;
+    /**
      * Ut/XCAP: where this carrier keeps the subscriber's supplementary
      * services, and whether it expects them controlled that way.
      *
@@ -129,6 +162,12 @@ public final class JoanCarrierProfile {
                                boolean sendAuthAlgorithm,
                                boolean routeHeaderInReg,
                                boolean supportsGruu,
+                               int ipsecPortInterval, int retryPcscfCount,
+                               int isimIndexForPcscf,
+                               int multipleDiscoveryScheme,
+                               int pcscfChangedControl,
+                               int regRetryBaseTime, int regRetryMaxTime,
+                               int[] regRetryIntervals,
                                String xcapServer, int xcapPort,
                                boolean xcapTls, String xcapPdn,
                                String utControl,
@@ -154,6 +193,16 @@ public final class JoanCarrierProfile {
         this.sendAuthAlgorithm = sendAuthAlgorithm;
         this.routeHeaderInReg = routeHeaderInReg;
         this.supportsGruu = supportsGruu;
+        this.ipsecPortInterval = ipsecPortInterval > 0
+                ? ipsecPortInterval : DEFAULT_IPSEC_PORT_INTERVAL;
+        this.retryPcscfCount = Math.max(0, retryPcscfCount);
+        this.isimIndexForPcscf = isimIndexForPcscf > 0 ? isimIndexForPcscf : 1;
+        this.multipleDiscoveryScheme = multipleDiscoveryScheme;
+        this.pcscfChangedControl = pcscfChangedControl;
+        this.regRetryBaseTime = Math.max(0, regRetryBaseTime);
+        this.regRetryMaxTime = Math.max(0, regRetryMaxTime);
+        this.regRetryIntervals = regRetryIntervals == null
+                ? new int[0] : regRetryIntervals.clone();
         this.xcapServer = xcapServer;
         this.xcapPort = xcapPort;
         this.xcapTls = xcapTls;
@@ -211,7 +260,8 @@ public final class JoanCarrierProfile {
                 pad3(mnc), mcc);
         return new JoanCarrierProfile(factory, true, true, false,
                 2, 1, true, 183, -1, 0, 0, 0, null, 0, true, -1, true,
-                false, false, "", 0, false, "", "", "3gpp-default");
+                false, false, DEFAULT_IPSEC_PORT_INTERVAL, 0, 1, 2, 0,
+                0, 0, null, "", 0, false, "", "", "3gpp-default");
     }
 
     /**
@@ -231,6 +281,41 @@ public final class JoanCarrierProfile {
      * Route on a REGISTER in {@code RegParameter::FormHeaders}.
      */
     private static final long SIP_FEATURE_ROUTE_HEADER_IN_REG = 0x00100000L;
+
+    /**
+     * The protected client/server port gap when a profile carries none.
+     * T-Mobile's shipping configuration says 1000, which is the value
+     * joan had hardcoded.
+     */
+    static final int DEFAULT_IPSEC_PORT_INTERVAL = 1000;
+
+    /**
+     * A comma-separated list of seconds, as the vendor writes retry
+     * curves. Only positive entries are kept: several profiles carry
+     * groups of zeros that are not usable delays, and a curve of
+     * whatever did parse is better than refusing the whole field.
+     */
+    static int[] parseSeconds(String csv) {
+        if (csv == null || csv.isEmpty()) {
+            return new int[0];
+        }
+        String[] parts = csv.split(",");
+        int[] tmp = new int[parts.length];
+        int n = 0;
+        for (String part : parts) {
+            try {
+                int v = Integer.parseInt(part.trim());
+                if (v > 0) {
+                    tmp[n++] = v;
+                }
+            } catch (NumberFormatException e) {
+                /* Not a number is not a delay. */
+            }
+        }
+        int[] out = new int[n];
+        System.arraycopy(tmp, 0, out, 0, n);
+        return out;
+    }
 
     /** {@code common_sip_features} bit 1, AOSP's SIP_FEATURE_CAPS_GRUU. */
     private static final long SIP_FEATURE_GRUU = 0x00000002L;
@@ -382,6 +467,15 @@ public final class JoanCarrierProfile {
                                 SIP_FEATURE_ROUTE_HEADER_IN_REG),
                         hasSipFeature(o.optString("sip_features", ""),
                                 SIP_FEATURE_GRUU),
+                        o.optInt("ipsec_port_interval",
+                                DEFAULT_IPSEC_PORT_INTERVAL),
+                        o.optInt("retry_pcscf_count", 0),
+                        o.optInt("isim_index_for_pcscf", 1),
+                        o.optInt("multiple_discovery_scheme", 2),
+                        o.optInt("pcscf_changed_control", 0),
+                        o.optInt("reg_retry_base_time", 0),
+                        o.optInt("reg_retry_max_time", 0),
+                        parseSeconds(o.optString("reg_retry_interval", "")),
                         o.optString("xcap_server", ""),
                         o.optInt("xcap_port", 0),
                         o.optBoolean("xcap_tls", false),

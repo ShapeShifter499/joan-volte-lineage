@@ -571,6 +571,24 @@ final class JoanSipBuilder {
         return sSupportsGruu;
     }
 
+    /**
+     * Adopt the carrier's {@code ipsec_port_interval}: the gap between
+     * the protected client port and the protected server port.
+     *
+     * <p>joan had 1000 hardcoded. That happens to be what T-Mobile's
+     * shipping configuration carries -- read out of the raw LG XML, not
+     * inferred -- but the vendor treats it as a per-carrier value and we
+     * had no way to honour a different one.
+     */
+    static void setIpsecPortInterval(int interval) {
+        Params.sPortsInterval = interval > 0
+                ? interval : Params.PORTS_INTERVAL;
+    }
+
+    static int ipsecPortInterval() {
+        return Params.sPortsInterval;
+    }
+
     /* The platform's SIP MTU per family, 0 = unset. */
     private static volatile int sPlatMtuV4;
     private static volatile int sPlatMtuV6;
@@ -708,7 +726,12 @@ final class JoanSipBuilder {
         private static final long SPI_CEILING = 0x7ffffffeL;
         private static final int UE_PORT_LOWER = 38001;
         private static final int UE_PORT_UPPER = 39000;
+        /* The vendor's own default; aos_reg_0_ipsec_port_interval in
+         * T-Mobile's shipping XML is exactly this. Carrier-settable
+         * because LG makes it settable, not because anything has been
+         * seen to differ. */
         private static final int PORTS_INTERVAL = 1000;
+        private static volatile int sPortsInterval = PORTS_INTERVAL;
 
         /** CreateUeSpi()'s counter: an unsigned 32-bit value in a long. */
         private static long sSpi = -1L;
@@ -751,7 +774,7 @@ final class JoanSipBuilder {
             int portC = UE_PORT_LOWER
                     + rng.nextInt(UE_PORT_UPPER - UE_PORT_LOWER + 1);
             return new Params(spiC, spiC + 1L, portC,
-                    portC + PORTS_INTERVAL);
+                    portC + sPortsInterval);
         }
     }
 

@@ -43,6 +43,7 @@ TABLES = {
         "aos_reg_0_ipsec": "ipsec",
         "aos_reg_0_ipsec_algs": "ipsec_algs",
         "aos_reg_0_ipsec_spi_3gpp": "ipsec_spi_3gpp",
+        "aos_reg_0_ipsec_port_interval": "ipsec_port_interval",
         "aos_reg_0_refresh_3gpp_standard": "refresh_3gpp_standard",
         "aos_reg_0_retry_pcscf_count": "retry_pcscf_count",
         "aos_reg_0_dscp_value": "dscp_value",

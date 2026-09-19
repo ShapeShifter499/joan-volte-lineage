@@ -58,6 +58,20 @@ final class JoanDriver {
     private static volatile String sLastRegister = "";
     /** Current failed-REGISTER backoff; static so wake-ups can reset it. */
     private static volatile long sRegisterBackoffMs = REG_RETRY_MIN_MS;
+    /* The carrier's own retry curve, read from the profile. Empty and
+     * zero mean joan's own doubling still applies. */
+    private static volatile int[] sRetryIntervals = new int[0];
+    private static volatile int sRetryBaseSec;
+    private static volatile int sRetryMaxSec;
+    /** How far along the carrier's curve the current failure run is. */
+    private static volatile int sRetryStep;
+
+    /** Adopt the carrier's registration retry policy. */
+    static void setRegRetryPolicy(int baseSec, int maxSec, int[] intervals) {
+        sRetryBaseSec = baseSec;
+        sRetryMaxSec = maxSec;
+        sRetryIntervals = intervals == null ? new int[0] : intervals;
+    }
     /** A PDN loss was observed; the next availability poke must not trust
      * the current registration state (see JoanRegLifecycle.reacquireAfterLoss). */
     private static volatile boolean sStaleAfterLoss;
@@ -91,6 +105,7 @@ final class JoanDriver {
             sStaleAfterLoss = true;
             JoanAppRegister.stop();
             sRegisterBackoffMs = REG_RETRY_MIN_MS;
+                sRetryStep = 0;
         }
         if (JoanAppRegister.inProgress()) {
             return;
@@ -106,6 +121,7 @@ final class JoanDriver {
              * whether a call is up. */
             sStaleAfterLoss = false;
             sRegisterBackoffMs = REG_RETRY_MIN_MS;
+                sRetryStep = 0;
             wake();
             JoanSipUa.release();
             JoanTrace.note("IMS local address changed; re-registering");
@@ -119,6 +135,7 @@ final class JoanDriver {
                 /* Wake first so a hiccup in the release/broadcast path
                  * can never leave the driver sleeping on stale state. */
                 sRegisterBackoffMs = REG_RETRY_MIN_MS;
+                sRetryStep = 0;
                 wake();
                 if (ua) {
                     /* The binding predates the loss: re-register fresh
@@ -163,6 +180,7 @@ final class JoanDriver {
                 JoanTrace.note("IMS network lost; cleared stale registration");
             } else if (!ua) {
                 sRegisterBackoffMs = REG_RETRY_MIN_MS;
+                sRetryStep = 0;
                 wake();
             }
             return;
@@ -176,6 +194,7 @@ final class JoanDriver {
         sRetryPlmn = null;
         if (!ua) {
             sRegisterBackoffMs = REG_RETRY_MIN_MS;
+                sRetryStep = 0;
             wake();
         }
     }
@@ -252,6 +271,7 @@ final class JoanDriver {
                     logState((d.quietIdle ? "quiet-idle: " : "waiting: ")
                             + d.reason);
                     sRegisterBackoffMs = REG_RETRY_MIN_MS;
+                sRetryStep = 0;
                     Thread.sleep(d.sleepMs);
                     continue;
                 }
@@ -298,6 +318,7 @@ final class JoanDriver {
                 if (ok && JoanSipUa.isRegistered()) {
                     JoanRegistration.setRegistered(true, c.pcscf);
                     sRegisterBackoffMs = REG_RETRY_MIN_MS;
+                sRetryStep = 0;
                     sRetryNotBeforeMs = 0L;
                     sRetryPlmn = null;
                     /* The next pass reads the granted lifetime and
@@ -342,8 +363,15 @@ final class JoanDriver {
                     logState("app REGISTER failed; network asked for "
                             + (waitMs / 1000) + "s");
                 } else {
+                    boolean carrier = sRetryIntervals.length > 0
+                            || sRetryBaseSec > 0;
+                    waitMs = JoanAppRegister.JoanRegLifecycle.regBackoffMs(
+                            sRetryStep, sRetryBaseSec, sRetryMaxSec,
+                            sRetryIntervals, sRegisterBackoffMs);
                     logState("app REGISTER failed; backoff "
-                            + (sRegisterBackoffMs / 1000) + "s");
+                            + (waitMs / 1000) + "s"
+                            + (carrier ? " (carrier)" : ""));
+                    sRetryStep++;
                     sRegisterBackoffMs = Math.min(REG_RETRY_MAX_MS,
                             sRegisterBackoffMs * 2);
                 }
@@ -779,6 +807,10 @@ final class JoanDriver {
         JoanSipBuilder.setSendAuthAlgorithm(cp.sendAuthAlgorithm);
         JoanSipBuilder.setRouteHeaderInReg(cp.routeHeaderInReg);
         JoanSipBuilder.setSupportsGruu(cp.supportsGruu);
+        JoanSipBuilder.setIpsecPortInterval(cp.ipsecPortInterval);
+        JoanAppRegister.setPcscfRetryCount(cp.retryPcscfCount);
+        setRegRetryPolicy(cp.regRetryBaseTime, cp.regRetryMaxTime,
+                cp.regRetryIntervals);
         JoanSipBuilder.setCarrierRegisterExpires(
                 platformExpirySec > 0 ? platformExpirySec
                         : cp.regExpiration);
@@ -797,6 +829,25 @@ final class JoanDriver {
                 + (JoanSipBuilder.routeHeaderInReg() ? "yes" : "no")
                 + " gruu="
                 + (JoanSipBuilder.supportsGruu() ? "yes" : "no")
+                /* The P-CSCF knobs the vendor carries. Two of them drive
+                 * behaviour: pcscf_port and retry_pcscf_count. The other
+                 * two are recorded rather than acted on, deliberately.
+                 * isim_index_for_pcscf selects one EF_PCSCF record and
+                 * joan reads every record, which is a superset -- obeying
+                 * the index would drop addresses we currently find.
+                 * multiple_discovery_scheme and pcscf_changed_control are
+                 * 2 and 0 in all 136 shipped profiles, and joan's
+                 * discovery order already matches the reference default
+                 * (PCO first, then the card). They are in the trace so
+                 * they stop being invisible if a profile ever differs. */
+                + " pcscf{retry=" + cp.retryPcscfCount
+                + " isim_idx=" + cp.isimIndexForPcscf
+                + " disc=" + cp.multipleDiscoveryScheme
+                + " chg=" + cp.pcscfChangedControl
+                + " port_iv=" + JoanSipBuilder.ipsecPortInterval() + "}"
+                + " retry{base=" + cp.regRetryBaseTime
+                + " max=" + cp.regRetryMaxTime
+                + " steps=" + cp.regRetryIntervals.length + "}"
                 + " src=" + cp.srcKey;
         return cs;
     }

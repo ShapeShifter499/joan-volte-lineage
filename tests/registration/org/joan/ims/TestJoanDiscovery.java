@@ -221,6 +221,71 @@ public class TestJoanDiscovery {
                         null),
                 "and neither does an unknown current PLMN");
 
+        /* The carrier's own retry curve. The vendor carries three parts
+         * of this and joan read none: retry_interval (T-Mobile's is
+         * 120,240,480,960,1920,3840,7200, confirmed against the raw LG
+         * XML), retry_base_time 30 and retry_max_time 1800. */
+        int[] tmo = {120, 240, 480, 960, 1920, 3840, 7200};
+        check(JoanAppRegister.JoanRegLifecycle.regBackoffMs(0, 30, 1800, tmo,
+                        99_000L) == 120_000L,
+                "an explicit curve is used from its first step");
+        check(JoanAppRegister.JoanRegLifecycle.regBackoffMs(4, 30, 1800, tmo,
+                        99_000L) == 1_920_000L,
+                "and walks the curve as failures repeat");
+        check(JoanAppRegister.JoanRegLifecycle.regBackoffMs(99, 30, 1800, tmo,
+                        99_000L) == 7_200_000L,
+                "past the end it clamps to the last step, not past it");
+        check(JoanAppRegister.JoanRegLifecycle.regBackoffMs(0, 30, 1800,
+                        new int[0], 99_000L) == 30_000L,
+                "with no curve the base time starts the doubling");
+        check(JoanAppRegister.JoanRegLifecycle.regBackoffMs(3, 30, 1800,
+                        new int[0], 99_000L) == 240_000L,
+                "which doubles per step");
+        check(JoanAppRegister.JoanRegLifecycle.regBackoffMs(20, 30, 1800,
+                        new int[0], 99_000L) == 1_800_000L,
+                "and is capped by the carrier's max time");
+        check(JoanAppRegister.JoanRegLifecycle.regBackoffMs(2, 0, 0,
+                        new int[0], 99_000L) == 99_000L,
+                "a carrier with no policy leaves joan's own backoff alone");
+        check(JoanAppRegister.JoanRegLifecycle.regBackoffMs(-1, 0, 0, null,
+                        99_000L) == 99_000L,
+                "a negative step and a null curve are not a crash");
+
+        /* Vendor retry curves are comma-separated seconds, and several
+         * profiles carry groups of zeros that are not delays. */
+        check(JoanCarrierProfile.parseSeconds("120,240,480").length == 3,
+                "a clean curve parses whole");
+        check(JoanCarrierProfile.parseSeconds(
+                        "120,240,480,960,192,000,000,000").length == 5,
+                "zero groups are dropped rather than poisoning the curve");
+        check(JoanCarrierProfile.parseSeconds("").length == 0
+                        && JoanCarrierProfile.parseSeconds(null).length == 0,
+                "an absent curve is empty, not an exception");
+        check(JoanCarrierProfile.parseSeconds("12,,x,-4,9").length == 2,
+                "blanks, words and negatives are not delays");
+
+        /* P-CSCF rotation: the reference walks forward from the node it
+         * used last rather than restarting at the front every time. */
+        check(JoanAppRegister.JoanRegLifecycle.pcscfStartIndex(0, 2) == 0
+                        && JoanAppRegister.JoanRegLifecycle
+                                .pcscfStartIndex(1, 2) == 1,
+                "the cursor names the node the next cycle starts on");
+        check(JoanAppRegister.JoanRegLifecycle.pcscfStartIndex(2, 2) == 0,
+                "and wraps around the list");
+        check(JoanAppRegister.JoanRegLifecycle.pcscfStartIndex(-1, 3) == 2,
+                "a negative cursor still lands inside the list");
+        check(JoanAppRegister.JoanRegLifecycle.pcscfStartIndex(5, 0) == 0,
+                "an empty list starts nowhere rather than dividing by zero");
+
+        /* The protected port gap is the vendor's, not ours. */
+        JoanSipBuilder.setIpsecPortInterval(0);
+        check(JoanSipBuilder.ipsecPortInterval() == 1000,
+                "no configured interval keeps the vendor default of 1000");
+        JoanSipBuilder.setIpsecPortInterval(1500);
+        check(JoanSipBuilder.ipsecPortInterval() == 1500,
+                "a carrier interval is adopted");
+        JoanSipBuilder.setIpsecPortInterval(1000);
+
         System.out.println("DISCOVERY_CHECKS=" + checks + " FAILURES=0");
     }
 }
