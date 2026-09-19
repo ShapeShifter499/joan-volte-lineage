@@ -92,6 +92,36 @@ for f in files:
     except Exception as e:
         print("FAIL %s: %s" % (os.path.relpath(f, root), e))
         bad += 1
+
+# A requested signature|privileged permission with no privapp-permissions
+# entry is a FATAL BOOT ERROR under ro.control_privapp_permissions=enforce
+# (the LineageOS default), not a silent denial. Nothing in the build
+# catches that; the device simply does not come back. So the invariant is
+# checked here instead of remembered.
+PRIVILEGED = {
+    "android.permission.MODIFY_PHONE_STATE",
+    "android.permission.READ_PRIVILEGED_PHONE_STATE",
+    "android.permission.READ_PRECISE_PHONE_STATE",
+    "android.permission.CONNECTIVITY_USE_RESTRICTED_NETWORKS",
+    "android.permission.BIND_IMS_SERVICE",
+    "android.permission.LOCATION_BYPASS",
+}
+mf = ET.parse(os.path.join(root, "ims-service/AndroidManifest.xml")).getroot()
+ns = "{http://schemas.android.com/apk/res/android}"
+asked = {e.get(ns + "name") for e in mf.iter("uses-permission")}
+allow = set()
+pa = ET.parse(os.path.join(root, "permissions/org.joan.ims.xml")).getroot()
+for e in pa.iter("permission"):
+    allow.add(e.get("name"))
+missing = sorted((asked & PRIVILEGED) - allow)
+if missing:
+    for m in missing:
+        print("FAIL %s is requested but not allowlisted: this bootloops the device" % m)
+    bad += len(missing)
+else:
+    n = len(asked & PRIVILEGED)
+    print("ok   all %d privileged permissions requested are allowlisted" % n)
+
 if bad:
     sys.exit(1)
 PYXML

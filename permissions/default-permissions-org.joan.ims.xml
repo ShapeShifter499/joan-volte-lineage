@@ -21,11 +21,10 @@
      grant or the cell cache reads back empty. LG could not have declared
      it: that app targets API 28, where it did not exist.
 
-     NOT here: LOCATION_BYPASS. It is within reach, being
-     signature|privileged and listed in AOSP's own privapp file, but
-     stock LG did not have it, it defeats the user's location toggle, and
-     AOSP's reason for holding it is emergency positioning, which joan
-     does not do. With location off the header simply stays bare.
+     NOT here: LOCATION_BYPASS. joan does request it, matching AOSP's
+     ImsStack, but it is signature|privileged rather than a runtime
+     permission, so it is granted by the privapp allowlist in
+     org.joan.ims.xml and this file would never be consulted for it.
 
      fixed="false" so all of these can be revoked. A revoked grant costs
      one header parameter and nothing else, and the state row then reads

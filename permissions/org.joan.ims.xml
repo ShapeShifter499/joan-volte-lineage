@@ -7,6 +7,12 @@
         <permission name="android.permission.READ_PRECISE_PHONE_STATE" />
         <permission name="android.permission.CONNECTIVITY_USE_RESTRICTED_NETWORKS" />
         <permission name="android.permission.BIND_IMS_SERVICE" />
+        <!-- Load-bearing: the manifest requests LOCATION_BYPASS, and a
+             requested signature|privileged permission with no entry here
+             is a fatal boot error under ro.control_privapp_permissions=
+             enforce, not a silent denial. AOSP's ImsStack allowlists the
+             same one. -->
+        <permission name="android.permission.LOCATION_BYPASS" />
         <permission name="android.permission.RECORD_AUDIO" />
         <permission name="android.permission.MODIFY_AUDIO_SETTINGS" />
     </privapp-permissions>
