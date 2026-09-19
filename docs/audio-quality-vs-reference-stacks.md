@@ -18,6 +18,16 @@ reporting accessors. LG's media runs on the modem, so an AP-side stack
 has no LG reference for any of this. AOSP's
 `packages/modules/ImsMedia` is the only readable one.
 
+Checked again specifically for effects and buffering rather than assumed.
+A symbol sweep of the whole binary for agc, aec, echo, effect, noise
+suppression, playout, depth and buffer size returns only
+`GetJitterBufferSize`, the `IPSec_*_Buffersize` message helpers, libxml2's
+`xml*Depth`/`xml*BufferSize`, and `Handle_VideoCallEffect`, which is a
+video call visual effect. **No audio processing and no playout buffering
+of any kind.** So there is nothing to learn from LG about either the
+effects question or the SLACK question, and that absence is itself the
+finding: the engine is signalling only.
+
 ## Four subsystems, not one
 
 | AOSP | joan | state |
@@ -79,6 +89,35 @@ platform AEC behind it.
 `INPUT_PRESET_VOICE_COMMUNICATION` and `setPrivacySensitive(true)`. joan
 uses `AudioRecord`/`AudioTrack` at defaults with
 `MediaRecorder.AudioSource.VOICE_COMMUNICATION`.
+
+## Built-in call recording cannot work, and no permission fixes it
+
+Asked whether granting joan the microphone would make the Dialer's call
+recording work. It will not, and the reason is structural rather than a
+missing grant.
+
+`useAndroidAudioHandler()` calls `setCallAudioHandler(AUDIO_HANDLER_ANDROID)`,
+which makes the Telephony Connection report `audioModeIsVoip=true`, which
+Telecom turns into **`MODE_IN_COMMUNICATION`** rather than
+`MODE_IN_CALL`. That is correct for joan: the RTP runs in joan's own
+process, so there is no modem voice path for the radio mixer to own.
+
+Built-in call recording taps `AudioSource.VOICE_CALL` (or the
+`VOICE_DOWNLINK`/`VOICE_UPLINK` variants), which the HAL wires to that
+modem voice path and which only carries audio in `MODE_IN_CALL`. On a
+joan call there is nothing on it to record. The Dialer holds its own
+`RECORD_AUDIO`; the permission was never the obstacle, and granting joan
+anything does not change what the Dialer can tap.
+
+`AUDIO_HANDLER_BASEBAND` is not a knob to flip either. It is for stacks
+whose media really does run on the modem; selecting it would leave the
+mixer expecting audio joan is not putting there.
+
+joan *could* record its own calls -- it holds both the decoded downlink
+and the captured uplink in process and could mix them -- but that is a
+feature with its own consent and legal questions, not a fix. Recorded
+here so the next report of "call recording is broken" is not chased as a
+permissions bug.
 
 ## What is absent
 
