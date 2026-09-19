@@ -520,96 +520,81 @@ final class JoanDriver {
         String idSource = "isim";
         {
             String mccMnc = safeSimOperator(tm);
+            String mcc = null;
+            String mnc = null;
             if (mccMnc != null && mccMnc.length() >= 5) {
-                String mcc = mccMnc.substring(0, 3);
-                String mnc = mccMnc.substring(3);
-                JoanRegistration.setOperator(mcc, mnc);
-                /* Withheld from nobody.
+                mcc = mccMnc.substring(0, 3);
+                mnc = mccMnc.substring(3);
+            }
+            if (mcc == null) {
+                /* The SIM is READY but has not published its operator
+                 * yet. Going on from here is not "registering without a
+                 * profile": every carrier decision below is a bare
+                 * static, so the REGISTER leaves on whatever the last
+                 * network put there, or on our compiled-in defaults --
+                 * which is how a carrier whose profile asks for no
+                 * User-Agent can be sent one on the first attempt after
+                 * a boot. Hold the attempt instead; the PLMN lands
+                 * within a pass or two and the loop comes straight back.
                  *
-                 * alpha28 briefly withheld the MMTEL tags from China
-                 * Mobile, reasoning that AOSP takes them from carrier
-                 * configuration so "none" is a shape it already has. LG's
-                 * shipping CMCC configuration says otherwise: its Contact
-                 * template is literally
-                 *   ;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel
-                 * and its header_info_feature_tags is 0x03000208 against
-                 * T-Mobile's 0x01000208 -- China Mobile gets MORE feature
-                 * tags than a network we already work on, not fewer. The
-                 * switch stays because it is the right shape and the
-                 * diagnostic uses it; the CMCC scoping was wrong. */
-                boolean tags = true;
-                /* Push the carrier's own transport criterion into the SIP
-                 * builder. 164 carrier profiles were distilled from stock
-                 * configuration and then read by nothing but the
-                 * conference path; the registration transport decision was
-                 * a separate hardcoded table that disagreed with them. */
-                JoanCarrierProfile cp =
-                        JoanCarrierProfile.forNetwork(app, mcc, mnc);
-                if (cp != null && cp.tcpCriterionLen >= 0) {
-                    try {
-                        JoanSipBuilder.setCarrierTransport(
-                                Integer.parseInt(mcc),
-                                Integer.parseInt(mnc),
-                                cp.tcpCriterionLen,
-                                cp.tcpCriterionV4,
-                                cp.tcpCriterionV6);
-                        /* Platform first, vendor snapshot second. A
-                         * CarrierConfig update ships without us and must
-                         * win; the distilled profile only answers where
-                         * the platform is silent. */
-                        JoanImsVoiceConfig pv =
-                                JoanImsVoiceConfig.forSub(app, sub);
-                        JoanSipBuilder.setPlatformSipMtu(
-                                pv.sipMtuV4, pv.sipMtuV6);
-                        /* ims.sip_preferred_transport_int: tier 1, and
-                         * the gate AOSP puts in front of the whole
-                         * length-criterion calculation. */
-                        JoanSipBuilder.setPlatformPreferredTransport(
-                                pv.preferredTransport);
-                        int platExpiry = pv.regExpirySec;
-                        JoanSipBuilder.setCarrierPcscfPort(cp.pcscfPort);
-                        JoanSipBuilder.setSendUserAgent(cp.sendUserAgent);
-                        /* The carrier's own sec-agree algorithm set, now
-                         * that it is read: it shapes the Security-Client
-                         * offer and what a Security-Server row must match
-                         * to be selected -- the reference stack's
-                         * ChoosePreferredSecurityServer, fed from config
-                         * it always had. -1 keeps the full offer for any
-                         * carrier without a profile, so nothing already
-                         * registering changes what it offers. */
-                        JoanSipCrypto.setOfferMask(cp.ipsecAlgs);
-                        JoanSipBuilder.setSendAuthAlgorithm(
-                                cp.sendAuthAlgorithm);
-                        JoanSipBuilder.setCarrierRegisterExpires(
-                                platExpiry > 0 ? platExpiry
-                                        : cp.regExpiration);
-                        String cs = mcc + "/" + mnc + " criterion="
-                                + cp.tcpCriterionLen
-                                + "/v4=" + cp.tcpCriterionV4
-                                + "/v6=" + cp.tcpCriterionV6
-                                + " expires=" + JoanSipBuilder.registerExpires()
-                                + (JoanImsVoiceConfig.forSub(app, sub)
-                                        .regExpirySec > 0 ? "(platform)" : "(profile)")
-                                + " pcscf_port=" + JoanSipBuilder.pcscfSipPort()
-                                + " ua=" + (JoanSipBuilder.sendUserAgent()
-                                        ? "yes" : "no")
-                                + " auth_algo="
-                                + (JoanSipBuilder.sendAuthAlgorithm()
-                                        ? "yes" : "no")
-                                + " src=" + cp.srcKey;
-                        if (!cs.equals(sCarrierSummary)) {
-                            sCarrierSummary = cs;
-                            JoanTrace.note("carrier profile " + cs);
-                        }
-                    } catch (NumberFormatException e) {
-                        /* A PLMN that is not numeric is not a PLMN. */
-                    }
+                 * The hold has a backstop because a card that never
+                 * publishes an operator must still be able to register
+                 * off its ISIM identity -- that path exists and works.
+                 * Past the backstop we go on, with the 3GPP defaults
+                 * applied explicitly rather than inherited. */
+                long now = System.currentTimeMillis();
+                if (sPlmnUnknownSinceMs == 0) {
+                    sPlmnUnknownSinceMs = now;
                 }
-                if (tags != JoanSipBuilder.registerContactTags()) {
-                    JoanSipBuilder.setRegisterContactTags(tags);
-                    JoanTrace.note("register contact tags="
-                            + (tags ? "mmtel" : "none (CMCC)"));
+                if (JoanAppRegister.JoanRegLifecycle.holdForPlmn(
+                        sPlmnUnknownSinceMs, now)) {
+                    return Discovery.waitFor("SIM operator not published "
+                            + "yet; holding REGISTER for the carrier "
+                            + "profile");
                 }
+            } else {
+                sPlmnUnknownSinceMs = 0;
+                JoanRegistration.setOperator(mcc, mnc);
+            }
+            /* Withheld from nobody.
+             *
+             * alpha28 briefly withheld the MMTEL tags from China
+             * Mobile, reasoning that AOSP takes them from carrier
+             * configuration so "none" is a shape it already has. LG's
+             * shipping CMCC configuration says otherwise: its Contact
+             * template is literally
+             *   ;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel
+             * and its header_info_feature_tags is 0x03000208 against
+             * T-Mobile's 0x01000208 -- China Mobile gets MORE feature
+             * tags than a network we already work on, not fewer. The
+             * switch stays because it is the right shape and the
+             * diagnostic uses it; the CMCC scoping was wrong. */
+            boolean tags = true;
+            /* Push the carrier's own transport criterion into the SIP
+             * builder. 164 carrier profiles were distilled from stock
+             * configuration and then read by nothing but the conference
+             * path; the registration transport decision was a separate
+             * hardcoded table that disagreed with them. */
+            JoanCarrierProfile cp =
+                    JoanCarrierProfile.forNetwork(app, mcc, mnc);
+            /* Platform first, vendor snapshot second. A CarrierConfig
+             * update ships without us and must win; the distilled
+             * profile only answers where the platform is silent. */
+            JoanImsVoiceConfig pv = JoanImsVoiceConfig.forSub(app, sub);
+            JoanSipBuilder.setPlatformSipMtu(pv.sipMtuV4, pv.sipMtuV6);
+            /* ims.sip_preferred_transport_int: tier 1, and the gate AOSP
+             * puts in front of the whole length-criterion calculation. */
+            JoanSipBuilder.setPlatformPreferredTransport(
+                    pv.preferredTransport);
+            String cs = applyCarrierProfile(cp, mcc, mnc, pv.regExpirySec);
+            if (cs != null && !cs.equals(sCarrierSummary)) {
+                sCarrierSummary = cs;
+                JoanTrace.note("carrier profile " + cs);
+            }
+            if (tags != JoanSipBuilder.registerContactTags()) {
+                JoanSipBuilder.setRegisterContactTags(tags);
+                JoanTrace.note("register contact tags="
+                        + (tags ? "mmtel" : "none (CMCC)"));
             }
         }
         if (impi == null || !impi.contains("@")) {
@@ -671,6 +656,84 @@ final class JoanDriver {
     /** Last session-timer summary, so the trace says it once per change. */
     private static volatile String sSeSummary;
     private static volatile String sCarrierSummary;
+
+    /**
+     * When the SIM went READY without publishing an operator, so the hold
+     * on the first REGISTER can expire rather than last forever.
+     */
+    private static volatile long sPlmnUnknownSinceMs;
+
+    /**
+     * Push a carrier profile's registration decisions into the SIP
+     * builder.
+     *
+     * <p>Only the transport criterion is scoped to the PLMN it came from
+     * -- {@link JoanSipBuilder#setCarrierTransport} records the MCC/MNC
+     * and the length calculation refuses a criterion belonging to another
+     * network. Everything else here is a bare static that simply stays
+     * where it was last put: the User-Agent policy, the sec-agree offer
+     * mask, the {@code algorithm} parameter and the P-CSCF port.
+     *
+     * <p>They used to be applied only inside the criterion's own gate, so
+     * a profile that carried no criterion applied none of its other
+     * knobs, and a network without a profile at all -- {@link
+     * JoanCarrierProfile#defaults}, criterion -1 -- silently kept the
+     * PREVIOUS carrier's. The scoped setting was guarding the unscoped
+     * ones, which is exactly backwards. A profile now answers for all of
+     * its own knobs; the criterion alone still needs a numeric PLMN and a
+     * value to apply.
+     *
+     * <p>No Context, and the trace is the caller's: the platform's own
+     * values are read by the caller and passed in, and the summary is
+     * returned rather than logged, which keeps this callable from the
+     * host suite.
+     */
+    static String applyCarrierProfile(JoanCarrierProfile cp, String mcc,
+                                      String mnc, int platformExpirySec) {
+        if (cp == null) {
+            return null;
+        }
+        boolean criterion = false;
+        if (cp.tcpCriterionLen >= 0 && mcc != null && mnc != null) {
+            try {
+                JoanSipBuilder.setCarrierTransport(
+                        Integer.parseInt(mcc),
+                        Integer.parseInt(mnc),
+                        cp.tcpCriterionLen,
+                        cp.tcpCriterionV4,
+                        cp.tcpCriterionV6);
+                criterion = true;
+            } catch (NumberFormatException e) {
+                /* A PLMN that is not numeric is not a PLMN. */
+            }
+        }
+        JoanSipBuilder.setCarrierPcscfPort(cp.pcscfPort);
+        JoanSipBuilder.setSendUserAgent(cp.sendUserAgent);
+        /* The carrier's own sec-agree algorithm set: it shapes the
+         * Security-Client offer and what a Security-Server row must match
+         * to be selected -- the reference stack's
+         * ChoosePreferredSecurityServer, fed from config it always had.
+         * -1 keeps the full offer for any carrier without a profile, so
+         * nothing already registering changes what it offers. */
+        JoanSipCrypto.setOfferMask(cp.ipsecAlgs);
+        JoanSipBuilder.setSendAuthAlgorithm(cp.sendAuthAlgorithm);
+        JoanSipBuilder.setCarrierRegisterExpires(
+                platformExpirySec > 0 ? platformExpirySec
+                        : cp.regExpiration);
+        String cs = (mcc == null ? "no-plmn" : mcc + "/" + mnc)
+                + " criterion="
+                + (criterion ? String.valueOf(cp.tcpCriterionLen) : "none")
+                + "/v4=" + cp.tcpCriterionV4
+                + "/v6=" + cp.tcpCriterionV6
+                + " expires=" + JoanSipBuilder.registerExpires()
+                + (platformExpirySec > 0 ? "(platform)" : "(profile)")
+                + " pcscf_port=" + JoanSipBuilder.pcscfSipPort()
+                + " ua=" + (JoanSipBuilder.sendUserAgent() ? "yes" : "no")
+                + " auth_algo="
+                + (JoanSipBuilder.sendAuthAlgorithm() ? "yes" : "no")
+                + " src=" + cp.srcKey;
+        return cs;
+    }
 
     /**
      * Push the carrier's session-timer settings into the SIP builder.

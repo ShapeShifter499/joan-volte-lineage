@@ -131,6 +131,65 @@ public class TestJoanDiscovery {
         check(JoanImsDiscovery.fromCardPcscf(null, null).isEmpty(),
                 "no EF_PCSCF entries yields nothing and does not throw");
 
+        /* A carrier profile answers for all of its own knobs.
+         *
+         * Every setting below is a bare static except the transport
+         * criterion, which is PLMN-scoped -- and the criterion's gate
+         * used to stand in front of all of them, so a profile with no
+         * criterion (the 3GPP defaults) applied nothing and the previous
+         * network's decisions stayed in force. Put a carrier's settings
+         * in place, then apply a profile that carries no criterion: the
+         * defaults must land, not the leftovers. */
+        JoanSipBuilder.setSendUserAgent(false);
+        JoanSipCrypto.setOfferMask(0x70003);
+        JoanSipBuilder.setSendAuthAlgorithm(false);
+        JoanSipBuilder.setCarrierPcscfPort(5070);
+        JoanSipBuilder.setCarrierRegisterExpires(3600);
+        JoanCarrierProfile none = JoanCarrierProfile.defaults("460", "02");
+        check(none.tcpCriterionLen < 0, "the 3GPP defaults carry no criterion");
+        JoanDriver.applyCarrierProfile(none, "460", "02", 0);
+        check(JoanSipBuilder.sendUserAgent(),
+                "a profile with no criterion still sets the User-Agent policy");
+        check(JoanSipCrypto.offerMask() == -1,
+                "and the sec-agree offer mask, not the last carrier's");
+        check(JoanSipBuilder.sendAuthAlgorithm(),
+                "and the algorithm parameter");
+        check(JoanSipBuilder.pcscfSipPort() == 5060,
+                "and the P-CSCF port returns to the default");
+        check(JoanSipBuilder.registerExpires() == 600000,
+                "and the registration expiry");
+
+        /* The platform's own value still outranks the vendor snapshot. */
+        JoanDriver.applyCarrierProfile(none, "460", "02", 7200);
+        check(JoanSipBuilder.registerExpires() == 7200,
+                "CarrierConfig expiry wins over the profile's");
+
+        /* No PLMN at all: the settings still apply, from the defaults,
+         * rather than being inherited from whoever registered last. */
+        JoanSipBuilder.setSendUserAgent(false);
+        JoanDriver.applyCarrierProfile(JoanCarrierProfile.defaults(null, null),
+                null, null, 0);
+        check(JoanSipBuilder.sendUserAgent(),
+                "an unknown PLMN applies defaults instead of inheriting");
+        JoanDriver.applyCarrierProfile(null, "460", "02", 0);
+        check(JoanSipBuilder.sendUserAgent(),
+                "a missing profile changes nothing and does not throw");
+
+        /* And the REGISTER waits for the PLMN before any of that runs --
+         * bounded, because a card that never publishes one still has an
+         * ISIM identity to register with. */
+        long t0 = 1_000_000L;
+        check(JoanAppRegister.JoanRegLifecycle.holdForPlmn(t0, t0),
+                "the first pass with no PLMN holds the REGISTER");
+        check(JoanAppRegister.JoanRegLifecycle.holdForPlmn(t0, t0 + 29_000L),
+                "still held just inside the backstop");
+        check(!JoanAppRegister.JoanRegLifecycle.holdForPlmn(
+                        t0, t0 + JoanAppRegister.JoanRegLifecycle
+                                .PLMN_WAIT_BACKSTOP_MS),
+                "the hold expires rather than blocking registration forever");
+        check(!JoanAppRegister.JoanRegLifecycle.holdForPlmn(0, t0),
+                "no wait recorded is not a hold");
+
         System.out.println("DISCOVERY_CHECKS=" + checks + " FAILURES=0");
     }
 }

@@ -2110,6 +2110,32 @@ final class JoanAppRegister {
         static final long LOSS_HOLD_BACKSTOP_MS = 120000;
 
         /**
+         * Whether to hold the first REGISTER while the SIM has not
+         * published its PLMN.
+         *
+         * <p>The carrier profile -- User-Agent policy, sec-agree offer
+         * mask, {@code algorithm} parameter, P-CSCF port -- is keyed on
+         * the PLMN, and a REGISTER sent before it is known carries the
+         * compiled-in defaults instead of what the network asked for. The
+         * SIM reaching READY does not mean {@code getSimOperator()}
+         * answers yet, so the two are separate waits.
+         *
+         * <p>Bounded, not absolute: a card that never publishes an
+         * operator can still register off its ISIM identity, and refusing
+         * forever would take that away. Past the backstop the caller goes
+         * on with the 3GPP defaults applied explicitly.
+         */
+        static boolean holdForPlmn(long unknownSinceMs, long nowMs) {
+            if (unknownSinceMs <= 0) {
+                return false;
+            }
+            return nowMs - unknownSinceMs < PLMN_WAIT_BACKSTOP_MS;
+        }
+
+        /** How long a READY SIM may owe us a PLMN before we go on. */
+        static final long PLMN_WAIT_BACKSTOP_MS = 30000;
+
+        /**
          * Whether an availability poke must re-acquire a binding that a
          * preceding loss may have invalidated. A loss observed while a
          * REGISTER attempt was in flight could not be acted on at the
