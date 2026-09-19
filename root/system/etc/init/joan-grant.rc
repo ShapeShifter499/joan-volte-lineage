@@ -1,0 +1,32 @@
+# Grant joan the runtime permissions the zip cannot.
+#
+# RECORD_AUDIO and the location permissions are dangerous runtime
+# permissions. privapp-permissions does not cover them, and
+# etc/default-permissions is applied by DefaultPermissionGrantPolicy only
+# on first boot and platform upgrades -- never for a package added to
+# /system afterwards, which is exactly what this zip does. That is
+# measured, not assumed: alpha63 shipped the default-permissions file and
+# the tester's state row still read pani_cell=no-permission.
+#
+# The only remaining route is to do what a person would do over adb, from
+# the device itself, once the framework is up. `pm grant` requires
+# GRANT_RUNTIME_PERMISSIONS, which is signature|installer|verifier and so
+# out of reach for a priv-app -- but the shell uid holds it, which is why
+# `adb shell pm grant` works at all. So this borrows that identity.
+#
+# seclabel is the load-bearing line and follows the retired joan-ims
+# service, which ran on this device family the same way: SELinux binds by
+# label, so the domain is stated outright rather than inferred from the
+# path. If the ROM's policy forbids init from starting a service in
+# u:r:shell:s0, this service simply fails to start, nothing else changes,
+# and the app's own permission screen remains the way in.
+service joan_grant /system/bin/sh /system/bin/joan-grant.sh
+    class late_start
+    user shell
+    group shell
+    seclabel u:r:shell:s0
+    disabled
+    oneshot
+
+on property:sys.boot_completed=1
+    start joan_grant

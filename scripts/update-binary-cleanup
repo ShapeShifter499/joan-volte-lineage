@@ -65,6 +65,7 @@ rm -f "$SYS/etc/permissions/org.joan.ims.xml"
 # The runtime-permission pre-grant. The directory is left alone: it is a
 # platform directory on most ROMs and ours only when we had to create it,
 # and rmdir on a non-empty one fails harmlessly anyway.
+rm -f "$SYS/etc/init/joan-grant.rc" "$SYS/bin/joan-grant.sh"
 rm -f "$SYS/etc/default-permissions/org.joan.ims.xml"
 rmdir "$SYS/etc/default-permissions" 2>/dev/null || true
 # The IMS feature declaration is only ours to touch if the installer said

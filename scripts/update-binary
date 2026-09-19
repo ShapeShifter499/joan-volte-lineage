@@ -534,6 +534,24 @@ fi
 # falls back to the bare access type, the state row says
 # pani_cell=no-permission, and one adb command fixes it without root.
 # Nothing here is load-bearing for registration.
+# The boot-time runtime-permission grant. See root/etc/init/joan-grant.rc
+# for why this exists: no packaging mechanism can grant a dangerous
+# runtime permission to a package added to /system after provisioning, so
+# the device does it to itself once the framework is up, borrowing the
+# shell identity that `adb shell pm grant` uses.
+#
+# Best effort in every direction. A ROM whose policy refuses a service in
+# u:r:shell:s0 simply never starts it; nothing else changes and the app's
+# own permission screen still works. Registration and call setup do not
+# depend on any of it.
+if [ -f "$TMP/root/etc/init/joan-grant.rc" ]; then
+  mkdir -p "$SYS/etc/init" "$SYS/bin"
+  copy_file "$TMP/root/bin/joan-grant.sh" "$SYS/bin/joan-grant.sh" 755 \
+    u:object_r:shell_exec:s0
+  copy_file "$TMP/root/etc/init/joan-grant.rc" \
+    "$SYS/etc/init/joan-grant.rc" 644 u:object_r:system_file:s0
+  ui_print "  boot-time permission grant installed"
+fi
 if [ -f "$TMP/etc/default-permissions/org.joan.ims.xml" ]; then
   mkdir -p "$SYS/etc/default-permissions"
   chmod 755 "$SYS/etc/default-permissions" 2>/dev/null || true
