@@ -38,6 +38,7 @@ public final class TestJoanSip {
         testDialIdentity();
         testUeSpiPortConvention();
         testEfDir();
+        testIsimFiles();
         testAuthAlgorithmGate();
         testSecurityServerRows();
         if (gFail != 0) {
@@ -180,6 +181,72 @@ public final class TestJoanSip {
             o[i] = (byte) Integer.parseInt(h.substring(i * 2, i * 2 + 2), 16);
         }
         return o;
+    }
+
+    /**
+     * ADF_ISIM's files, parsed the way AOSP parses them.
+     *
+     * <p>IsimUiccRecords.isimTlvToString walks a record's TLVs, takes tag
+     * 0x80 and decodes UTF-8, and it treats EF_IMPI, EF_IMPU, EF_DOMAIN
+     * and EF_PCSCF identically. These follow it.
+     */
+    private static void testIsimFiles() {
+        /* EF_IMPI: 80 <len> <NAI>. Built rather than hand-written: the
+         * first draft of this test hard-coded the length bytes and got
+         * two of them wrong, which is the same mistake the parser exists
+         * to survive. */
+        check("310123456789012@ims.example".equals(
+                        JoanIsim.text(tlv80("310123456789012@ims.example"))),
+                "EF_IMPI decodes the tag-0x80 value as text");
+        check(JoanIsim.text(hexb("FFFFFFFF")) == null,
+                "a padded record decodes to nothing");
+        check(JoanIsim.text(hexb("8105414243")) == null,
+                "a record with no tag 0x80 decodes to nothing");
+        check(JoanIsim.text(hexb("80FF4142")) == null,
+                "a length longer than the record is refused");
+
+        /* EF_PCSCF: TS 31.103 4.2.8 puts an address-type byte first --
+         * 00 FQDN, 01 IPv4, 02 IPv6 -- which AOSP leaves in the string. */
+        check("pcscf.example.com".equals(
+                        JoanIsim.pcscf(tlv80((char) 0x00 + "pcscf.example.com"))),
+                "EF_PCSCF strips the FQDN address-type byte");
+        check("pcscf.example.com".equals(
+                        JoanIsim.pcscf(tlv80("sip:pcscf.example.com"))),
+                "and a bare sip: URI with no type byte also reads");
+        check(JoanIsim.pcscf(hexb("FFFF")) == null,
+                "a padded P-CSCF record yields nothing");
+
+        /* EF_IST: services number from 1, eight per byte, LSB first, so
+         * service 5 is bit 4 of byte 0. TS 31.103 4.2.7. */
+        check(JoanIsim.istService(hexb("10"), 5),
+                "EF_IST reports service 5 present when bit 4 is set");
+        check(!JoanIsim.istService(hexb("0F"), 5),
+                "and absent when it is not");
+        check(JoanIsim.istService(hexb("0001"), 9),
+                "service 9 is bit 0 of the second byte");
+        check(!JoanIsim.istService(hexb("10"), 99),
+                "a service past the end of a short table reads as absent");
+        check(!JoanIsim.istService(null, 5),
+                "an unreadable table claims nothing");
+    }
+
+    /** A tag-0x80 TLV holding this text, with the length computed. */
+    private static byte[] tlv80(String text) {
+        byte[] v = text.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+        byte[] out = new byte[v.length + 2];
+        out[0] = (byte) 0x80;
+        out[1] = (byte) v.length;
+        System.arraycopy(v, 0, out, 2, v.length);
+        return out;
+    }
+
+    /** ASCII to hex, for building card records in tests. */
+    private static String hexOf(String s) {
+        StringBuilder b = new StringBuilder();
+        for (byte c : s.getBytes(java.nio.charset.StandardCharsets.US_ASCII)) {
+            b.append(String.format("%02X", c));
+        }
+        return b.toString();
     }
 
     /**

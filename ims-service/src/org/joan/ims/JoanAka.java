@@ -209,6 +209,175 @@ final class JoanAka {
         return null;
     }
 
+    /** What ADF_ISIM actually holds. All fields may be null or empty. */
+    static final class IsimFiles {
+        final String impi;
+        final String domain;
+        final java.util.List<String> impu;
+        final java.util.List<String> pcscf;
+        final boolean present;
+        IsimFiles(String impi, String domain, java.util.List<String> impu,
+                  java.util.List<String> pcscf, boolean present) {
+            this.impi = impi;
+            this.domain = domain;
+            this.impu = impu;
+            this.pcscf = pcscf;
+            this.present = present;
+        }
+        String summary() {
+            return "isim_files present=" + present
+                    + " impi=" + (impi == null ? "no" : "yes")
+                    + " domain=" + (domain == null ? "no" : "yes")
+                    + " impu=" + impu.size() + " pcscf=" + pcscf.size();
+        }
+    }
+
+    private static final IsimFiles NO_ISIM = new IsimFiles(
+            null, null, java.util.Collections.<String>emptyList(),
+            java.util.Collections.<String>emptyList(), false);
+
+    /** SELECT an EF by identifier on an open channel; returns the FCP. */
+    private static byte[] selectEf(TelephonyManager tm, int ch, int fid) {
+        String r = tm.iccTransmitApduLogicalChannel(ch, 0, 0xA4, 0x00, 0x04, 2,
+                String.format("%04X", fid));
+        if (r == null || r.length() < 4) {
+            return null;
+        }
+        String sw = r.substring(r.length() - 4);
+        if (sw.startsWith("61")) {
+            r = tm.iccTransmitApduLogicalChannel(ch, 0, 0xC0, 0, 0,
+                    Integer.parseInt(sw.substring(2), 16), "");
+            if (r == null || r.length() < 4) {
+                return null;
+            }
+            sw = r.substring(r.length() - 4);
+        }
+        if (!"9000".equals(sw)) {
+            return null;
+        }
+        return JoanSipCrypto.hexBytes(r.substring(0, r.length() - 4));
+    }
+
+    /** Body of the last-selected transparent EF, or null. */
+    private static byte[] readBinary(TelephonyManager tm, int ch, int len) {
+        String r = tm.iccTransmitApduLogicalChannel(ch, 0, 0xB0, 0, 0, len, "");
+        if (r == null || r.length() < 4
+                || !"9000".equals(r.substring(r.length() - 4))) {
+            return null;
+        }
+        return JoanSipCrypto.hexBytes(r.substring(0, r.length() - 4));
+    }
+
+    /** One record of the last-selected linear-fixed EF, or null. */
+    private static byte[] readRecord(TelephonyManager tm, int ch, int rec,
+                                     int len) {
+        String r = tm.iccTransmitApduLogicalChannel(ch, 0, 0xB2, rec, 0x04,
+                len, "");
+        if (r == null || r.length() < 4
+                || !"9000".equals(r.substring(r.length() - 4))) {
+            return null;
+        }
+        return JoanSipCrypto.hexBytes(r.substring(0, r.length() - 4));
+    }
+
+    private static byte[] transparent(TelephonyManager tm, int ch, int fid) {
+        byte[] fcp = selectEf(tm, ch, fid);
+        int size = JoanEfDir.parseFcpFileSize(fcp);
+        return size <= 0 ? null : readBinary(tm, ch, Math.min(size, 255));
+    }
+
+    private static java.util.List<byte[]> records(TelephonyManager tm, int ch,
+                                                  int fid) {
+        java.util.List<byte[]> out = new java.util.ArrayList<>();
+        int[] geom = JoanEfDir.parseFcpRecordInfo(selectEf(tm, ch, fid));
+        if (geom == null) {
+            return out;
+        }
+        int n = Math.min(geom[1], JoanEfDir.MAX_RECORDS);
+        for (int i = 1; i <= n; i++) {
+            byte[] r = readRecord(tm, ch, i, geom[0]);
+            if (r != null) {
+                out.add(r);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Read ADF_ISIM directly.
+     *
+     * <p>Only worth doing when the framework's own ISIM accessors came
+     * back absent while EF_DIR says the card carries an ISIM -- the case
+     * that otherwise leaves us registering with identities derived from
+     * the IMSI against a network holding provisioned ones.
+     *
+     * <p>EF_IST is read first and gates EF_PCSCF, which is what the
+     * service table is for: TS 31.103 4.2.7 service 5 says whether a
+     * P-CSCF address is present at all, so a card that does not offer one
+     * is not asked for it.
+     */
+    static IsimFiles readIsimFiles(TelephonyManager tm) {
+        if (tm == null) {
+            return NO_ISIM;
+        }
+        java.util.List<String> dir = readEfDir(tm);
+        String aid = JoanEfDir.firstWithPrefix(dir, JoanEfDir.ISIM_PREFIX);
+        if (aid == null) {
+            if (!dir.isEmpty()) {
+                /* EF_DIR was readable and lists no ISIM. That is the one
+                 * case where absence is actually established, so stop --
+                 * a USIM-only card must not pay for a channel open on
+                 * every registration attempt. */
+                JoanTrace.note("isim_files: EF_DIR lists no ISIM");
+                return NO_ISIM;
+            }
+            aid = ISIM_AIDS[0];   /* directory unreadable: worth a try */
+        }
+        int ch = -1;
+        try {
+            android.telephony.IccOpenLogicalChannelResponse r =
+                    tm.iccOpenLogicalChannel(aid);
+            if (r == null || r.getChannel() <= 0) {
+                JoanTrace.note("isim_files: no channel (status="
+                        + (r == null ? "null" : r.getStatus()) + ")");
+                return NO_ISIM;
+            }
+            ch = r.getChannel();
+            byte[] ist = transparent(tm, ch, JoanIsim.EF_IST);
+            String impi = JoanIsim.text(transparent(tm, ch, JoanIsim.EF_IMPI));
+            String domain =
+                    JoanIsim.text(transparent(tm, ch, JoanIsim.EF_DOMAIN));
+            java.util.List<String> impu =
+                    JoanIsim.texts(records(tm, ch, JoanIsim.EF_IMPU));
+            java.util.List<String> pcscf =
+                    new java.util.ArrayList<>();
+            if (JoanIsim.istService(ist, JoanIsim.IST_PCSCF_ADDRESS)) {
+                for (byte[] rec : records(tm, ch, JoanIsim.EF_PCSCF)) {
+                    String a = JoanIsim.pcscf(rec);
+                    if (a != null && !pcscf.contains(a)) {
+                        pcscf.add(a);
+                    }
+                }
+            }
+            IsimFiles f = new IsimFiles(impi, domain, impu, pcscf, true);
+            JoanTrace.note(f.summary() + " ist="
+                    + (ist == null ? "no" : "yes"));
+            return f;
+        } catch (Throwable t) {
+            JoanTrace.note("isim_files: unavailable ("
+                    + t.getClass().getSimpleName() + ")");
+            return NO_ISIM;
+        } finally {
+            if (ch > 0) {
+                try {
+                    tm.iccCloseLogicalChannel(ch);
+                } catch (Throwable ignored) {
+                    /* Closing a channel the card already dropped is fine. */
+                }
+            }
+        }
+    }
+
     /**
      * The card's real AIDs, read from EF_DIR, or an empty list.
      *

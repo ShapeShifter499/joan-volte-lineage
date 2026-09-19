@@ -9,7 +9,7 @@ javac -cp "$SDK" -d "$OUT" \
  "$SRC/JoanSipUa.java" "$SRC/JoanSipBuilder.java" "$SRC/JoanAmr.java" \
     "$SRC/JoanSessionTimer.java" "$SRC/JoanRegInfo.java" \
  "$SRC/JoanSipCrypto.java" "$SRC/JoanSecAgree.java" \
- "$SRC/JoanAppRegister.java" "$SRC/JoanAka.java" "$SRC/JoanEfDir.java" \
+ "$SRC/JoanAppRegister.java" "$SRC/JoanAka.java" "$SRC/JoanEfDir.java" "$SRC/JoanIsim.java" \
  "$SRC/JoanImsDiscovery.java" \
  "$SRC/JoanCarrierProfile.java" "$SRC/JoanXfrmStats.java" tests/ua/org/joan/ims/*.java
 java -cp "$OUT:$SDK" org.joan.ims.TestJoanUa

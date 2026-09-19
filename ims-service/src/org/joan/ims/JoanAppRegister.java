@@ -1069,6 +1069,27 @@ final class JoanAppRegister {
                 + (impi != null && !impi.contains("@")
                         ? " impi_malformed=yes" : ""));
         if (impi == null || !impi.contains("@")) {
+            /* The framework reporting no ISIM is not the same as the card
+             * having none: its accessors resolve the application through
+             * the modem's card status, and we have seen that path come
+             * back empty on a card whose USIM plainly answers AKA. EF_DIR
+             * settles it, so read ADF_ISIM directly before deriving --
+             * registering with identities derived from the IMSI while the
+             * card holds provisioned ones is exactly how a network comes
+             * to answer "user unknown". */
+            JoanAka.IsimFiles card = JoanAka.readIsimFiles(tm);
+            if (card.impi != null && card.impi.contains("@")) {
+                impi = card.impi;
+                if (domain == null || domain.isEmpty()) {
+                    domain = card.domain;
+                }
+                if ((impu == null || impu.isEmpty()) && !card.impu.isEmpty()) {
+                    impu = card.impu.get(0);
+                }
+                JoanTrace.note("isim read: recovered from ADF_ISIM directly");
+            }
+        }
+        if (impi == null || !impi.contains("@")) {
             /* USIM-only card: derive per TS 23.003 13.3. impu stays null,
              * so the public identity must come from P-Associated-URI in
              * the 200 OK -- a derived IMPI contains the IMSI and must

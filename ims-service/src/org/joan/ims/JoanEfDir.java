@@ -129,6 +129,33 @@ final class JoanEfDir {
         return null;
     }
 
+    /**
+     * Transparent-file size from a SELECT response, or -1.
+     *
+     * <p>TS 102 221 11.1.1.4.1: tag {@code 0x80} in the FCP carries the
+     * file size in bytes. Record-based files answer through
+     * {@link #parseFcpRecordInfo} instead.
+     */
+    static int parseFcpFileSize(byte[] fcp) {
+        if (fcp == null || fcp.length < 4) {
+            return -1;
+        }
+        int i = (fcp[0] & 0xff) == 0x62 ? 2 : 0;
+        while (i + 1 < fcp.length) {
+            int tag = fcp[i] & 0xff;
+            int len = fcp[i + 1] & 0xff;
+            if (len == 0 || i + 2 + len > fcp.length) {
+                return -1;
+            }
+            if (tag == 0x80 && len >= 2) {
+                int size = ((fcp[i + 2] & 0xff) << 8) | (fcp[i + 3] & 0xff);
+                return size > 0 ? size : -1;
+            }
+            i += 2 + len;
+        }
+        return -1;
+    }
+
     /** The first AID starting with {@code prefix}, or null. */
     static String firstWithPrefix(List<String> aids, String prefix) {
         if (aids == null || prefix == null) {
