@@ -673,8 +673,67 @@ final class JoanMedia {
                 .build();
     }
 
+    /** Below this, over five seconds, the microphone is not producing voice. */
+    private static final double UL_SILENT_DBFS = -50.0;
+    /** And speech was detected in fewer than this share of the samples. */
+    private static final double UL_SILENT_ACTIVE = 0.05;
+
+    /**
+     * Whether five seconds of capture amount to silence.
+     *
+     * <p>Both conditions are required so that a quiet room is not
+     * mistaken for a dead capture: a live microphone in a silent room
+     * still moves, and a real speaker trips the activity share long
+     * before five seconds are up. The observed failure was -59 dBFS with
+     * an activity share of 0.
+     */
+    static boolean silentUplink(long sumSq, long samples, long activeSamples) {
+        if (samples <= 0) {
+            return false;
+        }
+        double rms = Math.sqrt((double) sumSq / (double) samples);
+        double dbfs = rms <= 0 ? -120.0
+                : 20.0 * Math.log10(rms / 32768.0);
+        double active = (double) activeSamples / (double) samples;
+        return dbfs < UL_SILENT_DBFS && active < UL_SILENT_ACTIVE;
+    }
+
+    /** Reopen the capture on MIC. Returns null if that is no better. */
+    private static AudioRecord swapToMic(AudioRecord old, int inBuf) {
+        JoanTrace.note("media ul silent on src="
+                + MediaRecorder.AudioSource.VOICE_COMMUNICATION
+                + "; reopening on MIC");
+        try {
+            old.stop();
+        } catch (Throwable ignored) {
+            // Already stopped, or never really started.
+        }
+        try {
+            old.release();
+        } catch (Throwable ignored) {
+            // Nothing to do; we are replacing it either way.
+        }
+        AudioRecord alt = openRecord(inBuf,
+                new int[] { MediaRecorder.AudioSource.MIC });
+        if (alt == null) {
+            JoanTrace.note("media ul swap failed; no MIC capture");
+            return null;
+        }
+        try {
+            alt.startRecording();
+        } catch (Throwable t) {
+            JoanTrace.note("media ul swap start "
+                    + t.getClass().getSimpleName());
+            try { alt.release(); } catch (Throwable ignored) { }
+            return null;
+        }
+        return alt;
+    }
+
     private static void capture(Context app) {
         AudioRecord rec = null;
+        boolean ulSwapped = false;
+        int inBuf = 0;
         long ulSumSq = 0;
         long ulSamples = 0;
         long ulActSq = 0;
@@ -685,7 +744,8 @@ final class JoanMedia {
         try {
             int minIn = AudioRecord.getMinBufferSize(sRate,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-            rec = openRecord(Math.max(minIn, sFrame * 8));
+            inBuf = Math.max(minIn, sFrame * 8);
+            rec = openRecord(inBuf);
             if (rec == null) {
                 JoanTrace.note("media no AudioRecord");
                 return;
@@ -749,6 +809,32 @@ final class JoanMedia {
                             ulSamples, ulPeak, ulActSq, ulActSamples)
                             + " platform_agc=" + sPlatformAgc);
                     ulLogged = true;
+                    /* A capture that opened and is delivering silence.
+                     * Swap the source once and say so, rather than
+                     * spending the call talking to nobody: the caller
+                     * cannot hear that their own uplink is dead, and the
+                     * three calls that proved this were each reported as
+                     * a network problem.
+                     *
+                     * Deliberately one attempt and deliberately loud. If
+                     * MIC is silent too then the source is not the fault
+                     * and the next trace says so, which is worth more
+                     * than a quiet retry that leaves both outcomes
+                     * looking identical. */
+                    if (!ulSwapped && silentUplink(ulSumSq, ulSamples,
+                            ulActSamples)) {
+                        ulSwapped = true;
+                        AudioRecord alt = swapToMic(rec, inBuf);
+                        if (alt != null) {
+                            rec = alt;
+                            ulSumSq = 0;
+                            ulSamples = 0;
+                            ulActSq = 0;
+                            ulActSamples = 0;
+                            ulPeak = 0;
+                            ulLogged = false;
+                        }
+                    }
                 }
                 int dtmfLen = sTePt > 0 ? dtmfFrame(payload, m) : 0;
                 if (dtmfLen > 0) {
@@ -1204,10 +1290,26 @@ final class JoanMedia {
     }
 
     private static AudioRecord openRecord(int inBuf) {
-        int[] sources = {
+        return openRecord(inBuf, new int[] {
                 MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                 MediaRecorder.AudioSource.MIC,
-        };
+        });
+    }
+
+    /**
+     * Open a capture on the first source that initialises.
+     *
+     * <p>Initialising is not the same as working, which is the whole
+     * reason the caller can now ask for a specific source. On a
+     * Digi.Mobil RO handset VOICE_COMMUNICATION opened cleanly --
+     * {@code media record ok src=7} -- and then delivered silence for
+     * three consecutive calls, so the far end heard nothing while the
+     * downlink played at -19 dBFS with no loss. A source that reports
+     * STATE_INITIALIZED and returns near-zero samples is a dead
+     * instrument that looks alive, and the old fallback could never
+     * reach it because it only ran when the open itself failed.
+     */
+    private static AudioRecord openRecord(int inBuf, int[] sources) {
         for (int src : sources) {
             AudioRecord rec = null;
             try {
