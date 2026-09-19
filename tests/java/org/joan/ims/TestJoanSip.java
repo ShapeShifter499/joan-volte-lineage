@@ -545,6 +545,46 @@ public final class TestJoanSip {
                 "hmac-md5-96", "null", ck, ik);
         check(md5Null.authKey.length == 16 && !md5Null.hasEncryption(),
                 "md5-96 + null encryption is integrity-only");
+
+        /* The four mechanism corners, because the field only ever proved
+         * two of them and they were the two already tested here.
+         * T-Mobile registers on sha1+aes and China Telecom on md5+null --
+         * which left sha1+null, China Mobile's mechanism, as the one
+         * combination nothing had run. The branches are orthogonal (auth
+         * from alg, encryption from ealg), so this is coverage rather
+         * than a suspected defect; it stops the corner being untested. */
+        JoanSipCrypto.EspKeys shaNull = JoanSipCrypto.espKeys(
+                "hmac-sha-1-96", "null", ck, ik);
+        check(shaNull.authKey.length == 20 && !shaNull.hasEncryption(),
+                "sha1-96 + null encryption is integrity-only (CMCC's mechanism)");
+        check(shaNull.authKey[15] == 15 && shaNull.authKey[16] == 0
+                        && shaNull.authKey[19] == 0,
+                "and still pads IK to 160 bits with no encryption to carry");
+        check(shaNull.authTruncBits == 96 && md5Null.authTruncBits == 96,
+                "both integrity-only mechanisms truncate to 96 bits");
+        check(shaNull.androidAuth.equals("hmac(sha1)")
+                        && md5Null.androidAuth.equals("hmac(md5)"),
+                "and each names its own kernel algorithm");
+        JoanSipCrypto.EspKeys md5Aes = JoanSipCrypto.espKeys(
+                "hmac-md5-96", "aes-cbc", ck, ik);
+        check(md5Aes.authKey.length == 16 && md5Aes.hasEncryption(),
+                "md5-96 + aes-cbc is the fourth corner and builds too");
+
+        /* The auth key is IK. CK is the encryption key, and a swap would
+         * still produce a well-formed SA that no assertion on lengths
+         * could see -- the network would simply reject every packet. */
+        check(shaAes.authKey[0] == ik[0] && shaAes.authKey[15] == ik[15],
+                "the authentication key is IK, not CK");
+        check(shaAes.encKey[0] == ck[0] && shaAes.encKey[15] == ck[15],
+                "and the encryption key is CK");
+
+        /* RFC 3329 makes null the default when ealg is absent, and a
+         * Security-Server row that omits it reaches here as an empty
+         * string rather than the word. */
+        JoanSipCrypto.EspKeys omitted = JoanSipCrypto.espKeys(
+                "hmac-sha-1-96", "", ck, ik);
+        check(!omitted.hasEncryption() && omitted.authKey.length == 20,
+                "an omitted ealg builds the same SA as an explicit null");
         boolean threw = false;
         try {
             JoanSipCrypto.espKeys("hmac-sha-256-128", "aes-cbc", ck, ik);
