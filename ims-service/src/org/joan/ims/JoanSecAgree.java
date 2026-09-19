@@ -63,6 +63,33 @@ final class JoanSecAgree {
      */
     static JoanSecAgree select(String value) {
         List<JoanSecAgree> all = parseAll(value);
+        /* A sole mechanism is taken as offered, without asking whether we
+         * offered it.
+         *
+         * RegParameter::ChoosePreferredSecurityServer returns the single
+         * Security-Server outright -- GetSize() == 1 copies element zero
+         * and returns before the Security-Client comparison is reached.
+         * Only a list of two or more is matched against what the UE
+         * offered. A P-CSCF that names one mechanism is not negotiating,
+         * and the reference stack does not argue with it.
+         *
+         * joan filtered every row through the carrier's ipsec_algs mask,
+         * including a sole one, from the moment that mask was first read.
+         * That is a veto stock does not have: T-Mobile's mask is aes-only
+         * (0x10003), so a single hmac-md5-96 or null-encryption row from
+         * one of their P-CSCFs would have been refused outright on a lane
+         * that registers today. The mask says what to OFFER, and which
+         * row to prefer among several; it was never meant to reject the
+         * only thing on the table.
+         *
+         * What we still refuse is what we cannot construct -- an
+         * unimplemented algorithm, AH, tunnel mode -- because unlike the
+         * reference we would only fail later building the SA, and failing
+         * where the reason is known is worth more than parity. */
+        if (all.size() == 1) {
+            JoanSecAgree only = all.get(0);
+            return buildable(only) ? only : null;
+        }
         JoanSecAgree best = null;
         for (JoanSecAgree m : all) {
             if (!supportedByOffer(m)) {
@@ -75,16 +102,30 @@ final class JoanSecAgree {
         return best;
     }
 
-    /** The reference stack's tuple match against our own offer. */
+    /**
+     * Whether we could build this SA at all: the part of the tuple that
+     * is about our own capability rather than the carrier's preference.
+     */
+    private static boolean buildable(JoanSecAgree m) {
+        return JoanSipCrypto.supportedAlg(m.alg)
+                && JoanSipCrypto.supportedEalg(m.ealg)
+                && "esp".equals(m.prot)
+                && "trans".equals(m.mod);
+    }
+
+    /**
+     * The reference stack's tuple match against our own offer, used only
+     * where it uses it: choosing among two or more Security-Servers.
+     *
+     * <p>{@code IsSecurityMechanismMatched} compares mechanism, alg,
+     * ealg, prot and mode, substituting the RFC defaults (null, esp,
+     * trans) on BOTH sides before comparing. Our offer is always esp and
+     * trans, and is already filtered by the mask, so matching the mask
+     * here is matching the client list there.
+     */
     private static boolean supportedByOffer(JoanSecAgree m) {
-        if (!JoanSipCrypto.supportedAlg(m.alg)
-                || !JoanSipCrypto.supportedEalg(m.ealg)) {
-            return false;
-        }
-        if (!"esp".equals(m.prot) || !"trans".equals(m.mod)) {
-            return false;
-        }
-        return JoanSipCrypto.algOffered(m.alg)
+        return buildable(m)
+                && JoanSipCrypto.algOffered(m.alg)
                 && JoanSipCrypto.ealgOffered(m.ealg);
     }
 
@@ -108,6 +149,7 @@ final class JoanSecAgree {
         } else if (body.regionMatches(true, 0, "Security-Client:", 0, 16)) {
             body = body.substring(16).trim();
         }
+        boolean sole = parseAll(value).size() == 1;
         StringBuilder sb = new StringBuilder();
         for (String raw : splitMechanisms(body)) {
             if (sb.length() > 0) {
@@ -135,7 +177,7 @@ final class JoanSecAgree {
                 sb.append('*');
                 continue;
             }
-            String why = rejectReason(m);
+            String why = rejectReason(m, sole);
             if (why != null) {
                 sb.append('(').append(why).append(')');
             }
@@ -150,7 +192,7 @@ final class JoanSecAgree {
         return n.length() > 24 ? n.substring(0, 24) : n;
     }
 
-    private static String rejectReason(JoanSecAgree m) {
+    private static String rejectReason(JoanSecAgree m, boolean sole) {
         if (!"esp".equals(m.prot)) {
             return "prot";
         }
@@ -163,8 +205,12 @@ final class JoanSecAgree {
         if (!JoanSipCrypto.supportedEalg(m.ealg)) {
             return "ealg";
         }
-        if (!JoanSipCrypto.algOffered(m.alg)
-                || !JoanSipCrypto.ealgOffered(m.ealg)) {
+        if (!sole && (!JoanSipCrypto.algOffered(m.alg)
+                || !JoanSipCrypto.ealgOffered(m.ealg))) {
+            /* Only a row competing with others can lose to the mask; a
+             * sole mechanism is taken regardless, so calling it
+             * not-offered would describe a rejection that never
+             * happened. */
             return "not-offered";
         }
         return null;

@@ -705,6 +705,51 @@ public final class TestJoanSip {
                             && masked.alg.equals("hmac-md5-96"),
                     "an aes-only mask rejects a higher-q null row");
 
+            /* A SOLE mechanism is taken as offered, mask or no mask.
+             * RegParameter::ChoosePreferredSecurityServer copies element
+             * zero and returns before it reaches the Security-Client
+             * comparison, so a P-CSCF naming one mechanism is never
+             * argued with. joan applied the mask to a single row from the
+             * moment it first read one -- a veto stock does not have, and
+             * one that would refuse a lone md5-or-null row on T-Mobile,
+             * whose mask is aes-only, on a lane that registers today. */
+            String soleMasked = "ipsec-3gpp; alg=hmac-md5-96; ealg=null; "
+                    + "spi-c=7; spi-s=8; port-c=3000; port-s=3001";
+            JoanSecAgree sole = JoanSecAgree.select(soleMasked);
+            check(sole != null && sole.spiC == 7,
+                    "a sole mechanism is taken even when the mask excludes it");
+            check(!JoanSecAgree.offerSummary(soleMasked, sole)
+                            .contains("not-offered"),
+                    "and is not annotated as a rejection that never happened");
+            check(JoanSecAgree.offerSummary(soleMasked, sole).contains("*"),
+                    "the sole row is marked as the one chosen");
+
+            /* What a sole row does NOT buy: a mechanism we could not
+             * build. Stock would take it and fail later assembling the
+             * SA; failing here names the reason. */
+            check(JoanSecAgree.select("ipsec-3gpp; alg=hmac-sha-1-96; "
+                            + "ealg=aes-cbc; prot=ah; mod=trans; spi-c=1; "
+                            + "spi-s=2; port-c=1000; port-s=1001") == null,
+                    "a sole AH row is still refused: we cannot build it");
+            check(JoanSecAgree.select("ipsec-3gpp; alg=hmac-sha-1-96; "
+                            + "ealg=aes-cbc; prot=esp; mod=tun; spi-c=1; "
+                            + "spi-s=2; port-c=1000; port-s=1001") == null,
+                    "and a sole tunnel-mode row likewise");
+            check(JoanSecAgree.select("ipsec-3gpp; alg=hmac-sha-256-128; "
+                            + "ealg=aes-cbc; spi-c=1; spi-s=2; "
+                            + "port-c=1000; port-s=1001") == null,
+                    "and a sole row naming an algorithm we do not implement");
+
+            /* The mask still governs where the reference uses it: two or
+             * more rows, matched against the client offer. */
+            check(JoanSecAgree.select(
+                    "ipsec-3gpp; q=0.9; alg=hmac-md5-96; ealg=null; "
+                            + "spi-c=5; spi-s=6; port-c=1000; port-s=1001, "
+                            + "ipsec-3gpp; q=0.1; alg=hmac-sha-1-96; "
+                            + "ealg=aes-cbc; spi-c=9; spi-s=10; "
+                            + "port-c=2000; port-s=2001").spiC == 9,
+                    "with two rows the mask still rejects the higher-q one");
+
             JoanSipBuilder.Params p2 = new JoanSipBuilder.Params(
                     1111, 2222, 15000, 16000);
             String offer = JoanSecAgree.cartesianClientValue(p2);
