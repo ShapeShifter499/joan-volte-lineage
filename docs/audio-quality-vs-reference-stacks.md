@@ -10,23 +10,52 @@ single structural read would have found at once. The point of this file
 is that the next person compares the whole shape before touching a
 constant.
 
-## The reference is ImsMedia, not LG
+## Two references, not one -- LG's media is on the AP after all
 
-`libims.lge.so` carries `GetJitterBufferSize`, `SetCumulativeJitter` and
-`CheckJitterBufferUpdate` and no playout buffer at all: those are RTCP
-reporting accessors. LG's media runs on the modem, so an AP-side stack
-has no LG reference for any of this. AOSP's
-`packages/modules/ImsMedia` is the only readable one.
+An earlier version of this file said LG had no playout buffer and that
+its media ran on the modem. That was wrong, and wrong because only one
+library had been looked in. `libims.lge.so` is the signalling engine and
+genuinely carries nothing but `GetJitterBufferSize`,
+`SetCumulativeJitter` and `CheckJitterBufferUpdate`, which are RTCP
+reporting accessors. The media lives elsewhere on the same device:
 
-Checked again specifically for effects and buffering rather than assumed.
-A symbol sweep of the whole binary for agc, aec, echo, effect, noise
-suppression, playout, depth and buffer size returns only
-`GetJitterBufferSize`, the `IPSec_*_Buffersize` message helpers, libxml2's
-`xml*Depth`/`xml*BufferSize`, and `Handle_VideoCallEffect`, which is a
-video call visual effect. **No audio processing and no playout buffering
-of any kind.** So there is nothing to learn from LG about either the
-effects question or the SLACK question, and that absence is itself the
-finding: the engine is signalling only.
+- `/product/lib64/libimsmmpf.lge.so` -- LG's multimedia platform
+  framework, with **`MMPFJitterBuffer`**, a full media graph
+  (`MMPFGraphRx`/`MMPFGraphTx`), RTP payload encoders and decoders, and a
+  voice source and renderer. C++ symbols, demangles cleanly.
+- `/vendor/lib64/lib-rtpcore.so` -- Qualcomm's RTP core, exporting
+  `qvp_rtp_get_playout_delay`, `qvp_rtp_empty_jitter_buffer` and
+  `qvp_rtcp_get_rx_jitter`.
+
+So joan has two AP-side references for this subsystem, not one, and they
+agree with each other on the two questions that were open.
+
+**Sizing is parameterised identically in both.**
+`MMPFJitterBuffer::SetJitterBufferSize(unsigned int, unsigned int,
+unsigned int)` takes three values, exactly as AOSP's
+`SetJitterBufferSize(nInit, nMin, nMax)` does. joan's initial 4,
+`MIN_DEPTH` 3 and `MAX_DEPTH` 9 are the same three parameters. LG's
+actual numbers are not recoverable from configuration -- a sweep of all
+224 distinct keys extracted from `Ims6.apk` finds nothing about jitter,
+buffering, playout, delay or effects -- so LG's values are compiled in.
+
+**Neither reference attaches any audio effect.** AOSP's ImsMedia has no
+AEC, NS or AGC in either direction. LG's framework has only *video*
+effects: `RequestVideoEffect`, `GetVideoEffectMode`,
+`UpdateVideoEffectMode`, and nothing for audio at all. Two independent
+implementations, both relying on the platform's voice-communication path
+to do the processing. joan attaches `AutomaticGainControl` and
+`AcousticEchoCanceler` and is alone in that.
+
+On the handsets that have reported, the AGC half is moot anyway: every
+trace shows `platform_agc=false`, meaning
+`AutomaticGainControl.isAvailable()` returns false and it never attaches.
+The AEC half was unmeasured until alpha73 added `media effects agc= aec=`
+to the trace. One tester run decides it.
+
+`SLACK` has no counterpart in either reference and remains joan's own:
+AOSP bounds the raw queue at `MAX_QUEUE_SIZE`, 150 frames, and LG exposes
+no equivalent at all.
 
 ## Four subsystems, not one
 
