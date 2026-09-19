@@ -1590,8 +1590,15 @@ final class JoanSipBuilder {
         if (res != null && ch != null && ch.nonceB64 != null) {
             String digestRealm = (ch.realm != null && !ch.realm.isEmpty())
                     ? ch.realm : id.realm;
+            /* Null when the challenge offered no qop, and null all the
+             * way into the digest. This was the third place that turned
+             * "none offered" into "auth": extractQop defaulted, this
+             * defaulted again, and the header emitted the parameters
+             * unconditionally, so fixing any one of them alone left the
+             * wire unchanged. An empty string is treated as absent for
+             * the same reason. */
             String qop = (ch.qop != null && !ch.qop.isEmpty())
-                    ? ch.qop : "auth";
+                    ? ch.qop : null;
             boolean resync = ch.auts != null && !ch.auts.isEmpty();
             /* RFC 3310 3.2: "when the AUTS is present, the included
              * response parameter is calculated using an empty password
@@ -1608,8 +1615,14 @@ final class JoanSipBuilder {
                     + "\", uri=\"" + requestUri + "\", response=\""
                     + respHex + "\""
                     + (sSendAuthAlgo ? ", algorithm=" + ch.algorithm : "")
-                    + ", qop=" + qop + ", nc=00000001, cnonce=\""
-                    + txn.cnonce + "\"";
+                    /* Only when the challenge offered qop. Sending these
+                     * unasked is a protocol error in its own right (RFC
+                     * 2617 3.2.2) on top of the digest no longer matching
+                     * the one the server computes. */
+                    + (qop != null
+                            ? ", qop=" + qop + ", nc=00000001, cnonce=\""
+                                    + txn.cnonce + "\""
+                            : "");
             if (resync) {
                 /* Quoted base64, matching ImsStack's STR_AUTS parameter. */
                 authLine += ", auts=\"" + ch.auts + "\"";
@@ -1815,22 +1828,58 @@ final class JoanSipBuilder {
         return s.isEmpty() ? null : s;
     }
 
+    /** qop as a challenge parameter: quoted per RFC 2617, or a bare token. */
+    private static final java.util.regex.Pattern QOP = java.util.regex.Pattern
+            .compile("(?i)(?:^|[,;\\s])qop\\s*=\\s*(?:\"([^\"]*)\"|([^,;\\s]+))");
+
+    /**
+     * The qop to answer a challenge with, or null when it offered none.
+     *
+     * <p>This used to return "auth" when the challenge carried no qop at
+     * all, which is not a default -- it is a different digest. RFC 2617
+     * 3.2.2.1: with qop the response is
+     * {@code MD5(HA1:nonce:nc:cnonce:qop:HA2)}, and without it the RFC
+     * 2069 form {@code MD5(HA1:nonce:HA2)}. A client that invents a qop
+     * computes the first while the server computes the second, and the
+     * two never match. The RFC also says the client MUST NOT send qop,
+     * cnonce or nc when the challenge did not offer qop.
+     *
+     * <p>Digi.Mobil RO challenges with exactly
+     * {@code Digest realm="...",nonce="...",algorithm=AKAv1-MD5} and
+     * answers the protected REGISTER with 500 Server Internal Error. We
+     * were replying qop=auth, nc=00000001 and a cnonce to a challenge
+     * that asked for none of them. Networks that do offer qop="auth" --
+     * T-Mobile among them -- were unaffected, which is why this survived
+     * a working bench.
+     *
+     * <p>Unquoted values are accepted because the old parser only matched
+     * {@code qop="}, and on a network that sends a bare token the
+     * fabricated "auth" happened to be right. Removing the fabrication
+     * without accepting the bare token would have turned that accident
+     * into a regression.
+     *
+     * <p>auth-int is not implemented: our HA2 does not hash an entity
+     * body. If a challenge offers only auth-int this returns null rather
+     * than claiming a qop whose digest we would compute wrongly.
+     */
     static String extractQop(String wwwAuth) {
         if (wwwAuth == null) {
-            return "auth";
+            return null;
         }
-        String key = "qop=\"";
-        int i = indexOfIgnoreCase(wwwAuth, key);
-        if (i >= 0) {
-            int v = i + key.length();
-            int e = wwwAuth.indexOf('"', v);
-            if (e > v) {
-                String q = wwwAuth.substring(v, e).trim();
-                int comma = q.indexOf(',');
-                return comma < 0 ? q : q.substring(0, comma).trim();
+        java.util.regex.Matcher m = QOP.matcher(wwwAuth);
+        if (!m.find()) {
+            return null;
+        }
+        String raw = m.group(1) != null ? m.group(1) : m.group(2);
+        if (raw == null) {
+            return null;
+        }
+        for (String opt : raw.split(",")) {
+            if ("auth".equalsIgnoreCase(opt.trim())) {
+                return "auth";
             }
         }
-        return "auth";
+        return null;
     }
 
     static String extractAlgorithm(String wwwAuth) {

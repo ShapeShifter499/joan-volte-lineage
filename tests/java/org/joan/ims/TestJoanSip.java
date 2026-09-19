@@ -1286,6 +1286,64 @@ public final class TestJoanSip {
                 "a negative is not passed through to the wire");
         check(JoanSipBuilder.plausibleExpiresSec(999999000) == 86400,
                 "an absurd ms value that divides still lands somewhere sane");
+
+        /* qop. Inventing one is not a default, it is a different digest:
+         * RFC 2617 3.2.2.1 computes MD5(HA1:nonce:nc:cnonce:qop:HA2) with
+         * qop and the RFC 2069 MD5(HA1:nonce:HA2) without, and the client
+         * MUST NOT send qop/cnonce/nc unless the challenge offered qop.
+         * Digi.Mobil RO challenges with realm+nonce+algorithm and nothing
+         * else, and answered our qop=auth reply with 500. */
+        String noQop = "Digest realm=\"ims.mnc005.mcc226.3gppnetwork.org\","
+                + "nonce=\"bm9uY2U=\",algorithm=AKAv1-MD5";
+        check(JoanSipBuilder.extractQop(noQop) == null,
+                "a challenge with no qop yields none, not a fabricated auth");
+        check(JoanSipBuilder.extractQop("Digest qop=\"auth\",nonce=\"x\"")
+                        .equals("auth"),
+                "a quoted qop is read");
+        check(JoanSipBuilder.extractQop("Digest qop=auth,nonce=\"x\"")
+                        .equals("auth"),
+                "an UNQUOTED qop is read too, which the old parser missed");
+        check(JoanSipBuilder.extractQop("Digest qop=\"auth-int,auth\"")
+                        .equals("auth"),
+                "auth is preferred wherever it appears in the list");
+        check(JoanSipBuilder.extractQop("Digest qop=\"auth-int\"") == null,
+                "auth-int alone yields none: our HA2 hashes no entity body");
+        check(JoanSipBuilder.extractQop(null) == null,
+                "no challenge at all yields no qop");
+
+        /* The header must follow the parser, and so must the digest. */
+        JoanSipBuilder.Id qid = new JoanSipBuilder.Id(
+                "user@ims.example.net", "sip:+15555550100@ims.example.net",
+                "ims.example.net", "192.0.2.9", 25000, 26000,
+                "123456789012345");
+        JoanSipBuilder.Params qmine = new JoanSipBuilder.Params(
+                1111, 2222, 25000, 26000);
+        JoanSipBuilder.Txn qtxn = new JoanSipBuilder.Txn(qmine,
+                new java.security.SecureRandom());
+        byte[] qres = new byte[] {1, 2, 3, 4, 5, 6, 7, 8};
+        JoanSipBuilder.Challenge chNo = new JoanSipBuilder.Challenge(
+                "bm9uY2U=", "AKAv1-MD5", null, "ims.example.net", null);
+        JoanSipBuilder.Challenge chAuth = new JoanSipBuilder.Challenge(
+                "bm9uY2U=", "AKAv1-MD5", null, "ims.example.net", "auth");
+        String regNo = JoanSipBuilder.buildRegister(qid, qtxn, 2, chNo,
+                qres, null, null, "3GPP-E-UTRAN-FDD", true);
+        String regAuth = JoanSipBuilder.buildRegister(qid, qtxn, 2, chAuth,
+                qres, null, null, "3GPP-E-UTRAN-FDD", true);
+        check(!regNo.contains("qop=") && !regNo.contains("cnonce=")
+                        && !regNo.contains("nc=00000001"),
+                "no qop offered means no qop, nc or cnonce on the wire");
+        check(regAuth.contains("qop=auth") && regAuth.contains("nc=00000001")
+                        && regAuth.contains("cnonce="),
+                "an offered qop is still answered with all three");
+        check(!regNo.contains("qop=null"),
+                "and null never reaches the header as text");
+        String rNo = regNo.substring(regNo.indexOf("response=\"") + 10);
+        rNo = rNo.substring(0, rNo.indexOf('"'));
+        String rAuth = regAuth.substring(regAuth.indexOf("response=\"") + 10);
+        rAuth = rAuth.substring(0, rAuth.indexOf('"'));
+        check(!rNo.equals(rAuth),
+                "the DIGEST differs too: this changed the wire value, not "
+                + "just the header (" + rNo + " vs " + rAuth + ")");
     }
 
     /**
