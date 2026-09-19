@@ -24,5 +24,6 @@
 <exceptions>
     <exception package="org.joan.ims">
         <permission name="android.permission.ACCESS_FINE_LOCATION" fixed="false"/>
+        <permission name="android.permission.ACCESS_BACKGROUND_LOCATION" fixed="false"/>
     </exception>
 </exceptions>

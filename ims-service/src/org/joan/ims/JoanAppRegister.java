@@ -1298,29 +1298,79 @@ final class JoanAppRegister {
             sPaniCell = "permission-refused";
             return access;
         }
-        if (cells == null || cells.isEmpty()) {
-            sPaniCell = "no-cell-info";
-            return access;
-        }
-        for (android.telephony.CellInfo ci : cells) {
-            if (!ci.isRegistered() || !(ci instanceof android.telephony.CellInfoLte)) {
-                continue;
+        if (cells != null) {
+            for (android.telephony.CellInfo ci : cells) {
+                if (!ci.isRegistered()
+                        || !(ci instanceof android.telephony.CellInfoLte)) {
+                    continue;
+                }
+                android.telephony.CellIdentityLte id =
+                        ((android.telephony.CellInfoLte) ci).getCellIdentity();
+                String out = JoanAccessInfo.pani(access, id.getMccString(),
+                        id.getMncString(), id.getTac(), id.getCi());
+                if (!out.equals(access)) {
+                    sCellSuffix = out.substring(access.length());
+                    sCellAtMs = android.os.SystemClock.elapsedRealtime();
+                    sPaniCell = "ok";
+                    return out;
+                }
+                // A registered cell whose identity is unset reads as
+                // Integer.MAX_VALUE, which the formatter rejects.
+                sPaniCell = "cell-identity-unset";
+                return access;
             }
-            android.telephony.CellIdentityLte id =
-                    ((android.telephony.CellInfoLte) ci).getCellIdentity();
-            String out = JoanAccessInfo.pani(access, id.getMccString(),
-                    id.getMncString(), id.getTac(), id.getCi());
-            if (!out.equals(access)) {
-                sPaniCell = "ok";
-                return out;
-            }
-            // A registered cell whose identity is unset reads as
-            // Integer.MAX_VALUE, which the formatter rejects.
-            sPaniCell = "cell-identity-unset";
-            return access;
         }
-        sPaniCell = "no-registered-lte-cell";
+        /* Empty is ordinary, not an error: getAllCellInfo serves a cache
+         * the framework rate-limits, so the first call after boot often
+         * has nothing in it. AOSP's CellInfoAgent answers that by firing
+         * requestCellInfoUpdate and keeping what comes back, so the NEXT
+         * message has a cell -- a one-shot read would have registered
+         * without one every time the cache was cold. Do the same: prime
+         * it for the next REGISTER, and meanwhile reuse a recent answer
+         * rather than either inventing one or going bare. */
+        primeCellInfo(tm);
+        String cached = recentCellSuffix();
+        if (cached != null) {
+            sPaniCell = "ok-cached";
+            return access + cached;
+        }
+        sPaniCell = (cells == null || cells.isEmpty())
+                ? "no-cell-info" : "no-registered-lte-cell";
         return access;
+    }
+
+    /* The last cell we could format, and when. Reused only briefly: a
+     * handset moves, and a stale cell id is a false location in the one
+     * header an operator reads for location. One registration interval is
+     * the bound -- past that, bare is the honest answer. */
+    private static volatile String sCellSuffix;
+    private static volatile long sCellAtMs;
+    private static final long CELL_CACHE_MS = 600000L;
+
+    private static String recentCellSuffix() {
+        String c = sCellSuffix;
+        if (c == null) {
+            return null;
+        }
+        long age = android.os.SystemClock.elapsedRealtime() - sCellAtMs;
+        return (age >= 0 && age <= CELL_CACHE_MS) ? c : null;
+    }
+
+    /** Ask the framework to refresh its cell cache; the result lands later. */
+    private static void primeCellInfo(TelephonyManager tm) {
+        try {
+            tm.requestCellInfoUpdate(Runnable::run,
+                    new TelephonyManager.CellInfoCallback() {
+                        @Override
+                        public void onCellInfo(
+                                java.util.List<android.telephony.CellInfo> ci) {
+                            // Nothing to do: the point is that the next
+                            // getAllCellInfo has something to return.
+                        }
+                    });
+        } catch (Throwable ignored) {
+            // Best effort; the header simply stays bare this time.
+        }
     }
 
     @FunctionalInterface

@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.joan.ims"
-    android:versionCode="69"
-    android:versionName="0.4.0-alpha59">
+    android:versionCode="70"
+    android:versionName="0.4.0-alpha60">
     <!-- pm install rejects an APK with no uses-sdk ("found 0");
          the zip sideloads into priv-app, which does not check. -->
     <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="34" />
@@ -18,6 +18,14 @@
          else. Grant with:
            adb shell pm grant org.joan.ims android.permission.ACCESS_FINE_LOCATION -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- An ImsService has no UI and is always in the background, and since
+         Android 10 a background process needs this as well or the cell
+         cache reads back empty. AOSP's ImsStack declares all three of
+         COARSE, FINE and BACKGROUND for the same reason. It also holds
+         LOCATION_BYPASS, which is signature-only: we cannot have it, so
+         with the system location toggle OFF there is no cell id for us to
+         read and the header stays bare. -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CONNECTIVITY_USE_RESTRICTED_NETWORKS" />
