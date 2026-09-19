@@ -4,6 +4,39 @@ Signed-off-by: Lance <Gero3977@gmail.com>
 Assisted-by: Claude-Code:claude-opus-5
 Date: 2026-09-19
 
+## Release state, and where to resume
+
+**Latest is `v0.4.0-alpha75` (vc85).** Also published: alpha67, alpha65,
+and the older line back to alpha33. `alpha73` and `alpha74` were
+**deleted, tags and all** -- the audio work they carried is in alpha75,
+which supersedes both, and the incident below is recorded here rather
+than in public release notes. The alpha74 zip is kept off-repo (Lance's
+phone and the session scratchpad) because it is the targeted cleanup for
+a device that flashed alpha70-73 and does not want a full ROM reflash.
+
+Resume when tester logs arrive. Four things only a handset can answer,
+all one paste each: `qpeak` sizes `SLACK`, `media effects agc= aec=`
+decides whether to keep attaching them, `media capture record_audio=`
+settles the microphone, and `install:` separates a priv-app install from
+a `pm install` one.
+
+### CMCC, when that lane retests
+
+Expect to **confirm provisioning, not fix it**, and say so when asking,
+so a 404 coming back is not read as another failure. Nothing landed here
+targets a 404: the Via fix only touches requests on the retained TCP
+client (SUBSCRIBE/INVITE, not REG1/REG2), 423 handling is for a different
+response, and Expires and PANI have no path to "user unknown". The
+playbook's own outcome table already reads `tpt=tcp` + `reg2=404` as an
+HSS/UAR answer.
+
+Two things do make the retest worth doing. That lane last reported on
+**alpha38**, and since then the sole-mechanism sec-agree veto was fixed
+-- a live regression that could reject a P-CSCF offering exactly one
+mechanism, which CMCC does. And the capture did not exist then: the
+playbook's "what would settle it" is entirely about reading the real
+exchange, which a tester can now send without root.
+
 ## Incident: alpha70-73 broke a tester's ROM
 
 The boot-time permission grant added in alpha70 ran `pm grant` in the
@@ -17,9 +50,24 @@ service would never start it and nothing else would change. That was an
 argument, not a measurement -- it had never run on any handset -- and the
 payoff was saving a tester one tap on a screen that already worked.
 
-- **alpha74 is the recovery build.** Its installer deletes
-  `/system/etc/init/joan-grant.rc` and `/system/bin/joan-grant.sh`, so
-  reflashing is the way out. Marked latest.
+- **A dirty flash of the ROM fixes it.** Everything joan wrote is on
+  `/system` -- the two files above plus the apk and permission XMLs -- so
+  rewriting `/system` removes all of it. `/data` survives a dirty flash,
+  so if it boots with permissions still wrong,
+  `adb shell pm reset-permissions` restores ROM defaults, and if it does
+  not boot at all the damage is in `/data` and a factory reset is the
+  answer.
+- **alpha74 was the targeted cleanup**, deleting just those two files and
+  keeping the joan install. Its release was withdrawn; the zip is kept
+  off-repo for exactly this one handset.
+- **It was probably not the only cause.** That handset is the InfinityX
+  lane, 805 free blocks and 132 free inodes, and the installer wrote the
+  apk BEFORE the privapp allowlist. Running out of space between the two
+  leaves an apk requesting privileged permissions with no allowlist,
+  which under `ro.control_privapp_permissions=enforce` is a fatal boot
+  error. That fits "broke the ROM trying to set up permissions" at least
+  as well as the init service does, and both are now closed: the
+  allowlist is written first, and an aborted install rolls the apk back.
 - `adb shell pm reset-permissions` restores ROM defaults if permissions
   are still wrong after boot.
 - alpha73 is demoted with a DO NOT FLASH notice; alpha67 has no
