@@ -74,12 +74,17 @@ final class JoanSipCapture {
         if (text == null || text.isEmpty()) {
             return;
         }
+        // Describe the line endings BEFORE anything touches them: this
+        // file goes out over a PTY that rewrites LF as CRLF, and the
+        // original terminators are evidence in their own right.
+        String facts = JoanSipRedact.lineEndings(text);
         String body = text.length() > MAX_MESSAGE
                 ? text.substring(0, MAX_MESSAGE) + "\n<truncated at "
                         + MAX_MESSAGE + " of " + text.length() + " bytes>\n"
                 : text;
-        String entry = "==== " + label + " (" + text.length() + " bytes) ====\n"
-                + JoanSipRedact.redact(body);
+        String entry = "==== " + label + " ====\n"
+                + "---- as sent: " + facts + "\n"
+                + JoanSipRedact.normalize(JoanSipRedact.redact(body));
         synchronized (LOCK) {
             if (label.startsWith("REG1 request")) {
                 sEntries.clear();
@@ -112,6 +117,14 @@ final class JoanSipCapture {
                     + "#   your P-CSCF address. They are what the open questions are\n"
                     + "#   about, so they are kept on purpose -- read this file before\n"
                     + "#   you send it to anyone.\n"
+                    + "#\n"
+                    + "# LINE ENDINGS: the messages below are written with one LF per\n"
+                    + "#   line so this file reads the same after adb's PTY, a copy and\n"
+                    + "#   a paste. What was actually on the wire is on each message's\n"
+                    + "#   'as sent' line: crlf= is what SIP requires, and lf= or cr=\n"
+                    + "#   above zero is a fault worth reporting, not a transfer\n"
+                    + "#   artefact. sha256 is over the message as sent, before\n"
+                    + "#   redaction, so two captures can be compared to each other.\n"
                     + "#\n");
             for (String e : sEntries) {
                 fw.write("\n");

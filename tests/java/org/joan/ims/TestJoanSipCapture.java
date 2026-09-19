@@ -106,6 +106,51 @@ public final class TestJoanSipCapture {
         check(out.contains("nonce=BODYVERBATIM"),
                 "the body is passed through byte for byte");
 
+        // --- line endings: the one thing a PTY destroys silently ---
+        // adb shell rewrites LF as CRLF, so a SIP message's own CRLF
+        // arrives as CRCRLF. The counts are taken before normalisation so
+        // a mangled transfer can neither hide a real fault nor invent one.
+        String crlfMsg = "REGISTER sip:x SIP/2.0\r\nVia: a\r\n\r\n";
+        String facts = JoanSipRedact.lineEndings(crlfMsg);
+        check(facts.contains("crlf=3") && facts.contains("lf=0")
+                        && facts.contains("cr=0"),
+                "a well-formed message counts only CRLF (got " + facts + ")");
+        check(facts.contains("bytes=" + crlfMsg.length()),
+                "the byte count is of the message as sent");
+        check(facts.contains("sha256=") && !facts.contains("unavailable"),
+                "the digest is computed");
+
+        String bareLf = "REGISTER sip:x SIP/2.0\nVia: a\r\n\r\n";
+        facts = JoanSipRedact.lineEndings(bareLf);
+        check(facts.contains("lf=1") && facts.contains("crlf=2"),
+                "a BARE LF is counted, not silently accepted (got " + facts + ")");
+
+        facts = JoanSipRedact.lineEndings("a\rb");
+        check(facts.contains("cr=1"), "a lone CR is counted too (got " + facts + ")");
+
+        // Normalisation is what makes the file survive the trip.
+        String norm = JoanSipRedact.normalize(crlfMsg);
+        check(norm.indexOf('\r') < 0, "normalize leaves no CR behind");
+        check(norm.equals("REGISTER sip:x SIP/2.0\nVia: a\n\n"),
+                "normalize collapses CRLF to LF without losing a line");
+        check(JoanSipRedact.normalize("a\rb").equals("a\nb"),
+                "a lone CR normalises to a line break, not to nothing");
+        check(JoanSipRedact.normalize(null) == null, "normalize passes null through");
+
+        // Two different messages must not collide; the same one must match.
+        check(JoanSipRedact.lineEndings(crlfMsg).equals(
+                        JoanSipRedact.lineEndings(crlfMsg)),
+                "the digest is stable across calls");
+        check(!JoanSipRedact.lineEndings(crlfMsg).equals(
+                        JoanSipRedact.lineEndings(bareLf)),
+                "a message differing only in line endings gets a different digest");
+
+        // Redaction must still work on a message that arrives LF-only.
+        String lfOnly = "REGISTER sip:x SIP/2.0\n"
+                + "Authorization: Digest nonce=\"LFONLYSECRET\"\n\n";
+        String red = JoanSipRedact.redact(lfOnly);
+        gone(red, "LFONLYSECRET", "redaction works on an LF-only message");
+
         check(JoanSipRedact.redact(null) == null, "null in, null out");
         check("".equals(JoanSipRedact.redact("")), "empty in, empty out");
 
@@ -113,6 +158,6 @@ public final class TestJoanSipCapture {
             System.out.println("sip capture redaction: FAIL " + fail);
             System.exit(1);
         }
-        System.out.println("ok   sip capture redaction tests (25 checks)");
+        System.out.println("ok   sip capture redaction + line-ending tests (37 checks)");
     }
 }
