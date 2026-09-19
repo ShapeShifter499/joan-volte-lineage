@@ -67,6 +67,14 @@ javac -d "$REDACT_OUT" \
     "$JAVA_TEST/org/joan/ims/TestJoanSipCapture.java"
 java -cp "$REDACT_OUT" org.joan.ims.TestJoanSipCapture
 
+echo "== pani cell id"
+PANI_OUT="$ROOT/native/build/java-pani-host"
+mkdir -p "$PANI_OUT"
+javac -d "$PANI_OUT" \
+    "$JAVA_SRC/JoanAccessInfo.java" \
+    "$JAVA_TEST/org/joan/ims/TestJoanAccessInfo.java"
+java -cp "$PANI_OUT" org.joan.ims.TestJoanAccessInfo
+
 echo "== viettel volte carrier gate"
 SDK_JAR=${ANDROID_SDK:-$HOME/Android/Sdk}/platforms/android-36/android.jar
 GATE_OUT="$ROOT/native/build/java-gate-host"

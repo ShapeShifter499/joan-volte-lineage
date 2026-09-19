@@ -1243,23 +1243,84 @@ final class JoanAppRegister {
         return new Id(impi, impu, realm, imei == null ? "" : imei);
     }
 
+    /** Why the last PANI carried no cell id, for the state row. */
+    private static volatile String sPaniCell = "not-attempted";
+
+    static String paniCellStatus() {
+        return sPaniCell;
+    }
+
     private static String paniFor(Context ctx) {
+        String access = "3GPP-E-UTRAN-FDD";
         try {
             TelephonyManager tm = ctx.getSystemService(TelephonyManager.class);
             if (tm == null) {
-                return "3GPP-E-UTRAN-FDD";
+                sPaniCell = "no-telephony";
+                return access;
             }
             int t = tm.getDataNetworkType();
             if (t == TelephonyManager.NETWORK_TYPE_NR) {
-                return "3GPP-NR-FDD";
-            }
-            if (t == TelephonyManager.NETWORK_TYPE_IWLAN) {
+                access = "3GPP-NR-FDD";
+            } else if (t == TelephonyManager.NETWORK_TYPE_IWLAN) {
+                // Wi-Fi carries no 3GPP cell, and utran-cell-id-3gpp does
+                // not belong on it.
+                sPaniCell = "not-3gpp-access";
                 return "IEEE-802.11";
             }
-        } catch (Exception ignored) {
-            // default LTE token
+            return withCellId(ctx, tm, access);
+        } catch (Exception e) {
+            sPaniCell = "error:" + e.getClass().getSimpleName();
+            return access;
         }
-        return "3GPP-E-UTRAN-FDD";
+    }
+
+    /**
+     * Append the serving cell, or leave the access type bare and say why.
+     *
+     * <p>getAllCellInfo needs ACCESS_FINE_LOCATION, a runtime permission
+     * that a sideloaded priv-app does not get for free. Rather than fail
+     * or fabricate, this records which it was -- a tester reading
+     * pani_cell=no-permission can fix it with one adb command, and
+     * pani_cell=no-lte-cell is a different problem entirely.
+     */
+    private static String withCellId(Context ctx, TelephonyManager tm,
+                                     String access) {
+        if (ctx.checkSelfPermission(
+                android.Manifest.permission.ACCESS_FINE_LOCATION)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            sPaniCell = "no-permission";
+            return access;
+        }
+        java.util.List<android.telephony.CellInfo> cells;
+        try {
+            cells = tm.getAllCellInfo();
+        } catch (SecurityException e) {
+            sPaniCell = "permission-refused";
+            return access;
+        }
+        if (cells == null || cells.isEmpty()) {
+            sPaniCell = "no-cell-info";
+            return access;
+        }
+        for (android.telephony.CellInfo ci : cells) {
+            if (!ci.isRegistered() || !(ci instanceof android.telephony.CellInfoLte)) {
+                continue;
+            }
+            android.telephony.CellIdentityLte id =
+                    ((android.telephony.CellInfoLte) ci).getCellIdentity();
+            String out = JoanAccessInfo.pani(access, id.getMccString(),
+                    id.getMncString(), id.getTac(), id.getCi());
+            if (!out.equals(access)) {
+                sPaniCell = "ok";
+                return out;
+            }
+            // A registered cell whose identity is unset reads as
+            // Integer.MAX_VALUE, which the formatter rejects.
+            sPaniCell = "cell-identity-unset";
+            return access;
+        }
+        sPaniCell = "no-registered-lte-cell";
+        return access;
     }
 
     @FunctionalInterface

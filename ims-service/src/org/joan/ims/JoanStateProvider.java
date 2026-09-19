@@ -132,6 +132,7 @@ public class JoanStateProvider extends ContentProvider {
         c.addRow(new Object[] { "last_dial", JoanTrace.lastDial() });
         c.addRow(new Object[] { "volte_gate", JoanVolteCarrierGate.last() });
         c.addRow(new Object[] { "sub_debug", JoanDriver.subscriptionDebug(ctx) });
+        c.addRow(new Object[] { "pani_cell", JoanAppRegister.paniCellStatus() });
         c.addRow(new Object[] { "capture", captureRow(ctx) });
         return c;
     }

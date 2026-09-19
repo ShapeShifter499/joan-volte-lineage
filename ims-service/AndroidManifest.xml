@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.joan.ims"
-    android:versionCode="68"
-    android:versionName="0.4.0-alpha58">
+    android:versionCode="69"
+    android:versionName="0.4.0-alpha59">
     <!-- pm install rejects an APK with no uses-sdk ("found 0");
          the zip sideloads into priv-app, which does not check. -->
     <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="34" />
@@ -10,6 +10,14 @@
     <uses-permission android:name="android.permission.MODIFY_PHONE_STATE" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.READ_PRIVILEGED_PHONE_STATE" />
+    <!-- P-Access-Network-Info must carry utran-cell-id-3gpp (TS 24.229
+         7.2A.4), and getAllCellInfo has needed ACCESS_FINE_LOCATION since
+         API 29. It is a runtime permission: unless it is granted the
+         header falls back to the bare access type and the state row says
+         pani_cell=no-permission. Nothing here uses location for anything
+         else. Grant with:
+           adb shell pm grant org.joan.ims android.permission.ACCESS_FINE_LOCATION -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CONNECTIVITY_USE_RESTRICTED_NETWORKS" />
