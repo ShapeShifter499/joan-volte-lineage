@@ -268,6 +268,37 @@ final class JoanImsDiscovery {
         }
     }
 
+    /**
+     * Turn EF_PCSCF entries into addresses, resolving names if needed.
+     *
+     * <p>A card may store either, and TS 31.103 4.2.8 allows an FQDN
+     * outright, so both are accepted through the same validation the
+     * other sources use: a literal must parse, a name must satisfy
+     * {@link #isHostname} and then resolve on the IMS network. Anything
+     * that is neither is dropped rather than guessed at.
+     */
+    static List<InetAddress> fromCardPcscf(List<String> entries,
+                                           Network network) {
+        List<InetAddress> out = new ArrayList<>();
+        if (entries == null) {
+            return out;
+        }
+        for (String e : entries) {
+            InetAddress lit = literal(e);
+            if (lit != null) {
+                add(out, lit);
+            } else if (isHostname(e)) {
+                for (InetAddress a : resolveOn(network, e, DNS_TIMEOUT_MS)) {
+                    add(out, a);
+                }
+            }
+            if (out.size() >= MAX_PEERS) {
+                break;
+            }
+        }
+        return out;
+    }
+
     static boolean usable(InetAddress a) {
         return (a instanceof Inet4Address || a instanceof Inet6Address)
                 && !a.isAnyLocalAddress() && !a.isLoopbackAddress()

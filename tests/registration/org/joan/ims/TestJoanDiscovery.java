@@ -113,6 +113,24 @@ public class TestJoanDiscovery {
         check(JoanImsDiscovery.resolveOn(null, "x.example.com", 100).isEmpty(),
                 "no network means no lookup and no exception");
 
+
+        /* EF_PCSCF off the card is the ISIM leg of discovery -- AOSP's
+         * third method after PCO and CONFIG. Literals go straight
+         * through; names need a network, and without one they are simply
+         * not used rather than resolved on the wrong resolver. */
+        check(JoanImsDiscovery.fromCardPcscf(
+                        Arrays.asList("192.0.2.77"), null).size() == 1,
+                "a literal from EF_PCSCF is used with no network needed");
+        check(JoanImsDiscovery.fromCardPcscf(
+                        Arrays.asList("pcscf.example.com"), null).isEmpty(),
+                "a named EF_PCSCF entry is not resolved without a network");
+        check(JoanImsDiscovery.fromCardPcscf(
+                        Arrays.asList("not a host", "::", "0.0.0.0"),
+                        null).isEmpty(),
+                "junk from the card is dropped, never guessed at");
+        check(JoanImsDiscovery.fromCardPcscf(null, null).isEmpty(),
+                "no EF_PCSCF entries yields nothing and does not throw");
+
         System.out.println("DISCOVERY_CHECKS=" + checks + " FAILURES=0");
     }
 }

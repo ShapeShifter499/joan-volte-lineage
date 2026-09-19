@@ -1006,7 +1006,20 @@ final class JoanAppRegister {
              * trace pass must not put a DNS lookup on the wire. */
             JoanImsDiscovery.Pcscfs pcscfInfo =
                     JoanImsDiscovery.read(lp, tm0, network);
+            java.util.List<java.net.InetAddress> fromCard =
+                    java.util.Collections.emptyList();
             if (pcscfInfo.addresses.isEmpty()) {
+                /* Third discovery source, and the last one: EF_PCSCF read
+                 * off the card. AOSP orders its methods PCO, CONFIG then
+                 * ISIM (AosPcscf.cpp 684-710); we have no CONFIG data, so
+                 * this is the ISIM leg. It only runs when the PDN
+                 * advertised nothing and the framework's own ISIM
+                 * accessor gave nothing either -- which is precisely the
+                 * China Unicom shape, "PDN advertised none". */
+                fromCard = JoanImsDiscovery.fromCardPcscf(
+                        JoanAka.readIsimFiles(tm0).pcscf, network);
+            }
+            if (pcscfInfo.addresses.isEmpty() && fromCard.isEmpty()) {
                 continue;
             }
             int mtu;
@@ -1018,6 +1031,11 @@ final class JoanAppRegister {
             Net n = new Net(network, pcscfInfo.summary(), mtu);
             n.locals.addAll(JoanImsDiscovery.locals(lp));
             n.pcscfs.addAll(pcscfInfo.addresses);
+            for (java.net.InetAddress a : fromCard) {
+                if (!n.pcscfs.contains(a)) {
+                    n.pcscfs.add(a);
+                }
+            }
             return n;
         }
         return null;
