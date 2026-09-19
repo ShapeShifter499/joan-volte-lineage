@@ -69,25 +69,36 @@ loopback control socket.
 > Caller ID is the asserted number; Dialer can still overlay a matching
 > contact.
 
-## Current tester build: v0.4.0-alpha34
+## Current tester build: v0.4.0-alpha37
 
-`v0.4.0-alpha34` (versionCode 44) is the current tester zip: 689 host
-checks and the UA, registration, discovery, merge, xfrm and carrier
-suites pass, and it registers on T-Mobile 310-260 on
+`v0.4.0-alpha37` (versionCode 47) is the current tester zip: 796 host
+checks and the UA, registration, discovery, merge, xfrm, carrier and
+installer suites pass, and it registers on T-Mobile 310-260 on
 the bench handset. That is not a live-carrier qualifier for anyone else.
 
-What alpha34 adds over alpha33: PCMU calls now bridge lost audio frames
-(a faded repeat of the last frame instead of a tear) and keep their
-playback pacing during packet loss; refused INVITEs log the carrier's
-reason phrase and Warning header in the trace; answered-into-silence
-calls are now visible in the trace (blackout timing and first-audio
-arrival).
+What alpha37 adds over alpha34 is mostly about reading the SIM and the
+network correctly rather than new call behaviour. The SIM applet is now
+selected by its 3GPP AID prefix instead of one card's issuer suffix, so
+cards whose ISIM sits behind a different suffix are found at all; EF_DIR
+is read to ask the card what it actually holds; and ADF_ISIM is read
+directly when the framework claims there is none, which also gives a
+third source for the P-CSCF address. A P-CSCF delivered as a hostname is
+now resolved, on the IMS network and behind a deadline, instead of being
+dropped. Every `Security-Server` row is read rather than only the first.
+The `algorithm=` parameter in Authorization is now the carrier profile's
+decision, defaulting to RFC 3310's behaviour where no profile says
+otherwise.
+
+Two settings surfaces are now read but deliberately not advertised: the
+Ut/XCAP configuration we already shipped, and the carrier's RTT settings
+with a T.140 parser. Neither is reachable from a call, and neither
+declares a capability to the network or the dialer.
 
 Sideload `joan-volte-recovery.zip`, reboot, then confirm:
 
 ```
 adb shell content query --uri content://org.joan.ims.state/state | grep key=build
-→ 0.4.0-alpha34 (44)
+→ 0.4.0-alpha37 (47)
 ```
 
 Check that row, **not** `dumpsys package`, which serves a stale version
