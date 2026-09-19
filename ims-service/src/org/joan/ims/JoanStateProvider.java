@@ -132,6 +132,7 @@ public class JoanStateProvider extends ContentProvider {
         c.addRow(new Object[] { "last_dial", JoanTrace.lastDial() });
         c.addRow(new Object[] { "volte_gate", JoanVolteCarrierGate.last() });
         c.addRow(new Object[] { "sub_debug", JoanDriver.subscriptionDebug(ctx) });
+        c.addRow(new Object[] { "install", installShape(ctx) });
         c.addRow(new Object[] { "pani_cell", JoanAppRegister.paniCellStatus() });
         c.addRow(new Object[] { "capture", captureRow(ctx) });
         return c;
@@ -153,6 +154,58 @@ public class JoanStateProvider extends ContentProvider {
      */
     private static String buildLabel(Context ctx) {
         return JoanTrace.readBuild(ctx);
+    }
+
+    /**
+     * Where this build is installed from, which decides which permissions
+     * it can hold at all.
+     *
+     * A zip install lands in /system/priv-app and is privileged: the
+     * privapp allowlist applies, so MODIFY_PHONE_STATE and
+     * READ_PRECISE_PHONE_STATE work, and the dangerous runtime
+     * permissions are NOT granted by anything in the package.
+     *
+     * A `pm install` lands in /data/app and is the mirror image: not
+     * privileged, so the diagnostics listener throws SecurityException,
+     * but the installer can grant runtime permissions, so the microphone
+     * works. It still functions as an ImsService either way, because
+     * BIND_IMS_SERVICE guards who may bind to the service rather than
+     * being something this app has to hold.
+     *
+     * Two testers sat on opposite sides of that and it took a day to see.
+     * The T-Mobile handset had real capture and
+     * ims_diag_listener=unavailable_SecurityException throughout; the
+     * Digi.Mobil RO handset had working diagnostics and an uplink of
+     * digital silence. One row would have said so immediately.
+     */
+    private static String installShape(Context ctx) {
+        if (ctx == null) {
+            return "unknown";
+        }
+        String dir;
+        try {
+            dir = ctx.getApplicationInfo().sourceDir;
+        } catch (Throwable t) {
+            return "unknown";
+        }
+        if (dir == null) {
+            return "unknown";
+        }
+        String kind;
+        if (dir.startsWith("/system/priv-app")
+                || dir.startsWith("/system_ext/priv-app")
+                || dir.startsWith("/product/priv-app")) {
+            kind = "priv-app (privileged; runtime permissions NOT granted "
+                    + "by the zip)";
+        } else if (dir.startsWith("/data/")) {
+            kind = "data-app via pm install (NOT privileged; diagnostics "
+                    + "will throw SecurityException)";
+        } else if (dir.startsWith("/system") || dir.startsWith("/product")) {
+            kind = "system app, not privileged";
+        } else {
+            kind = "unrecognised";
+        }
+        return kind + " path=" + dir;
     }
 
     /**
