@@ -1490,8 +1490,7 @@ final class JoanSipBuilder {
         a.append("Supported: path, sec-agree\r\n");
         a.append("Require: sec-agree\r\n");
         a.append("Proxy-Require: sec-agree\r\n");
-        a.append("Security-Client: ").append(securityClientValue(txn.mine))
-                .append("\r\n");
+        appendSecAgree(a, "Security-Client", securityClientValue(txn.mine));
         a.append("P-Access-Network-Info: ").append(pani).append("\r\n");
         /* No P-Preferred-Identity here.
          *
@@ -1512,7 +1511,7 @@ final class JoanSipBuilder {
          * did with our malformed +sip.instance. It is still carried on
          * INVITE and the reg-event SUBSCRIBE, where it belongs. */
         if (ch != null && ch.secServer != null && !ch.secServer.isEmpty()) {
-            a.append("Security-Verify: ").append(ch.secServer).append("\r\n");
+            appendSecAgree(a, "Security-Verify", ch.secServer);
         }
         a.append("Authorization: ").append(authLine).append("\r\n");
         a.append("Content-Length: 0\r\n\r\n");
@@ -1691,6 +1690,36 @@ final class JoanSipBuilder {
             case "c": return "content-type";
             case "k": return "supported";
             default: return n;
+        }
+    }
+
+    /**
+     * A sec-agree header, one row per mechanism.
+     *
+     * <p>{@code RegParameter::AddSecurityHeaders} walks the
+     * Security-Client list and then the Security-Verify list and calls
+     * AddHeader once for each element, so a stock REGISTER carries as
+     * many rows as it has mechanisms -- four of them on a carrier whose
+     * mask allows every combination. joan wrote one row with the
+     * mechanisms comma-joined. RFC 3261 7.3.1 makes the two the same
+     * message, but only one of them is what the handsets these cores
+     * were tested against actually send, and a P-CSCF whose
+     * Security-Client parser reads a mechanism per row sees one
+     * unreadable value instead of four good ones.
+     *
+     * <p>Each mechanism keeps the text it already had. The reference
+     * re-serialises through {@code SipSecurityHeader::ToString}, which
+     * reproduces the received bytes only because the parser records
+     * whether an incoming SPI was zero-padded; echoing verbatim reaches
+     * the same place without depending on that.
+     */
+    static void appendSecAgree(StringBuilder a, String name, String value) {
+        java.util.List<String> rows = JoanSecAgree.rawMechanisms(value);
+        if (rows.isEmpty()) {
+            return;
+        }
+        for (String row : rows) {
+            a.append(name).append(": ").append(row).append("\r\n");
         }
     }
 
@@ -3110,7 +3139,7 @@ final class JoanSipBuilder {
             a.append("Proxy-Require: sec-agree\r\n");
         }
         if (secVerify != null && !secVerify.isEmpty()) {
-            a.append("Security-Verify: ").append(secVerify).append("\r\n");
+            appendSecAgree(a, "Security-Verify", secVerify);
         }
         a.append("Accept-Contact: *;+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\"\r\n");
         a.append(sessionTimerOfferHeaders());
@@ -3517,7 +3546,7 @@ final class JoanSipBuilder {
             a.append(extra);
         }
         if (secVerify != null && !secVerify.isEmpty()) {
-            a.append("Security-Verify: ").append(secVerify).append("\r\n");
+            appendSecAgree(a, "Security-Verify", secVerify);
         }
         if (sdp != null && !sdp.isEmpty()) {
             a.append("Content-Type: application/sdp\r\n");

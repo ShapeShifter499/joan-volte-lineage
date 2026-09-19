@@ -602,6 +602,20 @@ public final class TestJoanSip {
         check(threw, "3DES refused: not in IpSecManager");
     }
 
+    private static java.util.List<String> headerRows(String msg, String name) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (String line : msg.split("\r\n")) {
+            if (line.regionMatches(true, 0, name + ":", 0, name.length() + 1)) {
+                out.add(line.substring(name.length() + 1).trim());
+            }
+        }
+        return out;
+    }
+
+    private static int countHeaderRows(String msg, String name) {
+        return headerRows(msg, name).size();
+    }
+
     private static void testRawMechanismCount() {
         /* The count that says whether offered= told the whole story. */
         String two = "ipsec-3gpp; alg=hmac-sha-1-96; ealg=aes-cbc; prot=esp; "
@@ -839,6 +853,21 @@ public final class TestJoanSip {
                         && msg.contains("ealg=aes-cbc")
                         && msg.contains("ealg=null"),
                 "reg1 Security-Client offers 3GPP set including null ealg");
+        /* One header row per mechanism, the way the reference emits them.
+         * RegParameter::AddSecurityHeaders walks the Security-Client list
+         * and calls AddHeader once per element, so a stock REGISTER
+         * carries four rows where the mask allows four combinations.
+         * joan wrote one row with the mechanisms comma-joined -- the same
+         * message by RFC 3261 7.3.1, but not the shape a P-CSCF whose
+         * parser reads a mechanism per row is expecting. */
+        check(countHeaderRows(msg, "Security-Client") == 4,
+                "reg1 writes one Security-Client row per mechanism");
+        for (String row : headerRows(msg, "Security-Client")) {
+            check(!row.contains(","),
+                    "no Security-Client row carries a comma-joined list");
+            check(row.contains("spi-c=") && row.contains("port-s="),
+                    "and each row is a whole mechanism, not a fragment");
+        }
         check(msg.contains("P-Access-Network-Info: 3GPP-E-UTRAN-FDD"),
                 "reg1 default PANI is radio token");
         check(msg.contains("Via: SIP/2.0/UDP "),
@@ -920,6 +949,28 @@ public final class TestJoanSip {
                 "protected CMCC REGISTER Via is TCP from port-c");
         check(tcp.contains("Security-Verify:"),
                 "protected TCP REGISTER still carries Security-Verify");
+
+        /* Security-Verify gets a row per mechanism too. Service.cpp and
+         * RegParameter.cpp both loop their list and AddHeader once per
+         * element, on the REGISTER path and inside a dialog alike. The
+         * server's whole list still goes back -- RFC 3329 2.3.1 wants it
+         * returned so the P-CSCF can spot tampering -- but as rows. */
+        JoanSipBuilder.Challenge twoRow = new JoanSipBuilder.Challenge(
+                "dGVzdG5vbmNlMTIzNA==", "AKAv1-MD5",
+                "ipsec-3gpp;alg=hmac-md5-96;ealg=null;spi-c=1;spi-s=2;"
+                        + "port-c=9950;port-s=9900, "
+                        + "ipsec-3gpp;alg=hmac-sha-1-96;ealg=aes-cbc;spi-c=3;"
+                        + "spi-s=4;port-c=9951;port-s=9901");
+        String twoRowMsg = JoanSipBuilder.buildRegister(id, txn, 3, twoRow,
+                res, null, null, "3GPP-E-UTRAN-TDD", true);
+        check(countHeaderRows(twoRowMsg, "Security-Verify") == 2,
+                "a two-mechanism Security-Server echoes as two Security-Verify rows");
+        for (String row : headerRows(twoRowMsg, "Security-Verify")) {
+            check(!row.contains(",") && row.contains("spi-c="),
+                    "and each echoed row is one whole mechanism");
+        }
+        check(twoRowMsg.contains("spi-c=1") && twoRowMsg.contains("spi-c=3"),
+                "the server's whole list goes back, not just the chosen row");
         check(!tcp.contains("Via: SIP/2.0/UDP "),
                 "TCP REGISTER does not also claim UDP");
         String udp = JoanSipBuilder.buildRegister(id, txn, 2, ch, res,

@@ -228,16 +228,33 @@ final class JoanSecAgree {
      * disagree is the signal to go and read the raw header.
      */
     static int rawMechanismCount(String value) {
+        return rawMechanisms(value).size();
+    }
+
+    /**
+     * The mechanisms in a sec-agree header value, each verbatim.
+     *
+     * <p>Used to emit one header row per mechanism, which is how the
+     * reference stack writes both of these headers:
+     * {@code RegParameter::AddSecurityHeaders} loops the Security-Client
+     * list and then the Security-Verify list, calling AddHeader once per
+     * element. joan wrote a single row with the mechanisms joined by
+     * commas -- identical to RFC 3261 7.3.1, and not what a handset puts
+     * on the wire.
+     */
+    static List<String> rawMechanisms(String value) {
         if (value == null) {
-            return 0;
+            return new ArrayList<>();
         }
         String body = value.trim();
         if (body.regionMatches(true, 0, "Security-Server:", 0, 16)) {
             body = body.substring(16).trim();
         } else if (body.regionMatches(true, 0, "Security-Client:", 0, 16)) {
             body = body.substring(16).trim();
+        } else if (body.regionMatches(true, 0, "Security-Verify:", 0, 16)) {
+            body = body.substring(16).trim();
         }
-        return splitMechanisms(body).size();
+        return splitMechanisms(body);
     }
 
     static List<JoanSecAgree> parseAll(String value) {
