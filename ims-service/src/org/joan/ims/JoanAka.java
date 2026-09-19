@@ -17,13 +17,64 @@ import java.util.Locale;
 final class JoanAka {
     private static final String TAG = "JoanIms";
 
-    /** ISIM AID used by pmOS on this modem (proven with QMI UIM). */
-    private static final String ISIM_AID = "A0000000871004FFFFFFFF8907030000";
+    /* AID candidates, tried in order.
+     *
+     * The long forms are what pmOS read off the bench card with QMI UIM,
+     * and they work there -- but the trailing bytes after the 3GPP
+     * RID+PIX are an issuer/card suffix, not part of the application
+     * identity. Selecting the full 16 bytes only matches a card whose
+     * ISIM happens to carry that exact suffix.
+     *
+     * That is not hypothetical. On the China Mobile tester's card BOTH
+     * long AIDs fail to open -- `apdu: open failed status=3` appears 94
+     * times against 47 registration attempts, two per attempt -- and the
+     * card then authenticates fine through
+     * getIccAuthentication(APPTYPE_USIM). A card that answers AKA on its
+     * USIM unquestionably HAS a USIM, so the long-AID open failing there
+     * is our selector being wrong, not the applet being absent. Which
+     * means the identical failure on the ISIM proves nothing about
+     * whether that card has an ISIM either -- and if it has one we have
+     * been registering with identities derived from the IMSI while the
+     * card was holding provisioned ones.
+     *
+     * The bench card settles it. Its own application list reads:
+     *   APPTYPE_USIM  a0000000871002ffffffff8906190000
+     *   APPTYPE_ISIM  a0000000871004ffffffff8907030000
+     * The ISIM matches the long form below. **The USIM does not** -- we
+     * ship ...8907090000 and that card carries ...8906190000 -- so the
+     * USIM-by-AID route has never worked on any card we own, and only
+     * goes unnoticed because the ISIM route succeeds first here. Note
+     * also that the suffix differs between two applications on the SAME
+     * card, which is the clearest possible evidence that it is not part
+     * of the application's identity.
+     *
+     * Per TS 101 220 those trailing bytes are a country code, a provider
+     * code and a free-form application-provider field; issuers set them
+     * as they like. ETSI TS 102 221 SELECT by DF name matches on a
+     * PARTIAL AID for exactly this reason, so the 7-byte RID+PIX is
+     * tried as well.
+     * AOSP does not guess at all: UiccProfile enumerates applications by
+     * AppType and takes each AID from the modem's card status, which is
+     * what getIccAuthentication resolves against and why that route
+     * survived where these did not.
+     *
+     * Order matters and the long form stays first: it is proven on the
+     * bench modem, and this change must not move that card off the path
+     * it already works on.
+     */
+    private static final String[] ISIM_AIDS = {
+        "A0000000871004FFFFFFFF8907030000",
+        "A0000000871004",
+    };
     /* Cards without an ISIM authenticate on the USIM instead. TS 33.203
      * allows IMS AKA against the USIM when no ISIM is present, and plenty
      * of operators ship USIM-only cards -- the stack was ISIM-only and
      * simply stopped on those. */
-    private static final String USIM_AID = "A0000000871002FFFFFFFF8907090000";
+    private static final String[] USIM_AIDS = {
+        "A0000000871002FFFFFFFF8907090000",
+        "A0000000871002",
+    };
+    private static final String ISIM_AID = ISIM_AIDS[0];
 
     private JoanAka() {}
 
@@ -125,9 +176,8 @@ final class JoanAka {
         // channel=0: apduAuthenticate opens a fresh logical channel to the
         // ISIM AID, runs AUTHENTICATE, and closes it. (A literal channel
         // number here would transmit on an unopened channel — bug fixed.)
-        String apduAuth = apduAuthenticate(tm, nonceRaw, 0, 0);
+        String apduAuth = apduAuthenticateAny(tm, nonceRaw, ISIM_AIDS, "ISIM");
         if (apduAuth != null) {
-            JoanTrace.note("aka via ISIM apdu");
             return apduAuth;
         }
 
@@ -145,9 +195,8 @@ final class JoanAka {
          * and an ISIM-only stack simply stops on such a card -- which is
          * what "no ISIM IMPI on this device/SIM yet" was reporting. Try
          * the USIM applet by AID first, then the framework route. */
-        String usimApdu = apduAuthenticate(tm, nonceRaw, 0, 0, USIM_AID);
+        String usimApdu = apduAuthenticateAny(tm, nonceRaw, USIM_AIDS, "USIM");
         if (usimApdu != null) {
-            JoanTrace.note("aka via USIM apdu");
             return usimApdu;
         }
         String viaUsim = runIccAuthViaGet(tm, nonceRaw,
@@ -157,6 +206,28 @@ final class JoanAka {
             return viaUsim;
         }
         JoanTrace.note("aka: no ISIM or USIM route succeeded");
+        return null;
+    }
+
+    /**
+     * AUTHENTICATE against the first AID candidate the card accepts.
+     *
+     * <p>The trace names which one worked, because "ISIM apdu" alone
+     * could not distinguish a card that matched the long issuer-specific
+     * AID from one that only matched the 7-byte 3GPP prefix -- and that
+     * distinction is the whole point of trying both.
+     */
+    private static String apduAuthenticateAny(TelephonyManager tm,
+                                              byte[] randAutn,
+                                              String[] aids, String what) {
+        for (int i = 0; i < aids.length; i++) {
+            String r = apduAuthenticate(tm, randAutn, 0, 0, aids[i]);
+            if (r != null) {
+                JoanTrace.note("aka via " + what + " apdu aid="
+                        + (i == 0 ? "full" : "prefix"));
+                return r;
+            }
+        }
         return null;
     }
 
@@ -175,8 +246,12 @@ final class JoanAka {
                 android.telephony.IccOpenLogicalChannelResponse r =
                         tm.iccOpenLogicalChannel(aid);
                 if (r == null || r.getChannel() <= 0) {
+                    /* Name the AID length: a status=3 against the long
+                     * form and against the 7-byte prefix mean different
+                     * things, and the old line could not tell them apart. */
                     JoanTrace.note("apdu: open failed status="
-                            + (r == null ? "null" : r.getStatus()));
+                            + (r == null ? "null" : r.getStatus())
+                            + " aid_len=" + (aid == null ? 0 : aid.length() / 2));
                     return null;
                 }
                 ch = r.getChannel();
