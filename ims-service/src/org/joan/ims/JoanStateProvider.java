@@ -132,6 +132,7 @@ public class JoanStateProvider extends ContentProvider {
         c.addRow(new Object[] { "last_dial", JoanTrace.lastDial() });
         c.addRow(new Object[] { "volte_gate", JoanVolteCarrierGate.last() });
         c.addRow(new Object[] { "sub_debug", JoanDriver.subscriptionDebug(ctx) });
+        c.addRow(new Object[] { "capture", captureRow(ctx) });
         return c;
     }
 
@@ -165,6 +166,28 @@ public class JoanStateProvider extends ContentProvider {
         } catch (Throwable t) {
             return "unknown";
         }
+    }
+
+    /**
+     * Whether a full REGISTER capture is waiting, and the command that
+     * fetches it.
+     *
+     * This row exists because of how testers actually behave. Asked twice
+     * for joan-capture.log, the Digi.Mobil RO lane sent the state rows
+     * both times -- which is not a failure to follow instructions, it is
+     * a signal: the state query is the thing people run, so the pointer
+     * to everything else belongs in its output rather than in a README
+     * nobody opened. A status code with no message behind it costs a
+     * round trip through a chat window and a carrier's patience.
+     */
+    private static String captureRow(Context ctx) {
+        File f = JoanSipCapture.file(ctx, false);
+        if (f == null || !f.exists()) {
+            return "none yet; written when a REGISTER is attempted";
+        }
+        return "present bytes=" + f.length()
+                + " read=\"adb shell content read --uri content://"
+                + AUTHORITY + "/capture\"";
     }
 
     /**
