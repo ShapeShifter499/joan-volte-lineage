@@ -1260,6 +1260,32 @@ public final class TestJoanSip {
                 "TMUS never leaves UDP even on IPv6/small MTU");
         check(!JoanSipBuilder.preferTcp(null, 1630, 0, true),
                 "non-3GPP realm never flips REG1 to TCP");
+
+        /* Expires is seconds (RFC 3261 20.19), but the configured number
+         * is not reliably in seconds: Android's KEY_REGISTRATION_EXPIRY_
+         * TIMER_SEC_INT defaults to 600000, and LG's profiles mix that
+         * with 43 asking 3600 or 7200. 3600 seconds is an hour; 3600 ms
+         * is 3.6 seconds and nonsense, so both cannot be one unit. Taken
+         * literally this put "Expires: 600000" -- 6.9 days -- on the wire
+         * to a core that answers 500. */
+        check(JoanSipBuilder.plausibleExpiresSec(600000) == 600,
+                "600000 is milliseconds and becomes 600 seconds");
+        check(JoanSipBuilder.plausibleExpiresSec(3600) == 3600,
+                "3600 is already plausible seconds and is not touched");
+        check(JoanSipBuilder.plausibleExpiresSec(7200) == 7200,
+                "7200 is left alone too");
+        check(JoanSipBuilder.plausibleExpiresSec(600) == 600,
+                "an ordinary 600 survives unchanged");
+        check(JoanSipBuilder.plausibleExpiresSec(86400) == 86400,
+                "a full day is the last value taken literally");
+        check(JoanSipBuilder.plausibleExpiresSec(86401) == 86400,
+                "just past a day, not a whole ms count, clamps");
+        check(JoanSipBuilder.plausibleExpiresSec(0) == 600,
+                "unset falls back to the default, converted");
+        check(JoanSipBuilder.plausibleExpiresSec(-5) == 600,
+                "a negative is not passed through to the wire");
+        check(JoanSipBuilder.plausibleExpiresSec(999999000) == 86400,
+                "an absurd ms value that divides still lands somewhere sane");
     }
 
     /**
@@ -1614,8 +1640,14 @@ public final class TestJoanSip {
                 "with no SIM PLMN either, a non-carrier realm still never "
                 + "flips transport");
 
-        /* REGISTER Expires. Both carriers joan can test want 600000, so
-         * this must not change them; 43 of 136 profiles want otherwise. */
+        /* REGISTER Expires, in the seconds RFC 3261 20.19 requires.
+         *
+         * This block used to assert "no carrier value keeps joan's
+         * 600000", which put Expires: 600000 -- 6.9 days -- on the wire
+         * and was only ever justified by "both carriers joan can test
+         * want it". Neither of them wanted 6.9 days; the configured
+         * number is milliseconds, which is also the only reading under
+         * which the 43 profiles asking 3600 or 7200 make sense. */
         JoanSipBuilder.Id id2 = new JoanSipBuilder.Id(
                 "user@ims.example.net", "sip:+15555550100@ims.example.net",
                 "ims.example.net", "2001:db8::2", 25000, 26000,
@@ -1625,13 +1657,19 @@ public final class TestJoanSip {
         JoanSipBuilder.Txn txn2 = new JoanSipBuilder.Txn(mine2,
                 new java.security.SecureRandom());
         JoanSipBuilder.setCarrierRegisterExpires(0);
-        check(JoanSipBuilder.buildRegister(id2, txn2, 1, null, null)
-                        .contains("Expires: 600000"),
-                "no carrier value keeps joan's 600000");
+        String regExp = JoanSipBuilder.buildRegister(id2, txn2, 1, null, null);
+        check(regExp.contains("Expires: 600\r\n"),
+                "no carrier value asks for 600 seconds, not 600000");
+        check(!regExp.contains("Expires: 600000"),
+                "and 6.9 days never reaches the wire");
         JoanSipBuilder.setCarrierRegisterExpires(3600);
         check(JoanSipBuilder.buildRegister(id2, txn2, 1, null, null)
                         .contains("Expires: 3600"),
-                "a carrier asking for 3600 gets 3600");
+                "a carrier asking for 3600 still gets 3600");
+        JoanSipBuilder.setCarrierRegisterExpires(600000);
+        check(JoanSipBuilder.buildRegister(id2, txn2, 1, null, null)
+                        .contains("Expires: 600\r\n"),
+                "a carrier profile carrying 600000 is read the same way");
         JoanSipBuilder.setCarrierRegisterExpires(0);
 
         /* Platform SIP MTU outranks the link MTU: it is an updatable

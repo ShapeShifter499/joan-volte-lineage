@@ -820,6 +820,9 @@ final class JoanDriver {
                 + "/v4=" + cp.tcpCriterionV4
                 + "/v6=" + cp.tcpCriterionV6
                 + " expires=" + JoanSipBuilder.registerExpires()
+                + (JoanSipBuilder.registerExpiresConverted()
+                        ? "(from " + JoanSipBuilder.registerExpiresRaw() + "ms)"
+                        : "")
                 + (platformExpirySec > 0 ? "(platform)" : "(profile)")
                 + " pcscf_port=" + JoanSipBuilder.pcscfSipPort()
                 + " ua=" + (JoanSipBuilder.sendUserAgent() ? "yes" : "no")

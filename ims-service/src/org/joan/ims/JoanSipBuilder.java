@@ -1349,8 +1349,72 @@ final class JoanSipBuilder {
         sProfileRegExpires = seconds > 0 ? seconds : 0;
     }
 
+    /**
+     * A REGISTER expiry longer than a day is not a value in seconds.
+     * RFC 3261 permits up to 2^32-1, so this is a plausibility rule and
+     * not a protocol limit.
+     */
+    static final int MAX_PLAUSIBLE_EXPIRES_SEC = 86400;
+
+    /** What we ask for when nothing else says. AOSP's own default. */
+    static final int DEFAULT_REG_EXPIRES = 600000;
+
+    /**
+     * The REGISTER Expires, in the seconds RFC 3261 §20.19 asks for.
+     *
+     * <p>The configured number is not reliably in seconds. Android's key
+     * is {@code KEY_REGISTRATION_EXPIRY_TIMER_SEC_INT} and its default is
+     * 600000, which as seconds is 6.9 days; LG's shipped profiles mix the
+     * same 600000 with 43 that ask for 3600 or 7200. Both cannot be one
+     * unit: 3600 seconds is an ordinary hour, 3600 milliseconds is 3.6
+     * seconds and nonsense for a registration. So the field carries
+     * milliseconds in some sources and seconds in others, and taking it
+     * literally put {@code Expires: 600000} on the wire.
+     *
+     * <p>That went out to Digi.Mobil RO, whose core answers the protected
+     * REGISTER with 500 Server Internal Error. It is RFC-legal and
+     * T-Mobile grants it, so this is not established as the cause -- it is
+     * the most abnormal value in the message and the cheapest one to rule
+     * out.
+     *
+     * <p>Converted rather than clamped, because clamping 600000 to a day
+     * would keep asking for something nobody meant. A value that is
+     * already plausible is never touched, which is what protects the
+     * profiles that really do say 3600.
+     */
     static int registerExpires() {
-        return sProfileRegExpires > 0 ? sProfileRegExpires : 600000;
+        return plausibleExpiresSec(
+                sProfileRegExpires > 0 ? sProfileRegExpires : DEFAULT_REG_EXPIRES);
+    }
+
+    /** Pure, so the host tests own this rule. */
+    static int plausibleExpiresSec(int raw) {
+        if (raw <= 0) {
+            return plausibleExpiresSec(DEFAULT_REG_EXPIRES);
+        }
+        if (raw <= MAX_PLAUSIBLE_EXPIRES_SEC) {
+            return raw;
+        }
+        if (raw % 1000 == 0) {
+            int asSeconds = raw / 1000;
+            if (asSeconds > 0 && asSeconds <= MAX_PLAUSIBLE_EXPIRES_SEC) {
+                return asSeconds;
+            }
+        }
+        // Not seconds, and not a whole number of milliseconds either.
+        // Ask for the longest thing that is at least a sane request.
+        return MAX_PLAUSIBLE_EXPIRES_SEC;
+    }
+
+    /** Whether registerExpires() reinterpreted the configured number. */
+    static boolean registerExpiresConverted() {
+        int raw = sProfileRegExpires > 0 ? sProfileRegExpires : DEFAULT_REG_EXPIRES;
+        return raw != registerExpires();
+    }
+
+    /** The configured number as it arrived, for the trace. */
+    static int registerExpiresRaw() {
+        return sProfileRegExpires > 0 ? sProfileRegExpires : DEFAULT_REG_EXPIRES;
     }
 
     /** CMCC's MNCs. China Mobile is not one PLMN. */
