@@ -69,13 +69,26 @@ went unnoticed because only one handset ever reached a completed call.**
   surviving reinstalls and reboots, so one forgotten command stays in
   force indefinitely and invisibly. **Not confirmed**; one
   `dumpsys package org.joan.ims | grep -A2 RECORD_AUDIO` settles it.
-- No external tester ever had it. The Digi.Mobil RO capture reads
+- **An external T-Mobile tester DID have it**, on a flashed build. Their
+  trace, alpha20 and alpha26 on 2026-09-13/16, carries real capture
+  across four calls in both directions:
+  `media ul level rms=-20.2dBFS peak=0.0dBFS speech=-18.3dBFS active=64%`,
+  and again at 56%, 28% and 25% activity. So the permission can be
+  present on a sideloaded install, and an earlier version of this section
+  claimed the opposite. **The mechanism is still unidentified** -- it is
+  not in this package, because nothing here grants it.
+- The Digi.Mobil RO handset does NOT have it:
   `rms=-99.0dBFS peak=-99.0dBFS speech=silent` -- every sample zero, on
   both audio sources -- alongside `pani_cell=no-permission`.
-- No external tester was ever in a position to notice. The T-Mobile
-  tester's log carries "Zero INVITE / MO / MT / createCallSession /
-  hangup lines": three successful REGISTRATIONS and no call. The other
-  lanes never registered.
+- The two differ in a way worth chasing rather than guessing at. The
+  T-Mobile handset ALSO fails a different permission the whole time:
+  `IMS diagnostics unavailable_SecurityException` and
+  `ims_diag_listener=unavailable_SecurityException`, so its privileged
+  permissions are not fully in force while its microphone is. Whatever
+  grants the microphone on that device is independent of what this zip
+  installs. A likely candidate is an `adb install` of the APK before the
+  zip was ever flashed -- that grants runtime permissions and the record
+  persists by package name -- but that is a guess and is recorded as one.
 
 Without the permission the appops layer returns **digital silence rather
 than an error**: `AudioRecord` constructs, reports `STATE_INITIALIZED`,
