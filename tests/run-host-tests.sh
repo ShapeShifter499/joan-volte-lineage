@@ -44,6 +44,7 @@ javac -d "$JAVA_OUT" \
     "$JAVA_SRC/JoanPcmu.java" \
     "$JAVA_SRC/JoanEfDir.java" \
     "$JAVA_SRC/JoanIsim.java" \
+    "$JAVA_SRC/JoanXcap.java" \
     "$JAVA_TEST/org/joan/ims/TestJoanSip.java"
 java -cp "$JAVA_OUT" org.joan.ims.TestJoanSip
 

@@ -39,6 +39,7 @@ public final class TestJoanSip {
         testUeSpiPortConvention();
         testEfDir();
         testIsimFiles();
+        testXcap();
         testAuthAlgorithmGate();
         testSecurityServerRows();
         if (gFail != 0) {
@@ -228,6 +229,80 @@ public final class TestJoanSip {
                 "a service past the end of a short table reads as absent");
         check(!JoanIsim.istService(null, 5),
                 "an unreadable table claims nothing");
+    }
+
+    /**
+     * Ut/XCAP addressing and document reading.
+     *
+     * <p>Nothing here is advertised: Ut is not a SIP capability tag, so
+     * this claims nothing to the network. The line not crossed is
+     * declaring ImsUtImplBase, at which point Settings would route here
+     * and bypass the CS/MMI path that works today.
+     */
+    private static void testXcap() {
+        /* RFC 4825 4: <root>/<auid>/users/<XUI>/<document>. The XUI is a
+         * SIP URI inside a path segment, so its colon and @ must be
+         * escaped or they read as URI syntax instead of as data. */
+        String u = JoanXcap.documentUri("xcap.example.com", 80, false,
+                "sip:user@ims.mnc002.mcc460.3gppnetwork.org");
+        check(u != null && u.startsWith("http://xcap.example.com/"),
+                "a plain XCAP root builds an http URI");
+        check(u != null && u.contains("/simservs.ngn.etsi.org/users/"),
+                "with the simservs AUID and users collection");
+        check(u != null && u.contains("sip%3Auser%40ims."),
+                "and the SIP URI percent-encoded inside the path segment");
+        check(u != null && u.endsWith("/simservs.xml"),
+                "addressing the simservs document");
+
+        /* The default port for the scheme is omitted; anything else is
+         * written, or the request goes to the wrong place. */
+        check(!JoanXcap.documentUri("x.example.com", 80, false, "sip:a@b")
+                        .contains(":80/"),
+                "the default http port is left out");
+        check(JoanXcap.documentUri("x.example.com", 443, true, "sip:a@b")
+                        .startsWith("https://x.example.com/"),
+                "and 443 is the default for https");
+        check(JoanXcap.documentUri("x.example.com", 8080, false, "sip:a@b")
+                        .contains(":8080/"),
+                "a non-default port is written out");
+
+        /* A half-built URI is worse than none: 80 of 136 profiles carry
+         * no XCAP server at all. */
+        check(JoanXcap.documentUri("", 80, false, "sip:a@b") == null,
+                "no server yields no URI");
+        check(JoanXcap.documentUri("x.example.com", 80, false, "") == null,
+                "no identity yields no URI");
+        check(JoanXcap.documentUri("x.example.com/evil", 80, false,
+                        "sip:a@b") == null,
+                "a server carrying a path is refused, not concatenated");
+
+        /* TS 24.623: each service element carries an active attribute,
+         * and prefixes vary between carriers so matching is on the local
+         * name. Absent and inactive are DIFFERENT answers -- absent means
+         * not provisioned -- so absent is null, never false. */
+        String doc = "<?xml version=\"1.0\"?>"
+                + "<simservs xmlns=\"http://uri.etsi.org/ngn/params/xml/simservs/xcap\">"
+                + "<originating-identity-presentation-restriction active=\"false\">"
+                + "<default-behaviour>presentation-not-restricted</default-behaviour>"
+                + "</originating-identity-presentation-restriction>"
+                + "<ss:communication-diversion active=\"true\"/>"
+                + "<incoming-communication-barring/>"
+                + "</simservs>";
+        check(Boolean.FALSE.equals(JoanXcap.serviceActive(doc,
+                        "originating-identity-presentation-restriction")),
+                "a service marked active=false reads as inactive");
+        check(Boolean.TRUE.equals(JoanXcap.serviceActive(doc,
+                        "communication-diversion")),
+                "a prefixed element is matched on its local name");
+        check(Boolean.TRUE.equals(JoanXcap.serviceActive(doc,
+                        "incoming-communication-barring")),
+                "no active attribute defaults to active, per TS 24.623");
+        check(JoanXcap.serviceActive(doc, "outgoing-communication-barring")
+                        == null,
+                "an absent service is null, NOT false: not provisioned and "
+                        + "provisioned-but-off are different answers");
+        check(JoanXcap.serviceActive(null, "x") == null,
+                "no document yields no answer");
     }
 
     /** A tag-0x80 TLV holding this text, with the length computed. */

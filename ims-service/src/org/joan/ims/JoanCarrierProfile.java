@@ -63,6 +63,21 @@ public final class JoanCarrierProfile {
      * behaviour it registers with today.
      */
     public final boolean sendAuthAlgorithm;
+    /**
+     * Ut/XCAP: where this carrier keeps the subscriber's supplementary
+     * services, and whether it expects them controlled that way.
+     *
+     * <p>Carried in the shipped profile since it was distilled and read
+     * by nothing until now. 56 of 136 profiles name a server, and
+     * {@code utControl} is {@code "ut"} for 123 of them -- the rest say
+     * {@code "sip"} or {@code "ps"}, meaning the carrier does not expect
+     * XCAP to be the control path at all.
+     */
+    public final String xcapServer;
+    public final int xcapPort;
+    public final boolean xcapTls;
+    public final String xcapPdn;
+    public final String utControl;
     public final String srcKey;
 
     private static volatile JoanCarrierProfile sCached;
@@ -77,6 +92,9 @@ public final class JoanCarrierProfile {
                                java.util.List<JoanSipBuilder.Capability> codecs,
                                int pcscfPort, boolean sendUserAgent,
                                boolean sendAuthAlgorithm,
+                               String xcapServer, int xcapPort,
+                               boolean xcapTls, String xcapPdn,
+                               String utControl,
                                String srcKey) {
         this.confUri = confUri;
         this.referSub = referSub;
@@ -96,6 +114,11 @@ public final class JoanCarrierProfile {
         this.pcscfPort = pcscfPort;
         this.sendUserAgent = sendUserAgent;
         this.sendAuthAlgorithm = sendAuthAlgorithm;
+        this.xcapServer = xcapServer;
+        this.xcapPort = xcapPort;
+        this.xcapTls = xcapTls;
+        this.xcapPdn = xcapPdn;
+        this.utControl = utControl;
         this.srcKey = srcKey;
     }
 
@@ -148,7 +171,7 @@ public final class JoanCarrierProfile {
                 pad3(mnc), mcc);
         return new JoanCarrierProfile(factory, true, true, false,
                 2, 1, true, 183, -1, 0, 0, 0, null, 0, true, true,
-                "3gpp-default");
+                "", 0, false, "", "", "3gpp-default");
     }
 
     /**
@@ -304,6 +327,11 @@ public final class JoanCarrierProfile {
                         !o.optString("user_agent_fmt", "").isEmpty(),
                         hasSipFeature(o.optString("sip_features", ""),
                                 SIP_FEATURE_AUTH_ALGORITHM_PARAM),
+                        o.optString("xcap_server", ""),
+                        o.optInt("xcap_port", 0),
+                        o.optBoolean("xcap_tls", false),
+                        o.optString("xcap_pdn", ""),
+                        o.optString("ut_control_preference", ""),
                         key);
             }
         } catch (Throwable t) {
