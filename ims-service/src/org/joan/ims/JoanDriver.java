@@ -243,6 +243,27 @@ final class JoanDriver {
                 if (refreshing) {
                     long wait = JoanSipUa.msUntilRefresh();
                     if (wait > 0) {
+                        /* Re-assert what the UA already knows. The flag
+                         * above is the one Android reads, and it is
+                         * cleared whenever discovery comes back empty --
+                         * including for reasons that are not an IMS loss,
+                         * such as a momentarily empty P-CSCF list, which
+                         * do not release the UA. Without this line the
+                         * loop then sleeps here on every pass, the UA
+                         * stays happily bound, and the published flag
+                         * stays false forever: the log reads "registered
+                         * via app UA" while telephony never learns voice
+                         * is usable and the dialer falls back to CS.
+                         *
+                         * That is issue #1's signature exactly. The
+                         * airplane-mode route into it was closed in
+                         * 086bd14 by releasing the UA on an honoured
+                         * loss, and a bench airplane cycle on alpha38 no
+                         * longer reproduces it -- but that fixed the
+                         * trigger, not the gap. setRegistered is a no-op
+                         * when the value is unchanged, so this costs
+                         * nothing on the common path. */
+                        JoanRegistration.setRegistered(true, c.pcscf);
                         logState("registered via app UA; refresh in "
                                 + (wait / 60_000L) + "m");
                         Thread.sleep(wait);
