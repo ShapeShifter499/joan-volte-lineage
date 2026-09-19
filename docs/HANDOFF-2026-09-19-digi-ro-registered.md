@@ -4,6 +4,32 @@ Signed-off-by: Lance <Gero3977@gmail.com>
 Assisted-by: Claude-Code:claude-opus-5
 Date: 2026-09-19
 
+## Incident: alpha70-73 broke a tester's ROM
+
+The boot-time permission grant added in alpha70 ran `pm grant` in the
+shell domain at `sys.boot_completed`, racing the framework's own
+first-boot permission setup. It broke the ROM's permissions device-wide
+and the handset did not come back up. alpha73 was the first release
+carrying it.
+
+It shipped on the reasoning that a ROM whose SELinux policy refused the
+service would never start it and nothing else would change. That was an
+argument, not a measurement -- it had never run on any handset -- and the
+payoff was saving a tester one tap on a screen that already worked.
+
+- **alpha74 is the recovery build.** Its installer deletes
+  `/system/etc/init/joan-grant.rc` and `/system/bin/joan-grant.sh`, so
+  reflashing is the way out. Marked latest.
+- `adb shell pm reset-permissions` restores ROM defaults if permissions
+  are still wrong after boot.
+- alpha73 is demoted with a DO NOT FLASH notice; alpha67 has no
+  boot-time component at all.
+- The source `.rc` is kept, marked DO NOT SHIP, as the record of what was
+  tried.
+
+Rule taken from it: nothing that executes at or before boot goes to a
+release without running on hardware we hold.
+
 ## Where this stopped (2026-09-19 evening)
 
 **Paused on VoLTE pending tester logs.** Three builds are released and the

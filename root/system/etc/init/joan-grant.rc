@@ -1,3 +1,17 @@
+# DO NOT SHIP THIS. It broke a tester's ROM on 2026-09-19.
+#
+# This service ran at sys.boot_completed while the framework was still
+# doing its own first-boot permission setup, and interfered with it. The
+# handset did not come back up, and the damage was device-wide rather
+# than confined to joan. It is unshipped from pack-zip.sh and the
+# installer deletes any copy a previous build left behind.
+#
+# Kept only as the record of what was tried. If anyone revisits granting
+# runtime permissions from the device, it does not go near a release
+# until it has run on hardware we hold, and the supported path --
+# JoanPermissionActivity, one tap, no root, cannot affect boot -- already
+# works.
+#
 # Grant joan the runtime permissions the zip cannot.
 #
 # RECORD_AUDIO and the location permissions are dangerous runtime
