@@ -624,6 +624,15 @@ final class JoanAppRegister {
                 return sb + "FAIL: 401 no nonce";
             }
             sb.append("aka=").append(algo).append(' ');
+            /* Whether the challenge offered a qop, in the row testers
+             * actually paste. Inventing one was the Digi.Mobil RO 500,
+             * and the question "did YOUR network offer qop" cannot be
+             * answered for the older lanes at all: their traces predate
+             * the capture, and a summary that records the algorithm but
+             * not this had no way to show the difference between a
+             * network that asked for a digest joan could compute and one
+             * that asked for a different digest entirely. */
+            sb.append("qop=").append(qop == null ? "none" : qop).append(' ');
 
             /* The P-CSCF's Security-Server header, verbatim.
              *
