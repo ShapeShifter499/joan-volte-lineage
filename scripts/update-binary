@@ -56,7 +56,25 @@ ui_print() {
   echo "$1" >> "$LOG" 2>/dev/null
 }
 
+# Set once the priv-app apk is on disk, cleared once everything it needs
+# to boot is also on disk. While it is set, an abort must undo it.
+ROLLBACK_APK=""
+
 error() {
+  # A half-installed priv-app does not fail politely: with
+  # ro.control_privapp_permissions=enforce, an apk requesting privileged
+  # permissions whose allowlist is missing is a FATAL BOOT ERROR, so a
+  # flash that ran out of space between the two leaves a device that will
+  # not come up. That is not hypothetical -- it is what an InfinityX
+  # handset with 805 free blocks did.
+  #
+  # So an install that cannot finish puts the device back rather than
+  # leaving it half done. Failing to flash is recoverable; failing to
+  # boot is not.
+  if [ -n "$ROLLBACK_APK" ]; then
+    rm -rf "$ROLLBACK_APK"
+    ui_print "  rolled back the priv-app: a partial install does not boot"
+  fi
   ui_print "ERROR: $1"
   # Recovery shows the error; the flash genuinely failed.
   exit 1
@@ -518,12 +536,21 @@ if [ -n "$SYSEXTMNT" ]; then
         "$SYSEXTMNT/etc/init/joan-ims.rc"
 fi
 
-ui_print "Installing ImsService priv-app"
-copy_file "$TMP/app/joan-ims.apk" "$SYS/priv-app/JoanIms/JoanIms.apk" 644 u:object_r:system_file:s0
+# The allowlist goes down FIRST, and the apk second.
+#
+# The apk is what makes the allowlist load-bearing: until it exists,
+# nothing requests a privileged permission and the allowlist is inert.
+# Writing them the other way round meant a flash that ran out of space
+# between the two left an apk with no allowlist, which does not boot.
+# Ordered this way, the same failure leaves an unused file.
 if [ -f "$TMP/etc/permissions/org.joan.ims.xml" ]; then
   copy_file "$TMP/etc/permissions/org.joan.ims.xml" \
     "$SYS/etc/permissions/org.joan.ims.xml" 644 u:object_r:system_file:s0
 fi
+ui_print "Installing ImsService priv-app"
+copy_file "$TMP/app/joan-ims.apk" "$SYS/priv-app/JoanIms/JoanIms.apk" 644 u:object_r:system_file:s0
+# From here until the install completes, an abort removes it again.
+ROLLBACK_APK="$SYS/priv-app/JoanIms"
 # The runtime permission behind utran-cell-id-3gpp. This is a DIFFERENT
 # mechanism from the file above: privapp-permissions allowlists
 # signature|privileged permissions and does nothing for a dangerous
@@ -534,20 +561,6 @@ fi
 # falls back to the bare access type, the state row says
 # pani_cell=no-permission, and one adb command fixes it without root.
 # Nothing here is load-bearing for registration.
-# Remove the boot-time permission grant that alpha70-73 installed.
-#
-# It did not boot. The service ran `pm grant` in the shell domain at
-# sys.boot_completed to grant the microphone without the tester having to
-# do it by hand, and it was shipped on the reasoning that a ROM whose
-# policy refused it would simply never start the service. A handset that
-# flashed alpha73 did not come back up, so that reasoning was wrong, and
-# an init service is not something to retry by guesswork on somebody
-# else's phone.
-#
-# Deleting it here rather than only in the uninstaller means flashing
-# this build over a device stuck on alpha70-73 is the way out.
-rm -f "$SYS/etc/init/joan-grant.rc" "$SYS/bin/joan-grant.sh"
-
 if [ -f "$TMP/etc/default-permissions/org.joan.ims.xml" ]; then
   mkdir -p "$SYS/etc/default-permissions"
   chmod 755 "$SYS/etc/default-permissions" 2>/dev/null || true
@@ -670,6 +683,10 @@ if [ -f "$TMP/apn/viettel-45204.xml" ] && [ -f "$TMP/scripts/merge-viettel-apns.
   copy_file "$TMP/apns-merged.xml" "$ORIG" 644 u:object_r:system_file:s0
 fi
 
+# Everything the apk needs in order to boot is on disk; stop arming the
+# rollback before the unmounts, which have their own failure modes and
+# must not take the install with them.
+ROLLBACK_APK=""
 sync
 # Only unmount what we mounted. Tearing down recovery's own mount would
 # pull the ground out from under it mid-install.

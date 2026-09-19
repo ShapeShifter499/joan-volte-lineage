@@ -187,6 +187,40 @@ r=$(reserve_case none)
 check "$([ "${r%%:*}" = "1" ] && echo 0 || echo 1)" \
       "a filesystem with no reserved_clusters knob is refused, not guessed at (got $r)"
 
+# --- a failed install must not leave a device that cannot boot -------
+# With ro.control_privapp_permissions=enforce, a priv-app whose allowlist
+# is missing is a fatal boot error, so an install that aborts between the
+# two is worse than one that never started. Checked by structure, because
+# the failure only happens on a full partition.
+order_ok=$(python3 - "$SRC" <<'PYORD'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+allow = s.index('"$SYS/etc/permissions/org.joan.ims.xml" 644')
+apk = s.index('"$SYS/priv-app/JoanIms/JoanIms.apk" 644')
+arm = s.index('ROLLBACK_APK="$SYS/priv-app/JoanIms"')
+print("yes" if allow < apk < arm else "no")
+PYORD
+)
+check "$([ "$order_ok" = "yes" ] && echo 0 || echo 1)" \
+      "the allowlist is written before the apk, and the rollback armed after it"
+
+grep -q 'rm -rf "$ROLLBACK_APK"' "$SRC" &&
+  grep -q 'ROLLBACK_APK=""' "$SRC"
+check $? "error() removes a half-installed priv-app"
+
+# And the arming must be cleared before the install ends, or every later
+# failure would roll back a good install.
+tail_ok=$(python3 - "$SRC" <<'PYTAIL'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+arm = s.index('ROLLBACK_APK="$SYS/priv-app/JoanIms"')
+clear = s.rindex('ROLLBACK_APK=""')
+print("yes" if clear > arm else "no")
+PYTAIL
+)
+check "$([ "$tail_ok" = "yes" ] && echo 0 || echo 1)" \
+      "and disarmed once everything needed to boot is on disk"
+
 if [ "$fail" -ne 0 ]; then
   echo "installer tests: FAIL $fail"; exit 1
 fi
