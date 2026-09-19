@@ -30,10 +30,19 @@
      one header parameter and nothing else, and the state row then reads
      pani_cell=no-permission.
 
-     UNVERIFIED on a handset: DefaultPermissionGrantPolicy applies these
-     when it runs, and whether it re-runs for a package added to /system
-     after the device was provisioned has not been tested here. If it
-     does not, the fallback needs no root:
+     VERIFIED NOT TO APPLY to a sideloaded install, which is what this
+     package is. DefaultPermissionGrantPolicy.grantDefaultPermissions runs
+     on first boot and platform upgrades; there is no path that revisits a
+     system package added afterwards. alpha63 shipped this file and the
+     tester's state row still read pani_cell=no-permission.
+
+     It is kept because it IS the right mechanism for a ROM that builds
+     joan in, or for a device flashed and then wiped. For a sideload, the
+     app now asks instead: JoanPermissionActivity is a launcher entry the
+     tester opens once. RECORD_AUDIO is not listed here because it is
+     requested there rather than pretended at.
+
+     Failing both, and needing no root:
        adb shell pm grant org.joan.ims android.permission.ACCESS_FINE_LOCATION
        adb shell pm grant org.joan.ims android.permission.ACCESS_COARSE_LOCATION
        adb shell pm grant org.joan.ims android.permission.ACCESS_BACKGROUND_LOCATION

@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.joan.ims"
-    android:versionCode="75"
-    android:versionName="0.4.0-alpha65">
+    android:versionCode="76"
+    android:versionName="0.4.0-alpha66">
     <!-- pm install rejects an APK with no uses-sdk ("found 0");
          the zip sideloads into priv-app, which does not check. -->
     <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="34" />
@@ -55,6 +55,24 @@
         android:label="Joan IMS"
         android:directBootAware="true"
         android:persistent="true">
+        <!-- The only screen. RECORD_AUDIO and location are dangerous
+             runtime permissions: privapp-permissions does not cover them,
+             and etc/default-permissions is applied only on first boot or a
+             platform upgrade, so a package added to /system afterwards is
+             never revisited. Proven, not assumed: alpha63 shipped that
+             file and the tester still read pani_cell=no-permission. An
+             ImsService has no UI of its own, so this is a launcher entry
+             opened once, with no root and no adb. -->
+        <activity
+            android:name=".JoanPermissionActivity"
+            android:label="joan IMS"
+            android:exported="true"
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
         <provider
             android:name=".JoanStateProvider"
             android:authorities="org.joan.ims.state"
