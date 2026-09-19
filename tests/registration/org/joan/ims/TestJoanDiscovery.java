@@ -190,6 +190,37 @@ public class TestJoanDiscovery {
         check(!JoanAppRegister.JoanRegLifecycle.holdForPlmn(0, t0),
                 "no wait recorded is not a hold");
 
+        /* A Retry-After is a deadline, not the length of one sleep. The
+         * CMCC tester's 2026-09-19 log is the case: the network asked for
+         * 513s, its own IMS PDN dropped and came back 89s later, and the
+         * availability poke put a fresh REGISTER on the wire -- over and
+         * over, for the whole log. */
+        long now = 5_000_000L;
+        check(JoanAppRegister.JoanRegLifecycle.retryHoldRemainingMs(
+                        now + 513_000L, now) == 513_000L,
+                "a named Retry-After still has its whole wait to run");
+        check(JoanAppRegister.JoanRegLifecycle.retryHoldRemainingMs(
+                        now + 513_000L, now + 89_000L) == 424_000L,
+                "and being woken partway through leaves the rest, not zero");
+        check(JoanAppRegister.JoanRegLifecycle.retryHoldRemainingMs(
+                        now + 513_000L, now + 513_000L) == 0L,
+                "the hold ends exactly when the network said it could");
+        check(JoanAppRegister.JoanRegLifecycle.retryHoldRemainingMs(0L, now)
+                        == 0L,
+                "no hold recorded never delays a REGISTER");
+        check(JoanAppRegister.JoanRegLifecycle.retryHoldGoverns("46002",
+                        "46002"),
+                "a hold governs the network that named it");
+        check(!JoanAppRegister.JoanRegLifecycle.retryHoldGoverns("46002",
+                        "46011"),
+                "and not the other SIM in the same slot");
+        check(!JoanAppRegister.JoanRegLifecycle.retryHoldGoverns(null,
+                        "46002"),
+                "an unrecorded PLMN holds nothing");
+        check(!JoanAppRegister.JoanRegLifecycle.retryHoldGoverns("46002",
+                        null),
+                "and neither does an unknown current PLMN");
+
         System.out.println("DISCOVERY_CHECKS=" + checks + " FAILURES=0");
     }
 }

@@ -156,6 +156,13 @@ final class JoanDriver {
                 sLostDuringCallAtMs = 0;
             }
         }
+        /* Everything above this point returned. What is left is a user
+         * or radio state change -- boot, a package replacement, an
+         * airplane-mode toggle -- which is explicit intent to try again,
+         * and the one thing allowed to discard a wait the network asked
+         * for. Routine network chatter is not. */
+        sRetryNotBeforeMs = 0L;
+        sRetryPlmn = null;
         if (!ua) {
             sRegisterBackoffMs = REG_RETRY_MIN_MS;
             wake();
@@ -280,6 +287,8 @@ final class JoanDriver {
                 if (ok && JoanSipUa.isRegistered()) {
                     JoanRegistration.setRegistered(true, c.pcscf);
                     sRegisterBackoffMs = REG_RETRY_MIN_MS;
+                    sRetryNotBeforeMs = 0L;
+                    sRetryPlmn = null;
                     /* The next pass reads the granted lifetime and
                      * sleeps until the refresh is due. */
                     continue;
@@ -317,6 +326,8 @@ final class JoanDriver {
                 long waitMs = sRegisterBackoffMs;
                 if (asked > 0L) {
                     waitMs = Math.min(asked, REG_RETRY_RETRY_AFTER_MAX_MS);
+                    sRetryNotBeforeMs = System.currentTimeMillis() + waitMs;
+                    sRetryPlmn = sPlmn;
                     logState("app REGISTER failed; network asked for "
                             + (waitMs / 1000) + "s");
                 } else {
@@ -383,6 +394,11 @@ final class JoanDriver {
 
         static Discovery quietIdle(String reason) {
             return new Discovery(null, reason, true, USER_OFF_IDLE_MS);
+        }
+
+        /** Not ready by our own choice, for exactly as long as asked. */
+        static Discovery holdFor(String reason, long ms) {
+            return new Discovery(null, reason, false, ms);
         }
     }
 
@@ -556,6 +572,7 @@ final class JoanDriver {
                 sPlmnUnknownSinceMs = 0;
                 JoanRegistration.setOperator(mcc, mnc);
             }
+            sPlmn = (mcc == null) ? null : mcc + mnc;
             /* Withheld from nobody.
              *
              * alpha28 briefly withheld the MMTEL tags from China
@@ -595,6 +612,28 @@ final class JoanDriver {
                 JoanSipBuilder.setRegisterContactTags(tags);
                 JoanTrace.note("register contact tags="
                         + (tags ? "mmtel" : "none (CMCC)"));
+            }
+            /* A wait the network asked for outranks anything that wakes
+             * us. The Retry-After was already honoured against our own
+             * backoff, but only there: any poke interrupts that sleep,
+             * and the loop's next pass registered immediately. On a PDN
+             * that flaps -- which is what a network refusing to register
+             * us tends to produce -- "wait 619s" became a REGISTER 69s
+             * later, over and over, which is how a client earns a
+             * refusal rather than recovers from one.
+             *
+             * Checked here, above identity, so a held pass does not read
+             * the card either: every attempt runs AKA, and on a core
+             * complaining about AKA synchronisation, burning
+             * authentication vectors while under a hold is the last
+             * thing to do. */
+            long holdLeft = JoanAppRegister.JoanRegLifecycle
+                    .retryHoldRemainingMs(sRetryNotBeforeMs,
+                            System.currentTimeMillis());
+            if (holdLeft > 0 && JoanAppRegister.JoanRegLifecycle
+                    .retryHoldGoverns(sRetryPlmn, sPlmn)) {
+                return Discovery.holdFor("network asked to wait; "
+                        + (holdLeft / 1000) + "s left", holdLeft);
             }
         }
         if (impi == null || !impi.contains("@")) {
@@ -652,6 +691,16 @@ final class JoanDriver {
             return TelephonyManager.SIM_STATE_UNKNOWN;
         }
     }
+
+    /**
+     * A Retry-After the network named: the earliest the next REGISTER may
+     * go, and the PLMN it was said on. Scoped to the PLMN so it cannot
+     * follow a SIM swap onto a network that never asked for anything.
+     */
+    private static volatile long sRetryNotBeforeMs;
+    private static volatile String sRetryPlmn;
+    /** The PLMN this pass is registering on, or null when unknown. */
+    private static volatile String sPlmn;
 
     /** Last session-timer summary, so the trace says it once per change. */
     private static volatile String sSeSummary;

@@ -2136,6 +2136,40 @@ final class JoanAppRegister {
         static final long PLMN_WAIT_BACKSTOP_MS = 30000;
 
         /**
+         * What is left of a Retry-After the network named, in ms, or 0.
+         *
+         * <p>RFC 3261 10.3 and TS 24.229 both make this the governing
+         * delay before the UE tries the same registration again, and both
+         * reference stacks treat it that way. joan already preferred it
+         * over its own exponential backoff -- but only as the length of
+         * one sleep, and every poke interrupts that sleep. A network that
+         * asked for ten minutes was retried in one as soon as its own PDN
+         * flapped, which on a network that is refusing to register us is
+         * exactly when it flaps.
+         *
+         * <p>A deadline rather than a duration, so that being woken
+         * re-checks the wait instead of ending it.
+         */
+        static long retryHoldRemainingMs(long notBeforeMs, long nowMs) {
+            if (notBeforeMs <= 0) {
+                return 0L;
+            }
+            long left = notBeforeMs - nowMs;
+            return left > 0 ? left : 0L;
+        }
+
+        /**
+         * Whether a recorded hold governs the network we are on now.
+         *
+         * <p>Scoped to the PLMN that named it: a hold from one operator
+         * must not delay the first REGISTER on another, and the tester
+         * who swaps two SIMs in one slot is the case that proves it.
+         */
+        static boolean retryHoldGoverns(String heldPlmn, String nowPlmn) {
+            return heldPlmn != null && heldPlmn.equals(nowPlmn);
+        }
+
+        /**
          * Whether an availability poke must re-acquire a binding that a
          * preceding loss may have invalidated. A loss observed while a
          * REGISTER attempt was in flight could not be acted on at the
