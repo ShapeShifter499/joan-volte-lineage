@@ -399,9 +399,17 @@ final class JoanAka {
                     int.class, int.class, String.class);
             byte[] fcp = (byte[]) m.invoke(tm, JoanEfDir.EF_DIR,
                     JoanEfDir.CMD_GET_RESPONSE, 0, 0, 15, JoanEfDir.MF);
-            int[] geom = JoanEfDir.parseFcpRecordInfo(fcp);
+            int[] geom = JoanEfDir.parseRecordInfo(fcp);
             if (geom == null) {
-                JoanTrace.note("ef_dir: no record geometry");
+                /* Say what came back, not just that it was rejected. The
+                 * previous version noted only "no record geometry", which
+                 * looks the same whether the card refused, the RIL
+                 * returned nothing, or -- as it turned out -- the format
+                 * was one this file did not read. These bytes are file
+                 * descriptors, not subscriber data. */
+                JoanTrace.note("ef_dir: no record geometry (len="
+                        + (fcp == null ? -1 : fcp.length)
+                        + " head=" + JoanEfDir.head(fcp) + ")");
                 return aids;
             }
             int n = Math.min(geom[1], JoanEfDir.MAX_RECORDS);

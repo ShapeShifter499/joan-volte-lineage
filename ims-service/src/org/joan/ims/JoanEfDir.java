@@ -37,11 +37,49 @@ final class JoanEfDir {
     /** A card cannot hold an unbounded directory; refuse to spin. */
     static final int MAX_RECORDS = 16;
 
+    /** BER-TLV FCP template tag, TS 102 221 11.1.1.3. */
+    static final int FCP_TEMPLATE = 0x62;
+    /**
+     * Byte offsets in the legacy GET RESPONSE structure, TS 51.011 9.2.1.
+     *
+     * <p>These mirror AOSP's own {@code IccFileHandler} constants, which
+     * is the point: that is the format the platform actually delivers.
+     */
+    static final int LEGACY_LEN = 15;
+    static final int LEGACY_FILE_SIZE_HI = 2;
+    static final int LEGACY_FILE_SIZE_LO = 3;
+    static final int LEGACY_FILE_TYPE = 6;
+    static final int LEGACY_STRUCTURE = 13;
+    static final int LEGACY_RECORD_LENGTH = 14;
+    /** {@code IccFileHandler.TYPE_EF}. */
+    static final int LEGACY_TYPE_EF = 4;
+    /** {@code IccFileHandler.EF_TYPE_LINEAR_FIXED}. */
+    static final int LEGACY_LINEAR_FIXED = 1;
+
     /** 3GPP application identifier prefixes, TS 101 220 annex E. */
     static final String ISIM_PREFIX = "A0000000871004";
     static final String USIM_PREFIX = "A0000000871002";
 
     private JoanEfDir() {}
+
+    /**
+     * The first few bytes of a card response as hex, for a trace line.
+     *
+     * <p>Structural bytes only, and bounded: enough to tell an FCP from
+     * the legacy structure from an empty answer when something fails on a
+     * card nobody here can hold.
+     */
+    static String head(byte[] b) {
+        if (b == null || b.length == 0) {
+            return "none";
+        }
+        int n = Math.min(4, b.length);
+        StringBuilder sb = new StringBuilder(n * 2);
+        for (int i = 0; i < n; i++) {
+            sb.append(String.format(java.util.Locale.ROOT, "%02x", b[i] & 0xff));
+        }
+        return sb.toString();
+    }
 
     /**
      * AIDs carried by one EF_DIR record, uppercase hex.
@@ -98,6 +136,65 @@ final class JoanEfDir {
      * which EF_DIR is not allowed to be -- so that answers null rather
      * than a guess.
      */
+    /**
+     * Record length and count from a GET RESPONSE, in whichever format
+     * the platform handed back, or null.
+     *
+     * <p>This exists because the first version of this file understood
+     * only the UICC's BER-TLV FCP, and the platform does not deliver one.
+     * {@code iccExchangeSimIO} reaches the card through
+     * {@code RIL_REQUEST_SIM_IO}, and the RIL normalises the card's
+     * answer into the flat 15-byte structure of TS 51.011 9.2.1 -- AOSP's
+     * {@code IccFileHandler} parses exactly that and contains no BER-TLV
+     * code at all, on the USIM path as much as anywhere else. Asking a
+     * live card gave "no record geometry" on every read as a result, and
+     * the fallback to guessed AIDs hid it.
+     *
+     * <p>Both are accepted, chosen by the leading tag, because a RIL that
+     * passes the card's FCP through untouched is not forbidden from doing
+     * so and the cost of accepting it is one comparison.
+     */
+    static int[] parseRecordInfo(byte[] resp) {
+        if (resp == null || resp.length == 0) {
+            return null;
+        }
+        boolean fcpFirst = (resp[0] & 0xff) == FCP_TEMPLATE;
+        int[] first = fcpFirst
+                ? parseFcpRecordInfo(resp) : parseLegacyRecordInfo(resp);
+        if (first != null) {
+            return first;
+        }
+        return fcpFirst
+                ? parseLegacyRecordInfo(resp) : parseFcpRecordInfo(resp);
+    }
+
+    /**
+     * Record geometry from the legacy GET RESPONSE structure, or null.
+     *
+     * <p>TS 51.011 9.2.1, and AOSP's reading of it: the file size sits at
+     * bytes 2-3, the record length at byte 14, and the record count is
+     * the quotient. The file type and structure bytes are checked rather
+     * than assumed -- a transparent file answers through this same call
+     * and would otherwise yield a confident, wrong geometry.
+     */
+    static int[] parseLegacyRecordInfo(byte[] d) {
+        if (d == null || d.length < LEGACY_LEN) {
+            return null;
+        }
+        if ((d[LEGACY_FILE_TYPE] & 0xff) != LEGACY_TYPE_EF
+                || (d[LEGACY_STRUCTURE] & 0xff) != LEGACY_LINEAR_FIXED) {
+            return null;
+        }
+        int recLen = d[LEGACY_RECORD_LENGTH] & 0xff;
+        int size = ((d[LEGACY_FILE_SIZE_HI] & 0xff) << 8)
+                | (d[LEGACY_FILE_SIZE_LO] & 0xff);
+        if (recLen <= 0 || size < recLen) {
+            return null;
+        }
+        int count = size / recLen;
+        return count > 0 ? new int[] { recLen, count } : null;
+    }
+
     static int[] parseFcpRecordInfo(byte[] fcp) {
         if (fcp == null || fcp.length < 4) {
             return null;

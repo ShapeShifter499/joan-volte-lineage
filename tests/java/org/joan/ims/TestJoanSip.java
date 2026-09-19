@@ -38,6 +38,7 @@ public final class TestJoanSip {
         testDialIdentity();
         testUeSpiPortConvention();
         testEfDir();
+        testEfDirGeometry();
         testIsimFiles();
         testXcap();
         testAuthAlgorithmGate();
@@ -332,6 +333,68 @@ public final class TestJoanSip {
      * identifier you asked for" -- and the bench card proves those differ,
      * since its USIM AID is not the one we shipped.
      */
+    private static void testEfDirGeometry() {
+        /* The legacy TS 51.011 9.2.1 structure, which is what
+         * iccExchangeSimIO actually returns: the RIL normalises the
+         * card's FCP into it, and AOSP's IccFileHandler parses only this.
+         * Reading it as a BER-TLV FCP is what made every live EF_DIR read
+         * answer "no record geometry" while the host tests passed.
+         *
+         * file size 0x0098 = 152 at bytes 2-3, type EF (4) at byte 6,
+         * linear fixed (1) at byte 13, record length 0x26 = 38 at byte
+         * 14 -> 152/38 = 4 records. */
+        byte[] legacy = {
+            0x00, 0x00, 0x00, (byte) 0x98, 0x2f, 0x00, 0x04, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x02, 0x01, 0x26,
+        };
+        int[] g = JoanEfDir.parseRecordInfo(legacy);
+        check(g != null && g[0] == 38 && g[1] == 4,
+                "legacy GET RESPONSE gives 38-byte records, 4 of them");
+        check(JoanEfDir.parseFcpRecordInfo(legacy) == null,
+                "the FCP parser alone cannot read it -- the shipped bug");
+
+        /* A BER-TLV FCP, for a RIL that passes one through untouched. */
+        byte[] fcp = {
+            0x62, 0x1e, (byte) 0x82, 0x05, 0x42, 0x21, 0x00, 0x26, 0x04,
+            (byte) 0x83, 0x02, 0x2f, 0x00,
+        };
+        int[] f = JoanEfDir.parseRecordInfo(fcp);
+        check(f != null && f[0] == 38 && f[1] == 4,
+                "a real FCP still parses, chosen by its 0x62 tag");
+
+        /* A transparent file answers the same call and must not yield a
+         * confident wrong geometry: structure byte is 0, not 1. */
+        byte[] transparent = {
+            0x00, 0x00, 0x00, (byte) 0x98, 0x2f, 0x02, 0x04, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00,
+        };
+        check(JoanEfDir.parseRecordInfo(transparent) == null,
+                "a transparent file is refused, not guessed at");
+
+        byte[] wrongType = {
+            0x00, 0x00, 0x00, (byte) 0x98, 0x2f, 0x00, 0x02, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x02, 0x01, 0x26,
+        };
+        check(JoanEfDir.parseRecordInfo(wrongType) == null,
+                "a non-EF file type is refused");
+
+        byte[] shortSize = {
+            0x00, 0x00, 0x00, 0x10, 0x2f, 0x00, 0x04, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x02, 0x01, 0x26,
+        };
+        check(JoanEfDir.parseRecordInfo(shortSize) == null,
+                "a file smaller than one record is refused");
+
+        check(JoanEfDir.parseRecordInfo(null) == null
+                && JoanEfDir.parseRecordInfo(new byte[0]) == null
+                && JoanEfDir.parseRecordInfo(new byte[] {0x00, 0x01}) == null,
+                "short and absent responses are refused");
+
+        check("none".equals(JoanEfDir.head(null))
+                && "62 1e 82 05".replace(" ", "").equals(JoanEfDir.head(fcp)),
+                "head() names what came back for the trace");
+    }
+
     private static void testEfDir() {
         /* TS 102 221 11.1.1.3: 61 <len> { 4F <len> AID, 50 <len> label }.
          * This is the bench card's real USIM entry, labelled "USIM". */

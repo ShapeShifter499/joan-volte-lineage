@@ -69,14 +69,19 @@ loopback control socket.
 > Caller ID is the asserted number; Dialer can still overlay a matching
 > contact.
 
-## Current tester build: v0.4.0-alpha37
+## Current tester build: v0.4.0-alpha38
 
-`v0.4.0-alpha37` (versionCode 47) is the current tester zip: 796 host
+`v0.4.0-alpha38` (versionCode 48) is the current tester zip: 804 host
 checks and the UA, registration, discovery, merge, xfrm, carrier and
 installer suites pass, and it registers on T-Mobile 310-260 on
 the bench handset. That is not a live-carrier qualifier for anyone else.
 
-What alpha37 adds over alpha34 is mostly about reading the SIM and the
+alpha38 fixes the EF_DIR read that alpha37 shipped broken: the platform
+returns the legacy TS 51.011 GET RESPONSE structure, not the UICC's
+BER-TLV FCP, so every live read answered "no record geometry" and fell
+back to guessed AIDs. Both formats are read now.
+
+What alpha38 adds over alpha34 is mostly about reading the SIM and the
 network correctly rather than new call behaviour. The SIM applet is now
 selected by its 3GPP AID prefix instead of one card's issuer suffix, so
 cards whose ISIM sits behind a different suffix are found at all; EF_DIR
@@ -98,7 +103,7 @@ Sideload `joan-volte-recovery.zip`, reboot, then confirm:
 
 ```
 adb shell content query --uri content://org.joan.ims.state/state | grep key=build
-→ 0.4.0-alpha37 (47)
+→ 0.4.0-alpha38 (48)
 ```
 
 Check that row, **not** `dumpsys package`, which serves a stale version
