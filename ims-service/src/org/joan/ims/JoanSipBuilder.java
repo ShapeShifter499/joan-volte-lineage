@@ -82,6 +82,36 @@ final class JoanSipBuilder {
         return sSendUa;
     }
 
+    /* Whether this carrier's profile allows Authorization's `algorithm`
+     * parameter. True until a profile says otherwise: RFC 3310 s3 asks
+     * for it and every carrier we hold no configuration for keeps the
+     * behaviour it registers with today. */
+    private static volatile boolean sSendAuthAlgo = true;
+
+    /**
+     * Whether to send Authorization's {@code algorithm} parameter.
+     *
+     * <p>Carrier-driven, because that is what the reference stack does.
+     * AOSP gates the append on {@code SIP_FEATURE_CAPS_AUTHENTICATION_
+     * ALGORITHM_PARAMETER} and sets that bit only from the carrier key
+     * {@code ims.allow_algorithm_param_in_sip_authorization_header_bool}
+     * -- an ALLOW flag missing from its baseline, so omitting is the
+     * default there and sending is opted into. LG's binary gates the same
+     * append on the same bit, and 130 of its 136 profiles leave it off.
+     * We were sending it to everyone because it was hardcoded, not
+     * because anything decided to.
+     *
+     * <p>Only the emitted header changes. RFC 2617 never hashes this
+     * parameter, so the digest response is identical either way.
+     */
+    static void setSendAuthAlgorithm(boolean on) {
+        sSendAuthAlgo = on;
+    }
+
+    static boolean sendAuthAlgorithm() {
+        return sSendAuthAlgo;
+    }
+
     /**
      * RFC 7989 Session-ID: the "no remote UUID known yet" value.
      *
@@ -1402,7 +1432,8 @@ final class JoanSipBuilder {
             authLine = "Digest username=\"" + id.impi + "\", realm=\""
                     + digestRealm + "\", nonce=\"" + ch.nonceB64
                     + "\", uri=\"" + requestUri + "\", response=\""
-                    + respHex + "\", algorithm=" + ch.algorithm
+                    + respHex + "\""
+                    + (sSendAuthAlgo ? ", algorithm=" + ch.algorithm : "")
                     + ", qop=" + qop + ", nc=00000001, cnonce=\""
                     + txn.cnonce + "\"";
             if (resync) {
@@ -1419,7 +1450,8 @@ final class JoanSipBuilder {
         } else {
             authLine = "Digest username=\"" + id.impi + "\", realm=\""
                     + id.realm + "\", nonce=\"\", uri=\"" + requestUri
-                    + "\", response=\"\", algorithm=AKAv1-MD5";
+                    + "\", response=\"\""
+                    + (sSendAuthAlgo ? ", algorithm=AKAv1-MD5" : "");
         }
 
         String cu = aor;

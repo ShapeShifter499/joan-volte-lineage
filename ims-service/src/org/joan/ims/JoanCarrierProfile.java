@@ -53,6 +53,16 @@ public final class JoanCarrierProfile {
     public final int pcscfPort;
     /** Whether this carrier's stock profile sends a User-Agent. */
     public final boolean sendUserAgent;
+    /**
+     * Whether this carrier's stock profile puts the {@code algorithm}
+     * parameter in the REGISTER's Authorization header -- bit 24 of
+     * {@code common_sip_features}.
+     *
+     * <p>True when the profile says nothing, which is the RFC 3310
+     * reading and keeps every carrier we have no configuration for on the
+     * behaviour it registers with today.
+     */
+    public final boolean sendAuthAlgorithm;
     public final String srcKey;
 
     private static volatile JoanCarrierProfile sCached;
@@ -66,6 +76,7 @@ public final class JoanCarrierProfile {
                                int tcpCriterionV6, int regExpiration,
                                java.util.List<JoanSipBuilder.Capability> codecs,
                                int pcscfPort, boolean sendUserAgent,
+                               boolean sendAuthAlgorithm,
                                String srcKey) {
         this.confUri = confUri;
         this.referSub = referSub;
@@ -84,6 +95,7 @@ public final class JoanCarrierProfile {
                 : java.util.Collections.unmodifiableList(codecs);
         this.pcscfPort = pcscfPort;
         this.sendUserAgent = sendUserAgent;
+        this.sendAuthAlgorithm = sendAuthAlgorithm;
         this.srcKey = srcKey;
     }
 
@@ -135,7 +147,45 @@ public final class JoanCarrierProfile {
                 "sip:mmtel@conf-factory.ims.mnc%s.mcc%s.3gppnetwork.org",
                 pad3(mnc), mcc);
         return new JoanCarrierProfile(factory, true, true, false,
-                2, 1, true, 183, -1, 0, 0, 0, null, 0, true, "3gpp-default");
+                2, 1, true, 183, -1, 0, 0, 0, null, 0, true, true,
+                "3gpp-default");
+    }
+
+    /**
+     * {@code common_sip_features} bit 24. AOSP names it
+     * {@code SIP_FEATURE_CAPS_AUTHENTICATION_ALGORITHM_PARAMETER} and
+     * sets it only from the carrier key
+     * {@code ims.allow_algorithm_param_in_sip_authorization_header_bool}
+     * -- an ALLOW flag absent from its baseline, so the reference stack's
+     * default is to omit the parameter and sending it is what a carrier
+     * opts into. 130 of LG's 136 profiles leave it off.
+     */
+    private static final long SIP_FEATURE_AUTH_ALGORITHM_PARAM = 0x01000000L;
+
+    /**
+     * Test one bit of a profile's {@code sip_features} mask.
+     *
+     * <p>A profile carrying no readable mask answers true: a missing
+     * declaration is not the value zero, and the standards-clean default
+     * is the safe one to fall back to.
+     */
+    private static boolean hasSipFeature(String features, long bit) {
+        if (features == null) {
+            return true;
+        }
+        String v = features.trim();
+        if (v.isEmpty()) {
+            return true;
+        }
+        if (v.startsWith("0x") || v.startsWith("0X")) {
+            v = v.substring(2);
+        }
+        try {
+            return (Long.parseLong(v, 16) & bit) != 0L;
+        } catch (NumberFormatException e) {
+            Log.w(TAG, "carrier profile: unreadable sip_features");
+            return true;
+        }
     }
 
     private static String pad3(String mnc) {
@@ -252,6 +302,8 @@ public final class JoanCarrierProfile {
                         parseCodecs(o.optJSONArray("codecs")),
                         o.optInt("pcscf_port", 0),
                         !o.optString("user_agent_fmt", "").isEmpty(),
+                        hasSipFeature(o.optString("sip_features", ""),
+                                SIP_FEATURE_AUTH_ALGORITHM_PARAM),
                         key);
             }
         } catch (Throwable t) {

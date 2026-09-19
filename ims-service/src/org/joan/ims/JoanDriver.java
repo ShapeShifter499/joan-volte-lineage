@@ -548,6 +548,8 @@ final class JoanDriver {
                         int platExpiry = pv.regExpirySec;
                         JoanSipBuilder.setCarrierPcscfPort(cp.pcscfPort);
                         JoanSipBuilder.setSendUserAgent(cp.sendUserAgent);
+                        JoanSipBuilder.setSendAuthAlgorithm(
+                                cp.sendAuthAlgorithm);
                         JoanSipBuilder.setCarrierRegisterExpires(
                                 platExpiry > 0 ? platExpiry
                                         : cp.regExpiration);
@@ -560,6 +562,9 @@ final class JoanDriver {
                                         .regExpirySec > 0 ? "(platform)" : "(profile)")
                                 + " pcscf_port=" + JoanSipBuilder.pcscfSipPort()
                                 + " ua=" + (JoanSipBuilder.sendUserAgent()
+                                        ? "yes" : "no")
+                                + " auth_algo="
+                                + (JoanSipBuilder.sendAuthAlgorithm()
                                         ? "yes" : "no")
                                 + " src=" + cp.srcKey;
                         if (!cs.equals(sCarrierSummary)) {

@@ -38,6 +38,7 @@ public final class TestJoanSip {
         testDialIdentity();
         testUeSpiPortConvention();
         testEfDir();
+        testAuthAlgorithmGate();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -52,6 +53,81 @@ public final class TestJoanSip {
             System.out.println("FAIL " + name);
             gFail++;
         }
+    }
+
+    /** The Authorization header line of a REGISTER, or "". */
+    private static String authLineOf(String register) {
+        for (String line : register.split("\r\n")) {
+            if (line.startsWith("Authorization:")) {
+                return line;
+            }
+        }
+        return "";
+    }
+
+    /** The response="..." value of an Authorization line, or "". */
+    private static String respOf(String authLine) {
+        int i = authLine.indexOf("response=\"");
+        if (i < 0) {
+            return "";
+        }
+        int start = i + "response=\"".length();
+        int end = authLine.indexOf('"', start);
+        return end < 0 ? "" : authLine.substring(start, end);
+    }
+
+    /**
+     * Authorization's `algorithm` parameter follows the carrier profile.
+     *
+     * <p>AOSP gates the same append on common_sip_features bit 24 and
+     * sets that bit only from an ALLOW key absent from its baseline, so
+     * omitting is the reference default; LG's binary gates it identically
+     * and 130 of its 136 profiles leave it off. We sent it to everyone
+     * because it was hardcoded. A carrier we hold no profile for still
+     * gets it, which is RFC 3310 and keeps today's working lanes intact.
+     */
+    private static void testAuthAlgorithmGate() {
+        java.security.SecureRandom rng = new java.security.SecureRandom();
+        JoanSipBuilder.Params mine = new JoanSipBuilder.Params(
+                1111, 1112, 38500, 39500);
+        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                "user@ims.mnc002.mcc460.3gppnetwork.org",
+                "sip:user@ims.mnc002.mcc460.3gppnetwork.org",
+                "ims.mnc002.mcc460.3gppnetwork.org", "2001:db8::2",
+                38500, 39500, "123456789012345");
+        JoanSipBuilder.Challenge ch = new JoanSipBuilder.Challenge(
+                "dGVzdG5vbmNlMTIzNA==", "AKAv1-MD5",
+                "ipsec-3gpp;alg=hmac-sha-1-96;ealg=null;spi-c=1;spi-s=2;"
+                        + "port-c=9950;port-s=9900");
+        byte[] res = JoanSipCrypto.hexBytes(
+                "00112233445566778899aabbccddeeff");
+
+        check(JoanSipBuilder.sendAuthAlgorithm(),
+                "a carrier with no profile still sends algorithm= (RFC 3310)");
+        JoanSipBuilder.Txn on = new JoanSipBuilder.Txn(mine, rng);
+        String with = authLineOf(JoanSipBuilder.buildRegister(
+                id, on, 2, ch, res, null, null, "3GPP-E-UTRAN-FDD", true));
+        check(with.contains(", algorithm=AKAv1-MD5"),
+                "and that REGISTER carries algorithm=AKAv1-MD5");
+        try {
+            JoanSipBuilder.setSendAuthAlgorithm(false);
+            /* Same Txn: identical cnonce and nonce-count, so the digest
+             * input is unchanged and any difference is the header alone. */
+            String without = authLineOf(JoanSipBuilder.buildRegister(
+                    id, on, 2, ch, res, null, null,
+                    "3GPP-E-UTRAN-FDD", true));
+            check(!without.contains("algorithm="),
+                    "a profile that clears bit 24 omits the parameter");
+            check(with.replace(", algorithm=AKAv1-MD5", "").equals(without),
+                    "and that is the ONLY difference in the header");
+            check(respOf(with).equals(respOf(without))
+                            && !respOf(with).isEmpty(),
+                    "the digest response does not depend on algorithm=");
+        } finally {
+            JoanSipBuilder.setSendAuthAlgorithm(true);
+        }
+        check(JoanSipBuilder.sendAuthAlgorithm(),
+                "the gate is restored for later tests");
     }
 
     private static byte[] hexb(String h) {
