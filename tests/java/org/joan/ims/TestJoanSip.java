@@ -715,6 +715,26 @@ public final class TestJoanSip {
             check(countMechanisms(offer) == 2,
                     "two mechanisms in the TMO-shaped offer");
 
+            /* Stock parameter order. SipSecurityHeader::ToString writes
+             * q, alg, prot, mod, ealg, spi-c, spi-s, port-c, port-s and
+             * MakeSecurityClientH never sets a preference, so a stock
+             * offer names ealg after mod and carries no q at all. */
+            check(offer.indexOf("alg=") < offer.indexOf("prot=")
+                            && offer.indexOf("prot=") < offer.indexOf("mod=")
+                            && offer.indexOf("mod=") < offer.indexOf("ealg=")
+                            && offer.indexOf("ealg=") < offer.indexOf("spi-c="),
+                    "the offer follows the reference stack's parameter order");
+            check(!offer.contains("q="),
+                    "and carries no q, which stock never sets on a client offer");
+            check(offer.indexOf("spi-c=") < offer.indexOf("spi-s=")
+                            && offer.indexOf("spi-s=") < offer.indexOf("port-c=")
+                            && offer.indexOf("port-c=") < offer.indexOf("port-s="),
+                    "SPIs precede ports, as the reference serialiser writes them");
+            check(offer.contains("spi-c=1111;") || offer.contains("spi-c=1111,")
+                            || offer.endsWith("spi-c=1111")
+                            || offer.contains("spi-c=1111 "),
+                    "the SPI is written plainly, never zero-padded");
+
             JoanSipCrypto.setOfferMask(0x70003);
             check(countMechanisms(
                     JoanSecAgree.cartesianClientValue(p2)) == 4,

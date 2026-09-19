@@ -235,12 +235,7 @@ final class JoanSecAgree {
                 if (sb.length() > 0) {
                     sb.append(", ");
                 }
-                sb.append("ipsec-3gpp; alg=").append(alg)
-                        .append("; ealg=").append(ealg)
-                        .append("; prot=esp; mod=trans; spi-c=").append(p.spiC)
-                        .append("; spi-s=").append(p.spiS)
-                        .append("; port-c=").append(p.portC)
-                        .append("; port-s=").append(p.portS);
+                appendMechanism(sb, alg, ealg, p);
             }
         }
         if (sb.length() == 0) {
@@ -252,17 +247,48 @@ final class JoanSecAgree {
                     if (sb.length() > 0) {
                         sb.append(", ");
                     }
-                    sb.append("ipsec-3gpp; alg=").append(alg)
-                            .append("; ealg=").append(ealg)
-                            .append("; prot=esp; mod=trans; spi-c=")
-                            .append(p.spiC)
-                            .append("; spi-s=").append(p.spiS)
-                            .append("; port-c=").append(p.portC)
-                            .append("; port-s=").append(p.portS);
+                    appendMechanism(sb, alg, ealg, p);
                 }
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * One Security-Client mechanism, in the reference stack's own
+     * parameter order.
+     *
+     * <p>{@code SipSecurityHeader::ToString} writes the parameters in a
+     * fixed sequence -- q, alg, prot, mod, ealg, spi-c, spi-s, port-c,
+     * port-s -- emitting each only when it is set, and
+     * {@code AosIpsec::MakeSecurityClientH} sets algorithm, encryption
+     * algorithm, mode, protocol, ports and SPIs, never a preference. So
+     * a stock offer carries no q and names ealg after mod, where joan
+     * named it straight after alg.
+     *
+     * <p>Order is meaningless to a conformant parser and this changes no
+     * decision. It is here for the same reason the {@code
+     * integrity-protected} parameter was dropped in alpha12: on a core
+     * that refuses us, "byte-identical to the handset the operator
+     * tested against" is worth more than "legal", and it costs nothing.
+     *
+     * <p>The SPI is written plainly. The reference pads to ten digits
+     * when a carrier's {@code ipsec_spi_3gpp} is set, but both stacks
+     * floor the SPI at 1,000,000,000, so the padding never has anything
+     * to pad -- and the flag's real purpose is on the receive side,
+     * where the parser infers it from the length of an incoming SPI so
+     * that Security-Verify can echo the original formatting. joan echoes
+     * the received header verbatim instead.
+     */
+    private static void appendMechanism(StringBuilder sb, String alg,
+                                        String ealg,
+                                        JoanSipBuilder.Params p) {
+        sb.append("ipsec-3gpp; alg=").append(alg)
+                .append("; prot=esp; mod=trans; ealg=").append(ealg)
+                .append("; spi-c=").append(p.spiC)
+                .append("; spi-s=").append(p.spiS)
+                .append("; port-c=").append(p.portC)
+                .append("; port-s=").append(p.portS);
     }
 
     private static JoanSecAgree parseOne(String mech) {
