@@ -113,7 +113,8 @@ final class JoanDriver {
         }
         if (JoanAppRegister.JoanRegLifecycle.routinePoke(reason)) {
             if (JoanAppRegister.JoanRegLifecycle
-                    .reacquireAfterLoss(reason, sStaleAfterLoss)) {
+                    .reacquireAfterLoss(reason, sStaleAfterLoss,
+                            JoanSipUa.callActive())) {
                 sStaleAfterLoss = false;
                 /* Wake first so a hiccup in the release/broadcast path
                  * can never leave the driver sleeping on stale state. */
@@ -127,6 +128,24 @@ final class JoanDriver {
                             + "re-registering");
                 }
                 sLostDuringCallAtMs = 0;
+                return;
+            }
+            if (JoanAppRegister.JoanRegLifecycle.backWithinCallGrace(
+                    reason, sLostDuringCallAtMs != 0,
+                    JoanSipUa.callActive())) {
+                /* The network came back inside the grace period: the call
+                 * rode out the gap and nothing needs tearing down. The
+                 * marker is cleared so the loop's backstop cannot fire on
+                 * a loss that resolved itself.
+                 *
+                 * sStaleAfterLoss is deliberately left set. The binding
+                 * spanned a network loss, so it is re-acquired once the
+                 * call is over and an availability poke can be answered
+                 * without dropping anything; a refresh that fails in the
+                 * meantime releases and retries on its own. */
+                sLostDuringCallAtMs = 0;
+                JoanTrace.note("IMS network back within the call grace "
+                        + "period");
                 return;
             }
             if (JoanAppRegister.JoanRegLifecycle.deferClearForCall(
@@ -147,14 +166,6 @@ final class JoanDriver {
                 wake();
             }
             return;
-        }
-        if (JoanAppRegister.JoanRegLifecycle.POKE_IMS_AVAILABLE.equals(reason)) {
-            /* The network came back inside the grace period: the call rode
-             * out the gap and nothing needs tearing down. */
-            if (sLostDuringCallAtMs != 0) {
-                JoanTrace.note("IMS network back within the call grace period");
-                sLostDuringCallAtMs = 0;
-            }
         }
         /* Everything above this point returned. What is left is a user
          * or radio state change -- boot, a package replacement, an

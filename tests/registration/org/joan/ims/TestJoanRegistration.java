@@ -664,14 +664,36 @@ public class TestJoanRegistration {
         check(!JoanAppRegister.JoanRegLifecycle.clearOnLost(JoanAppRegister.JoanRegLifecycle.POKE_IMS_AVAILABLE, true, false),
                 "available-never-clears");
         check(JoanAppRegister.JoanRegLifecycle.reacquireAfterLoss(
-                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_AVAILABLE, true),
+                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_AVAILABLE, true, false),
                 "available-after-loss-reacquires");
         check(!JoanAppRegister.JoanRegLifecycle.reacquireAfterLoss(
-                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_AVAILABLE, false),
+                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_AVAILABLE, false, false),
                 "available-without-loss-leaves-alone");
         check(!JoanAppRegister.JoanRegLifecycle.reacquireAfterLoss(
-                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_LOST, true),
+                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_LOST, true, false),
                 "lost-not-reacquire");
+
+        /* A loss during a call opens a grace period that nothing ever
+         * closed: reacquireAfterLoss was asked first, saw only the stale
+         * flag the same loss had set, and released the UA underneath the
+         * live call -- closing both transports and the IPsec SA. The
+         * branch written to catch this sat below an unconditional return
+         * and could never run. */
+        check(!JoanAppRegister.JoanRegLifecycle.reacquireAfterLoss(
+                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_AVAILABLE, true, true),
+                "a live call is never re-acquired out from under");
+        check(JoanAppRegister.JoanRegLifecycle.backWithinCallGrace(
+                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_AVAILABLE, true, true),
+                "the network returning mid-call is the grace period closing");
+        check(!JoanAppRegister.JoanRegLifecycle.backWithinCallGrace(
+                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_AVAILABLE, false, true),
+                "with no loss held there is no grace period to close");
+        check(!JoanAppRegister.JoanRegLifecycle.backWithinCallGrace(
+                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_AVAILABLE, true, false),
+                "and a call that already ended reacquires instead");
+        check(!JoanAppRegister.JoanRegLifecycle.backWithinCallGrace(
+                        JoanAppRegister.JoanRegLifecycle.POKE_IMS_LOST, true, true),
+                "a second loss is not the network coming back");
 
         check(JoanAppRegister.JoanRegLifecycle.matchesSubscription(null, 1),
                 "sub-pin-null-ids-accepted");

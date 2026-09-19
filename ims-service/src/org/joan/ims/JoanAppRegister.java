@@ -2178,8 +2178,34 @@ final class JoanAppRegister {
          * the UA still believes it is registered.
          */
         static boolean reacquireAfterLoss(String reason,
-                                          boolean staleAfterLoss) {
-            return POKE_IMS_AVAILABLE.equals(reason) && staleAfterLoss;
+                                          boolean staleAfterLoss,
+                                          boolean callActive) {
+            return POKE_IMS_AVAILABLE.equals(reason) && staleAfterLoss
+                    && !callActive;
+        }
+
+        /**
+         * Whether an availability poke is the network coming back inside
+         * the grace period a live call was granted.
+         *
+         * <p>This is the case {@link #deferClearForCall} opened and
+         * nothing ever closed. A loss during a call sets the marker and
+         * deliberately tears nothing down; the network then returns a few
+         * seconds later, and the right answer is to do nothing at all --
+         * the call rode out the gap.
+         *
+         * <p>It never got the chance. {@code reacquireAfterLoss} was
+         * asked first and considered only the stale flag, which the same
+         * loss had just set, so the call's own grace period was answered
+         * by releasing the UA underneath it: {@code releaseLocked} keeps
+         * the dialog but closes both transports and the IPsec SA and
+         * clears the call flag. The branch meant to catch this sat below
+         * an unconditional return and could never run.
+         */
+        static boolean backWithinCallGrace(String reason, boolean lossHeld,
+                                           boolean callActive) {
+            return POKE_IMS_AVAILABLE.equals(reason) && lossHeld
+                    && callActive;
         }
 
         /**
