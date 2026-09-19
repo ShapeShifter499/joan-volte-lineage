@@ -22,11 +22,15 @@ public class JoanApp extends Application {
         java.util.Set<String> amr = JoanAmrCodec.availableAmr();
         JoanSipBuilder.restrictProfile(amr);
         /* Our own versionName, for the User-Agent. Read here because
-         * JoanSipBuilder compiles without android.jar. */
+         * JoanSipBuilder compiles without android.jar, and read through
+         * JoanTrace because PackageManager's record lags a system-app
+         * replacement -- reading it directly is what made an alpha55
+         * handset introduce itself to a carrier as alpha49. */
         try {
-            android.content.pm.PackageInfo pi = getPackageManager()
-                    .getPackageInfo(getPackageName(), 0);
-            JoanSipBuilder.setUserAgentVersion(pi.versionName);
+            String v = JoanTrace.readVersionName(getApplicationContext());
+            if (v != null) {
+                JoanSipBuilder.setUserAgentVersion(v);
+            }
         } catch (Throwable t) {
             /* No version is not a reason to fail startup. */
         }

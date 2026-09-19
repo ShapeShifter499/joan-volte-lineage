@@ -174,25 +174,65 @@ final class JoanTrace {
 
     /** Version actually installed; never a stale string constant. */
     static String readBuild(Context ctx) {
+        android.content.pm.PackageInfo apk = apkInfo(ctx);
+        if (apk != null && apk.versionName != null) {
+            return apk.versionName + " (" + apk.versionCode + ")";
+        }
+        android.content.pm.PackageInfo pm = pmInfo(ctx);
+        if (pm != null && pm.versionName != null) {
+            return pm.versionName + " (" + pm.versionCode + ") [pm]";
+        }
+        return "unknown";
+    }
+
+    /**
+     * Our versionName, for anything that has to state which build it is.
+     *
+     * <p>Same order as {@link #readBuild} and for the same reason, which
+     * this project has now been bitten by twice. Replacing a system app in
+     * place leaves PackageManager serving the PREVIOUS record until it
+     * rescans, so the apk on disk is the truth and PM is a fallback.
+     *
+     * <p>The second bite was the User-Agent. It read PM directly, so an
+     * alpha55 handset -- running code that only exists in alpha55, and
+     * writing a capture file whose own header said alpha55 -- announced
+     * itself to Digi.Mobil RO as {@code joan-ims/0.4.0-alpha49}. Anyone
+     * using the User-Agent to check what a tester was running would have
+     * been told the wrong thing, in the one artefact that reaches the
+     * carrier.
+     */
+    static String readVersionName(Context ctx) {
+        android.content.pm.PackageInfo apk = apkInfo(ctx);
+        if (apk != null && apk.versionName != null) {
+            return apk.versionName;
+        }
+        android.content.pm.PackageInfo pm = pmInfo(ctx);
+        return pm != null ? pm.versionName : null;
+    }
+
+    /** The apk on disk: what is actually running. */
+    private static android.content.pm.PackageInfo apkInfo(Context ctx) {
         if (ctx == null) {
-            return "unknown";
+            return null;
         }
         try {
             String path = ctx.getApplicationInfo().sourceDir;
-            android.content.pm.PackageInfo apk = ctx.getPackageManager()
-                    .getPackageArchiveInfo(path, 0);
-            if (apk != null && apk.versionName != null) {
-                return apk.versionName + " (" + apk.versionCode + ")";
-            }
+            return ctx.getPackageManager().getPackageArchiveInfo(path, 0);
         } catch (Throwable ignored) {
-            // fall through to PackageManager
+            return null;
+        }
+    }
+
+    /** PackageManager's record: may lag a system-app replacement. */
+    private static android.content.pm.PackageInfo pmInfo(Context ctx) {
+        if (ctx == null) {
+            return null;
         }
         try {
-            android.content.pm.PackageInfo pi = ctx.getPackageManager()
+            return ctx.getPackageManager()
                     .getPackageInfo(ctx.getPackageName(), 0);
-            return pi.versionName + " (" + pi.versionCode + ") [pm]";
         } catch (Throwable ignored) {
-            return "unknown";
+            return null;
         }
     }
 }
