@@ -80,15 +80,33 @@ went unnoticed because only one handset ever reached a completed call.**
 - The Digi.Mobil RO handset does NOT have it:
   `rms=-99.0dBFS peak=-99.0dBFS speech=silent` -- every sample zero, on
   both audio sources -- alongside `pani_cell=no-permission`.
-- The two differ in a way worth chasing rather than guessing at. The
-  T-Mobile handset ALSO fails a different permission the whole time:
-  `IMS diagnostics unavailable_SecurityException` and
-  `ims_diag_listener=unavailable_SecurityException`, so its privileged
-  permissions are not fully in force while its microphone is. Whatever
-  grants the microphone on that device is independent of what this zip
-  installs. A likely candidate is an `adb install` of the APK before the
-  zip was ever flashed -- that grants runtime permissions and the record
-  persists by package name -- but that is a guess and is recorded as one.
+- The two handsets differ in a way that is still not explained, and the
+  explanations tried so far have not survived contact with the evidence.
+
+  The T-Mobile handset throws `SecurityException` on
+  `registerTelephonyCallback` for the whole session
+  (`ims_diag_listener=unavailable_SecurityException`). That call needs
+  `READ_PRECISE_PHONE_STATE`, which is signature|privileged and which the
+  privapp allowlist grants -- and the alpha26 zip it was running **did**
+  ship and install that allowlist. So on that device the allowlist was
+  not in force, which means it was not a clean priv-app install. Whether
+  the app was somewhere other than priv-app, whether the permissions file
+  never landed, or whether that ROM sets
+  `ro.control_privapp_permissions` to something other than `enforce`, is
+  not established.
+
+  A `pm install` would produce exactly that shape -- not privileged, but
+  with runtime permissions the installer can grant -- and an earlier
+  version of this section asserted it. **It cannot have come from the
+  zip**: recovery has no package manager, so it would have to have been a
+  separate `adb install` on a booted phone, which nobody has reported
+  doing. The simplest explanation for the microphone needs no odd install
+  at all: a priv-app still appears under Settings > Apps > Permissions,
+  and the tester could have granted it there by hand.
+
+  The `install` state row added in alpha69 answers the first half in one
+  line, and `dumpsys package org.joan.ims` plus
+  `getprop ro.control_privapp_permissions` answers the rest.
 
 Without the permission the appops layer returns **digital silence rather
 than an error**: `AudioRecord` constructs, reports `STATE_INITIALIZED`,
