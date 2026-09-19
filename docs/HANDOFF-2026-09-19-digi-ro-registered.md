@@ -4,6 +4,40 @@ Signed-off-by: Lance <Gero3977@gmail.com>
 Assisted-by: Claude-Code:claude-opus-5
 Date: 2026-09-19
 
+## Where this stopped (2026-09-19 evening)
+
+**Paused on VoLTE pending tester logs.** Three builds are released and the
+open questions each need one run on a handset, not more work here.
+
+Released, all with reporting instructions in their notes:
+`v0.4.0-alpha65` (vc75), `v0.4.0-alpha67` (vc77), `v0.4.0-alpha73` (vc83,
+marked latest). The 65/67/73 split exists because a tester could not
+decide whether 65 or 67 sounded better -- 67 fixed one source of
+discarded audio and left a second in place, and 73 is the one that
+addresses that, which is written into the alpha67 notes so the comparison
+is not repeated blind.
+
+What the next logs answer, and nothing else can:
+
+- `qpeak=` in `rx{}` -- sizes `SLACK`, which was raised 3 -> 6 as a
+  deliberate middle rather than a second guess. AOSP's equivalent cap is
+  150 frames; joan's was 12.
+- `media effects agc= aec=` -- decides whether to keep attaching them.
+  **Neither reference stack attaches any audio effect**, and on the
+  reporting handsets the AGC half never attaches anyway
+  (`platform_agc=false`).
+- `media capture record_audio=` -- says outright whether the microphone is
+  granted, which `media record ok` never did.
+- `install:` -- priv-app vs data-app, which decides which permissions the
+  package can hold at all and explains why two testers had opposite
+  symptoms.
+
+Read `docs/audio-quality-vs-reference-stacks.md` before touching the media
+path again. It maps the whole mechanism against AOSP ImsMedia and LG, and
+records what was checked and **refuted** as well as what changed -- this
+subsystem was debugged four times from four symptoms before anyone read
+it end to end.
+
 ## The headline
 
 **Digi.Mobil Romania (PLMN 226-05) completes IMS registration.** 200 OK on
