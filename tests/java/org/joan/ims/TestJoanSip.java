@@ -586,6 +586,105 @@ public final class TestJoanSip {
                         + "spi-c=5; spi-s=6; port-c=7; port-s=8");
         check(skip != null && skip.spiC == 5,
                 "sec-agree skips unsupported GCM/SHA-256");
+
+        /* Reference-stack fidelity, from RegParameter::
+         * ChoosePreferredSecurityServer + SipSecurityHeader matching. */
+        JoanSecAgree tie = JoanSecAgree.select(
+                "ipsec-3gpp; q=0.3; alg=hmac-md5-96; ealg=null; "
+                        + "spi-c=1; spi-s=2; port-c=1000; port-s=1001, "
+                        + "ipsec-3gpp; q=0.3; alg=hmac-sha-1-96; ealg=aes-cbc; "
+                        + "spi-c=3; spi-s=4; port-c=2000; port-s=2001");
+        check(tie != null && tie.spiC == 1,
+                "an equal-q tie keeps the first listed mechanism");
+
+        JoanSecAgree unprot = JoanSecAgree.select(
+                "ipsec-3gpp; q=0.9; prot=ah; alg=hmac-sha-1-96; ealg=aes-cbc; "
+                        + "spi-c=1; spi-s=2; port-c=1000; port-s=1001, "
+                        + "ipsec-3gpp; q=0.1; alg=hmac-sha-1-96; ealg=aes-cbc; "
+                        + "spi-c=3; spi-s=4; port-c=2000; port-s=2001");
+        check(unprot != null && unprot.spiC == 3,
+                "an AH row loses to an ESP row at any preference");
+
+        JoanSecAgree tun = JoanSecAgree.select(
+                "ipsec-3gpp; q=0.9; mod=tun; alg=hmac-sha-1-96; ealg=aes-cbc; "
+                        + "spi-c=1; spi-s=2; port-c=1000; port-s=1001, "
+                        + "ipsec-3gpp; q=0.1; alg=hmac-sha-1-96; ealg=null; "
+                        + "spi-c=3; spi-s=4; port-c=2000; port-s=2001");
+        check(tun != null && tun.spiC == 3,
+                "a tunnel-mode row loses to transport at any preference");
+
+        JoanSecAgree noEalg = JoanSecAgree.select(
+                "ipsec-3gpp; alg=hmac-sha-1-96; "
+                        + "spi-c=7; spi-s=8; port-c=3000; port-s=3001");
+        check(noEalg != null && noEalg.ealg.equals("null")
+                        && noEalg.prot.equals("esp") && noEalg.mod.equals("trans"),
+                "an omitted ealg reads as null, prot and mode as their defaults");
+
+        /* The carrier mask: it shapes both what we offer and what a
+         * server row must match. TMO 0x10003: low word 3 = both
+         * integrity algorithms, high word 1 = aes-cbc only -- so md5 and
+         * sha1 over aes, and nothing over null. */
+        try {
+            JoanSipCrypto.setOfferMask(0x10003);
+            JoanSecAgree masked = JoanSecAgree.select(
+                    "ipsec-3gpp; q=0.9; alg=hmac-sha-1-96; ealg=null; "
+                            + "spi-c=1; spi-s=2; port-c=1000; port-s=1001, "
+                            + "ipsec-3gpp; q=0.1; alg=hmac-md5-96; ealg=aes-cbc; "
+                            + "spi-c=3; spi-s=4; port-c=2000; port-s=2001");
+            check(masked != null && masked.spiC == 3
+                            && masked.alg.equals("hmac-md5-96"),
+                    "an aes-only mask rejects a higher-q null row");
+
+            JoanSipBuilder.Params p2 = new JoanSipBuilder.Params(
+                    1111, 2222, 15000, 16000);
+            String offer = JoanSecAgree.cartesianClientValue(p2);
+            check(offer.contains("hmac-sha-1-96") && offer.contains("aes-cbc")
+                            && offer.contains("hmac-md5-96")
+                            && !offer.contains("ealg=null"),
+                    "the TMO-shaped offer carries both algs over aes only");
+            check(countMechanisms(offer) == 2,
+                    "two mechanisms in the TMO-shaped offer");
+
+            JoanSipCrypto.setOfferMask(0x70003);
+            check(countMechanisms(
+                    JoanSecAgree.cartesianClientValue(p2)) == 4,
+                    "the CMCC-shaped mask offers all four mechanisms");
+
+            JoanSipCrypto.setOfferMask(0x40002);
+            check(countMechanisms(
+                    JoanSecAgree.cartesianClientValue(p2)) == 4,
+                    "a 3DES-only mask falls back to the full offer");
+
+            /* Annotations: unparsed and non-ipsec rows are named, not
+             * dropped. */
+            JoanSipCrypto.setOfferMask(-1);
+            String chosenList =
+                    "ipsec-3gpp; q=0.5; alg=hmac-sha-1-96; ealg=aes-cbc; "
+                            + "spi-c=1; spi-s=2; port-c=1000; port-s=1001";
+            String summary = JoanSecAgree.offerSummary(
+                    "tls; q=0.9, " + chosenList + ", "
+                            + "ipsec-3gpp; q=0.8; prot=ah; alg=hmac-md5-96; "
+                            + "ealg=aes-cbc; spi-c=5; spi-s=6; port-c=7; port-s=8",
+                    JoanSecAgree.select(chosenList));
+            check(summary.contains("tls(not-ipsec)"),
+                    "a non-ipsec mechanism is named in the summary");
+            check(summary.contains("(prot)"),
+                    "an AH row's rejection reason is named");
+            check(summary.contains("*"),
+                    "the chosen mechanism is still marked");
+        } finally {
+            JoanSipCrypto.setOfferMask(-1);
+        }
+    }
+
+    private static int countMechanisms(String offer) {
+        int n = 0;
+        for (String part : offer.split(",")) {
+            if (part.contains("ipsec-3gpp")) {
+                n++;
+            }
+        }
+        return n;
     }
 
     private static void testRegisterOffer() {

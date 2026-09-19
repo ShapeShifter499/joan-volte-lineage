@@ -569,6 +569,15 @@ final class JoanDriver {
                         int platExpiry = pv.regExpirySec;
                         JoanSipBuilder.setCarrierPcscfPort(cp.pcscfPort);
                         JoanSipBuilder.setSendUserAgent(cp.sendUserAgent);
+                        /* The carrier's own sec-agree algorithm set, now
+                         * that it is read: it shapes the Security-Client
+                         * offer and what a Security-Server row must match
+                         * to be selected -- the reference stack's
+                         * ChoosePreferredSecurityServer, fed from config
+                         * it always had. -1 keeps the full offer for any
+                         * carrier without a profile, so nothing already
+                         * registering changes what it offers. */
+                        JoanSipCrypto.setOfferMask(cp.ipsecAlgs);
                         JoanSipBuilder.setSendAuthAlgorithm(
                                 cp.sendAuthAlgorithm);
                         JoanSipBuilder.setCarrierRegisterExpires(

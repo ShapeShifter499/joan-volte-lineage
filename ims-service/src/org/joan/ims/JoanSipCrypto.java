@@ -31,6 +31,67 @@ final class JoanSipCrypto {
     static final String[] OFFER_ALGS = { ALG_SHA1_96, ALG_MD5_96 };
     static final String[] OFFER_EALGS = { EALG_AES_CBC, EALG_NULL };
 
+    /**
+     * The carrier's declared algorithm set, distilled from the vendor
+     * snapshot's {@code aos_reg_0_ipsec_algs}. Bits follow the reference
+     * stack's enums ({@code SipSecurityHeader.h}), not SIP names: low 16
+     * bits integrity — bit0 {@code hmac-md5-96}, bit1
+     * {@code hmac-sha-1-96}; high 16 encryption — bit0 {@code aes-cbc},
+     * bit1 {@code null}, bit2 {@code des-ede3-cbc}. TMO 0x10003 is
+     * sha1+aes, CMCC 0x70003 is everything; 127 of 136 shipped profiles
+     * carry 0x70003.
+     *
+     * <p>-1 (unset) offers everything implemented, which is the exact
+     * offer every network joan registers on today has already accepted —
+     * so a profile-less carrier neither gains nor loses a mechanism.
+     * Encryption is listed before null so a multi-mechanism answer with
+     * equal preference resolves to the protected SA, not the bare one.
+     *
+     * <p>The selection this feeds mirrors
+     * {@code RegParameter::ChoosePreferredSecurityServer}: a server
+     * mechanism is a candidate only when its whole tuple — mechanism,
+     * alg, ealg, protocol, mode — matches one we offered, and among
+     * candidates the highest {@code q} wins with the first listed kept
+     * on a tie.
+     */
+    private static volatile int sAlgMask = -1;
+
+    static void setOfferMask(int algs) {
+        sAlgMask = algs;
+    }
+
+    static int offerMask() {
+        return sAlgMask;
+    }
+
+    static boolean algOffered(String alg) {
+        if (sAlgMask < 0) {
+            return true;
+        }
+        String a = norm(alg);
+        if (a.equals(ALG_MD5_96) || a.equals("hmac-md5") || a.equals("md5")) {
+            return (sAlgMask & 0x1) != 0;
+        }
+        return (sAlgMask & 0x2) != 0;
+    }
+
+    static boolean ealgOffered(String ealg) {
+        if (sAlgMask < 0) {
+            return true;
+        }
+        String e = norm(ealg);
+        if (e.isEmpty()) {
+            e = EALG_NULL;
+        }
+        if (e.equals(EALG_AES_CBC) || e.equals("aes")) {
+            return (sAlgMask & 0x10000) != 0;
+        }
+        if (e.equals(EALG_NULL) || e.equals("cipher_null")) {
+            return (sAlgMask & 0x20000) != 0;
+        }
+        return false;   /* 3DES (bit 0x40000): IpSecAlgorithm has none */
+    }
+
     private JoanSipCrypto() {}
 
     /**

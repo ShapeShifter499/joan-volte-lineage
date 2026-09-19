@@ -54,6 +54,15 @@ public final class JoanCarrierProfile {
     /** Whether this carrier's stock profile sends a User-Agent. */
     public final boolean sendUserAgent;
     /**
+     * The carrier's declared sec-agree algorithm set,
+     * {@code aos_reg_0_ipsec_algs} from the vendor snapshot, or -1 when
+     * absent (offer everything implemented). Distilled into the assets
+     * since the beginning and read by nothing until now -- the same
+     * shape of gap {@code xcap_server} had. Bit layout in
+     * {@link JoanSipCrypto#setOfferMask}.
+     */
+    public final int ipsecAlgs;
+    /**
      * Whether this carrier's stock profile puts the {@code algorithm}
      * parameter in the REGISTER's Authorization header -- bit 24 of
      * {@code common_sip_features}.
@@ -91,6 +100,7 @@ public final class JoanCarrierProfile {
                                int tcpCriterionV6, int regExpiration,
                                java.util.List<JoanSipBuilder.Capability> codecs,
                                int pcscfPort, boolean sendUserAgent,
+                               int ipsecAlgs,
                                boolean sendAuthAlgorithm,
                                String xcapServer, int xcapPort,
                                boolean xcapTls, String xcapPdn,
@@ -113,6 +123,7 @@ public final class JoanCarrierProfile {
                 : java.util.Collections.unmodifiableList(codecs);
         this.pcscfPort = pcscfPort;
         this.sendUserAgent = sendUserAgent;
+        this.ipsecAlgs = ipsecAlgs;
         this.sendAuthAlgorithm = sendAuthAlgorithm;
         this.xcapServer = xcapServer;
         this.xcapPort = xcapPort;
@@ -170,7 +181,7 @@ public final class JoanCarrierProfile {
                 "sip:mmtel@conf-factory.ims.mnc%s.mcc%s.3gppnetwork.org",
                 pad3(mnc), mcc);
         return new JoanCarrierProfile(factory, true, true, false,
-                2, 1, true, 183, -1, 0, 0, 0, null, 0, true, true,
+                2, 1, true, 183, -1, 0, 0, 0, null, 0, true, -1, true,
                 "", 0, false, "", "", "3gpp-default");
     }
 
@@ -325,6 +336,7 @@ public final class JoanCarrierProfile {
                         parseCodecs(o.optJSONArray("codecs")),
                         o.optInt("pcscf_port", 0),
                         !o.optString("user_agent_fmt", "").isEmpty(),
+                        o.optInt("ipsec_algs", -1),
                         hasSipFeature(o.optString("sip_features", ""),
                                 SIP_FEATURE_AUTH_ALGORITHM_PARAM),
                         o.optString("xcap_server", ""),
