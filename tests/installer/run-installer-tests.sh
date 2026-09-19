@@ -41,6 +41,42 @@ run_case() {
   echo "$rc:$val"
 }
 
+why_case() {
+  # why_case <node> <force_ro contents or "none"> ; echoes UNLOCK_WHY
+  node="$1"; ro="$2"
+  rm -rf "$WORK/sys" "$WORK/dev"; mkdir -p "$WORK/dev"
+  : > "$WORK/dev/$(basename "$node")"
+  if [ "$ro" != "none" ]; then
+    mkdir -p "$WORK/sys/block/$(basename "$node")"
+    printf '%s' "$ro" > "$WORK/sys/block/$(basename "$node")/force_ro"
+  fi
+  sed "s#/sys/block/#$WORK/sys/block/#" /tmp/joan-inst-fns.sh > "$WORK/fns.sh"
+  # shellcheck disable=SC1090
+  ( . "$WORK/fns.sh"; unlock_device "$WORK/dev/$(basename "$node")" >/dev/null 2>&1
+    printf '%s' "$UNLOCK_WHY" )
+}
+
+# UNLOCK_WHY has to name which of the four refusal paths was taken. An
+# InfinityX report on alpha49 said the dm node "could not be cleared"
+# when the message could not actually distinguish that from there being
+# no dm node, no force_ro, or a node already writable -- so one
+# screenshot was not enough to diagnose it.
+w=$(why_case dm-3 1)
+case "$w" in *cleared*) check 0 "why reports a successful clear (got $w)";;
+  *) check 1 "why reports a successful clear (got $w)";; esac
+
+w=$(why_case dm-3 0)
+case "$w" in *already-writable*) check 0 "why distinguishes an already-writable node (got $w)";;
+  *) check 1 "why distinguishes an already-writable node (got $w)";; esac
+
+w=$(why_case dm-3 none)
+case "$w" in *no-force_ro-in-sysfs*) check 0 "why distinguishes a missing force_ro (got $w)";;
+  *) check 1 "why distinguishes a missing force_ro (got $w)";; esac
+
+w=$(why_case sda7 1)
+case "$w" in *not-a-dm-node*) check 0 "why distinguishes a non-dm device (got $w)";;
+  *) check 1 "why distinguishes a non-dm device (got $w)";; esac
+
 # A read-only dm node is the case that matters: it must be flipped.
 r=$(run_case dm-3 1)
 check "$([ "$r" = "0:0" ] && echo 0 || echo 1)" \

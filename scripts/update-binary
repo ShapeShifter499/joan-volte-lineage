@@ -93,21 +93,44 @@ TMPDM=$(stat -c %d /tmp 2>/dev/null)
 # no dm node and nothing to do, a recovery that already handed us a
 # writable device is untouched, and a failure here changes nothing --
 # the write test still decides whether we install.
+# UNLOCK_WHY records what was actually observed, because this returns
+# false for four different reasons and the failure message used to assert
+# only one of them. An InfinityX report (alpha49) came back saying the dm
+# node "could not be cleared" when the truth might equally have been that
+# there was no dm node, no force_ro in sysfs, or a node already writable.
+# One screenshot should be enough to tell those apart; it was not.
+UNLOCK_WHY=""
 unlock_device() {
   ud_dev=$(readlink -f "$1" 2>/dev/null)
   [ -n "$ud_dev" ] || ud_dev="$1"
+  UNLOCK_WHY="dev=${ud_dev:-none}"
   case "$ud_dev" in
     */dm-*) ;;
-    *) return 1 ;;
+    *) UNLOCK_WHY="$UNLOCK_WHY not-a-dm-node"; return 1 ;;
   esac
   ud_ro="/sys/block/${ud_dev##*/}/force_ro"
-  [ -f "$ud_ro" ] || return 1
-  [ "$(cat "$ud_ro" 2>/dev/null)" = "1" ] || return 1
+  if [ ! -f "$ud_ro" ]; then
+    UNLOCK_WHY="$UNLOCK_WHY no-force_ro-in-sysfs"
+    return 1
+  fi
+  ud_before=$(cat "$ud_ro" 2>/dev/null)
+  UNLOCK_WHY="$UNLOCK_WHY force_ro=${ud_before:-?}"
+  if [ "$ud_before" != "1" ]; then
+    UNLOCK_WHY="$UNLOCK_WHY already-writable"
+    return 1
+  fi
   echo 0 > "$ud_ro" 2>/dev/null || true
   # Some recoveries ship blockdev and not a writable sysfs, some the
   # reverse. Try both, then believe only what sysfs reads back.
   blockdev --setrw "$ud_dev" 2>/dev/null || true
-  [ "$(cat "$ud_ro" 2>/dev/null)" = "0" ]
+  ud_after=$(cat "$ud_ro" 2>/dev/null)
+  UNLOCK_WHY="$UNLOCK_WHY after=${ud_after:-?}"
+  if [ "$ud_after" = "0" ]; then
+    UNLOCK_WHY="$UNLOCK_WHY cleared"
+    return 0
+  fi
+  UNLOCK_WHY="$UNLOCK_WHY clear-refused"
+  return 1
 }
 
 # The block device currently backing a mount point, or empty.
@@ -187,7 +210,8 @@ mount_part() {
       error "$name is mounted read-only; cannot install"
     else
       inodes=$(df -ki "$mp" 2>/dev/null | tail -1 | tr -s " " | cut -d" " -f4)
-      error "$name reports writable but refuses a 5-byte write (${free:-?} KB and ${inodes:-?} inodes free). This package needs about 210 KB and 8 inodes, so free space is not the limit. Its device-mapper node is read-only and could not be cleared; report this line."
+      opts=$(mount | grep " $mp " | head -1 | sed 's/.*type [^ ]* (//;s/).*//')
+      error "$name reports writable but refuses a 5-byte write (${free:-?} KB and ${inodes:-?} inodes free). This package needs about 210 KB and 8 inodes, so free space is not the limit. Unlock: ${UNLOCK_WHY:-not-attempted}. Mount opts: ${opts:-?}. Report this line."
     fi
   fi
 }
