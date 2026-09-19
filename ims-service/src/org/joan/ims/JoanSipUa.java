@@ -603,7 +603,8 @@ final class JoanSipUa {
                     return;
                 }
                 NonInviteWait w = new NonInviteWait(dlg.callId, dlg.cseq,
-                        "SUBSCRIBE", dlg.branch, null, dlg.fromTag, "");
+                        "SUBSCRIBE", JoanSipBuilder.branchOf(msg), null,
+                        dlg.fromTag, "");
                 sNonInviteWaits.put(w.callId + "#SUBSCRIBE#" + w.cseq, w);
                 try {
                     sendReply(msg.getBytes(StandardCharsets.US_ASCII));
@@ -3361,24 +3362,28 @@ final class JoanSipUa {
     }
 
     private static void sendReply(byte[] pkt) throws Exception {
-        if (sReplyTcp && sTcpPeer != null) {
-            /* Requests built for the UDP client socket are about to leave
-             * over TCP instead; their top Via must say so or the P-CSCF
-             * answers 400 Bad Request. Responses are left alone. */
-            pkt = JoanSipBuilder.retargetRequestViaToTcp(
-                    new String(pkt, StandardCharsets.US_ASCII))
-                    .getBytes(StandardCharsets.US_ASCII);
+        FileDescriptor peer = sReplyTcp ? sTcpPeer : null;
+        if (peer != null) {
+            pkt = packetForTransport(pkt, true);
             int off = 0;
             while (off < pkt.length) {
-                int n = Os.write(sTcpPeer, pkt, off, pkt.length - off);
+                int n = Os.write(peer, pkt, off, pkt.length - off);
                 if (n <= 0) {
                     throw new java.io.IOException("tcp write");
                 }
                 off += n;
             }
+            JoanSipCapture.call("sent", new String(pkt, StandardCharsets.US_ASCII));
             return;
         }
         send(sSockC, sPcscf, sPcscfPortS, pkt);
+    }
+
+    /** Change header ASCII without re-encoding arbitrary body octets. */
+    private static byte[] packetForTransport(byte[] pkt, boolean tcp) {
+        String before = new String(pkt, StandardCharsets.ISO_8859_1);
+        String after = JoanSipBuilder.retargetRequestVia(before, tcp);
+        return after == before ? pkt : after.getBytes(StandardCharsets.ISO_8859_1);
     }
 
     private static void closeFd(FileDescriptor fd) {
@@ -3468,19 +3473,19 @@ final class JoanSipUa {
 
     private static void send(DatagramSocket s, InetAddress dest, int port,
                              byte[] pkt) throws Exception {
-        /* Every outgoing SIP message on the call leg passes here, so this
-         * is the one place worth recording it. A tester reporting that a
-         * call "got stuck" was, until now, reporting something the capture
-         * could say nothing about. */
-        JoanSipCapture.call("sent",
-                new String(pkt, java.nio.charset.StandardCharsets.US_ASCII));
-        if (sTcpClient != null && !sTcpClient.isClosed()) {
-            OutputStream os = sTcpClient.getOutputStream();
+        Socket tcp = sTcpClient;
+        if (tcp != null && !tcp.isClosed()) {
+            pkt = packetForTransport(pkt, true);
+            OutputStream os = tcp.getOutputStream();
             os.write(pkt);
             os.flush();
-            return;
+        } else {
+            pkt = packetForTransport(pkt, false);
+            s.send(new DatagramPacket(pkt, pkt.length, dest, port));
         }
-        s.send(new DatagramPacket(pkt, pkt.length, dest, port));
+        /* Capture exactly the finalized packet, only after a successful
+         * local write. The accepted-peer writer has its own capture site. */
+        JoanSipCapture.call("sent", new String(pkt, StandardCharsets.US_ASCII));
     }
 
     private static String recvEither(int timeoutMs) {

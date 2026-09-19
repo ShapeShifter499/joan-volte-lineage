@@ -2520,68 +2520,70 @@ final class JoanSipBuilder {
         }
     }
 
-    /** Transport of in-dialog requests; mirrors the UA's reply socket.
-     * Set by JoanSipUa before sends (sendReply / TCP peer adopt). */
     /**
-     * Transport token for the top Via of an outbound REQUEST.
-     *
-     * <p>Always UDP: {@code JoanSipUa} transmits every outbound request on
-     * its protected UDP client socket ({@code sSockC}). An inbound TCP
-     * connection from the P-CSCF carries MT requests and their responses
-     * only -- it is never used to send a request -- so it must not change
-     * what our Via claims. Claiming TCP on a datagram we sent over UDP is
-     * a transport mismatch the P-CSCF answers with 400 Bad Request, and it
-     * breaks every MO call for the life of the UA once one MT call has
-     * arrived (Viettel, alpha20).
-     *
-     * <p>The receiving side of this rule is written out in AOSP's IMS
-     * stack, which is what a P-CSCF does to us:
-     * {@code SipServerTransport::ValidateViaHeader()} -- "If the topmost
-     * Via header has scheme SIP/2.0/TCP, but actually came on UDP, (or
-     * vice versa) flag off error. Application SHOULD respond to this with
-     * 400 Bad Request." See RFC 3261 18.1.1 and
-     * packages/modules/ImsStack native/libimsstack/engine/sipcore/
-     * SipServerTransport.cpp at tag android-17.0.0_r1. Referenced only --
-     * no AOSP code is used here.
+     * Provisional Via for locally built requests. UDP remains the default;
+     * the selected writer finalizes it for the retained TCP client,
+     * accepted TCP peer, or UDP socket. Never set a process-wide TCP mode
+     * from an inbound connection: that previously mislabeled UDP sends.
      */
     static String requestViaTransport() {
         return "UDP";
     }
 
     /**
-     * Re-aim the top Via sent-protocol of a REQUEST at TCP, for the one
-     * path that does not use the UDP client socket: {@code sendReply()}
-     * writes to the P-CSCF's accepted TCP connection when it has one, and
-     * it carries in-dialog requests (ACK, BYE, re-INVITE, SUBSCRIBE,
-     * REFER) as well as responses.
-     *
-     * <p>This is done here, at the write, rather than at each builder,
-     * because the transport is only known to the code performing the send:
-     * {@code inDialog()} output leaves over UDP for PRACK and over TCP for
-     * a BYE, from the same builder. Deciding it at the choke point is what
-     * makes it impossible for a new call site to get it wrong. AOSP fixes
-     * the same field at the same kind of choke point on the receiving side
-     * (ImsStack {@code SipStack::UpdateSentProtocol} from
-     * {@code SipServerTransport::ValidateViaHeader}).
-     *
-     * <p>Responses are returned untouched: RFC 3261 8.2.6.2 requires a
-     * response to echo the request's Via headers verbatim, so rewriting
-     * one would misroute it.
+     * Finalize only the first Via's transport on a locally built request.
+     * RFC 3261 8.1.1.7 / 18.1.1: the top Via names the selected transport.
+     * pjsip 2.15.1 sip_util.c likewise assigns Via from cur_transport at
+     * send time (behavioral reference only; no reference code is copied).
+     * Responses echo the request's Via chain (8.2.6.2), so are untouched.
+     * Branch, sent-by, lower Vias, unrelated headers and body stay intact.
      */
-    static String retargetRequestViaToTcp(String msg) {
+    static String retargetRequestVia(String msg, boolean tcp) {
         if (msg == null || msg.startsWith("SIP/2.0 ")) {
-            return msg; // a response: its Via belongs to the request
-        }
-        int i = msg.indexOf("SIP/2.0/UDP");
-        if (i < 0) {
             return msg;
         }
-        int hdrEnd = msg.indexOf("\r\n\r\n");
-        if (hdrEnd >= 0 && i > hdrEnd) {
-            return msg; // only in the body; not a Via
+        int firstLine = msg.indexOf("\r\n");
+        if (firstLine < 0) {
+            return msg;
         }
-        return msg.substring(0, i) + "SIP/2.0/TCP"
-                + msg.substring(i + "SIP/2.0/UDP".length());
+        for (int start = firstLine + 2; start < msg.length();) {
+            int end = msg.indexOf("\r\n", start);
+            if (end < 0 || end == start) {
+                break; // no complete header, or the start of the body
+            }
+            int colon = msg.indexOf(':', start);
+            if (colon >= start && colon < end
+                    && msg.charAt(start) != ' ' && msg.charAt(start) != '\t') {
+                String name = msg.substring(start, colon).trim();
+                if (name.equalsIgnoreCase("Via") || name.equalsIgnoreCase("v")) {
+                    int value = colon + 1;
+                    while (value < end && (msg.charAt(value) == ' '
+                            || msg.charAt(value) == '\t')) {
+                        value++;
+                    }
+                    int tokenEnd = value;
+                    while (tokenEnd < end && msg.charAt(tokenEnd) != ' '
+                            && msg.charAt(tokenEnd) != '\t') {
+                        tokenEnd++;
+                    }
+                    String protocol = msg.substring(value, tokenEnd);
+                    String target = tcp ? "SIP/2.0/TCP" : "SIP/2.0/UDP";
+                    if (protocol.equals(target)
+                            || (!protocol.equalsIgnoreCase("SIP/2.0/TCP")
+                            && !protocol.equalsIgnoreCase("SIP/2.0/UDP"))) {
+                        return msg; // never change a lower Via instead
+                    }
+                    return msg.substring(0, value) + target
+                            + msg.substring(tokenEnd);
+                }
+            }
+            start = end + 2;
+        }
+        return msg;
+    }
+
+    static String retargetRequestViaToTcp(String msg) {
+        return retargetRequestVia(msg, true);
     }
 
     static final class Media {
@@ -3545,6 +3547,16 @@ final class JoanSipBuilder {
                                          int expires) {
         if (aor == null || aor.isEmpty()) {
             return null;
+        }
+        /* This originates a dialog without buildInvite(). RFC 3261
+         * 8.1.1.3/8.1.1.4 require a fresh tag and globally unique Call-ID;
+         * pjsip's UAC-dialog creation initializes both before any request.
+         * Keep them on subsequent requests using this subscription. */
+        if (dlg.callId == null || dlg.callId.isEmpty()) {
+            dlg.callId = String.format("%016x%016x", RNG.nextLong(), RNG.nextLong());
+        }
+        if (dlg.fromTag == null || dlg.fromTag.isEmpty()) {
+            dlg.fromTag = String.format("%012x", RNG.nextLong() & 0xffffffffffffL);
         }
         dlg.cseq++;
         String contactUser = contactUser(aorOf(id.impu != null
