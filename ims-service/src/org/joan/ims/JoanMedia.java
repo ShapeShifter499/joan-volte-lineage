@@ -733,6 +733,7 @@ final class JoanMedia {
     private static void capture(Context app) {
         AudioRecord rec = null;
         boolean ulSwapped = false;
+        boolean micPermitted = true;
         int inBuf = 0;
         long ulSumSq = 0;
         long ulSamples = 0;
@@ -745,6 +746,23 @@ final class JoanMedia {
             int minIn = AudioRecord.getMinBufferSize(sRate,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
             inBuf = Math.max(minIn, sFrame * 8);
+            /* Say whether we may actually record, because AudioRecord
+             * will not.
+             *
+             * Without RECORD_AUDIO the appops layer hands back digital
+             * silence rather than an error: the object constructs,
+             * reports STATE_INITIALIZED, and read() returns zeros. The
+             * trace then says "media record ok" on a handset whose
+             * uplink is dead, which is exactly how this was read as the
+             * microphone working and the network being at fault.
+             * Measured on Digi.Mobil RO: rms=-99.0dBFS peak=-99.0dBFS,
+             * every sample zero, on both sources. */
+            micPermitted = app.checkSelfPermission(
+                    android.Manifest.permission.RECORD_AUDIO)
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED;
+            JoanTrace.note("media capture record_audio="
+                    + (micPermitted ? "granted"
+                            : "DENIED; uplink will be digital silence"));
             rec = openRecord(inBuf);
             if (rec == null) {
                 JoanTrace.note("media no AudioRecord");
@@ -821,7 +839,15 @@ final class JoanMedia {
                      * and the next trace says so, which is worth more
                      * than a quiet retry that leaves both outcomes
                      * looking identical. */
-                    if (!ulSwapped && silentUplink(ulSumSq, ulSamples,
+                    if (!ulSwapped && !micPermitted) {
+                        /* No point trying another source: appops
+                         * silences every one of them. Name the cause
+                         * rather than burning the swap on it. */
+                        ulSwapped = true;
+                        JoanTrace.note("media ul silent because RECORD_AUDIO "
+                                + "is not granted; open joan IMS and allow "
+                                + "the microphone");
+                    } else if (!ulSwapped && silentUplink(ulSumSq, ulSamples,
                             ulActSamples)) {
                         ulSwapped = true;
                         AudioRecord alt = swapToMic(rec, inBuf);
