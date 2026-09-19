@@ -1,25 +1,43 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Pre-grant the one RUNTIME permission joan needs.
+<!-- Pre-grant the runtime location permissions.
 
      privapp-permissions (org.joan.ims.xml) cannot do this. That file
-     allowlists signature|privileged permissions, and a dangerous runtime
-     permission is neither granted nor required to be listed there ; an
-     entry for one is simply never consulted.
+     allowlists signature|privileged permissions; a dangerous runtime
+     permission is neither granted by an entry there nor required to have
+     one, so such an entry is simply never consulted. LG's own
+     privapp-permissions-lge-joan.xml grants com.lge.ims nine permissions
+     and every one is signature|privileged, with no location among them,
+     which is the same rule seen from the other side.
 
-     ACCESS_FINE_LOCATION is needed only by getAllCellInfo, which has
-     required it since API 29, and only so P-Access-Network-Info can
-     carry utran-cell-id-3gpp as TS 24.229 7.2A.4 and every reference
-     stack do. joan uses location for nothing else.
+     These are used by exactly one thing: getAllCellInfo, so that
+     P-Access-Network-Info can carry utran-cell-id-3gpp as TS 24.229
+     7.2A.4 and both reference stacks do. joan uses location for nothing
+     else, and asking for it is ordinary here rather than novel; LG's
+     shipped com.lge.ims 6.1.0.20180701 declares COARSE and FINE, and
+     AOSP's ImsStack declares COARSE, FINE and BACKGROUND.
 
-     fixed="false" so the user can revoke it; a revoked grant costs the
-     cell id in one header and nothing else, and the state row says
-     pani_cell=no-permission when that happens.
+     BACKGROUND is on that list because an ImsService has no UI and is
+     always a background process, and since API 29 that needs its own
+     grant or the cell cache reads back empty. LG could not have declared
+     it: that app targets API 28, where it did not exist.
+
+     NOT here: LOCATION_BYPASS. It is within reach, being
+     signature|privileged and listed in AOSP's own privapp file, but
+     stock LG did not have it, it defeats the user's location toggle, and
+     AOSP's reason for holding it is emergency positioning, which joan
+     does not do. With location off the header simply stays bare.
+
+     fixed="false" so all of these can be revoked. A revoked grant costs
+     one header parameter and nothing else, and the state row then reads
+     pani_cell=no-permission.
 
      UNVERIFIED on a handset: DefaultPermissionGrantPolicy applies these
      when it runs, and whether it re-runs for a package added to /system
      after the device was provisioned has not been tested here. If it
-     does not, the fallback is one adb command and no root:
+     does not, the fallback needs no root:
        adb shell pm grant org.joan.ims android.permission.ACCESS_FINE_LOCATION
+       adb shell pm grant org.joan.ims android.permission.ACCESS_COARSE_LOCATION
+       adb shell pm grant org.joan.ims android.permission.ACCESS_BACKGROUND_LOCATION
 -->
 <exceptions>
     <exception package="org.joan.ims">
