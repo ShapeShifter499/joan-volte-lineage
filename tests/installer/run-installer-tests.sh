@@ -15,10 +15,14 @@ check() {
   else printf '  FAIL: %s\n' "$2"; fail=$((fail + 1)); fi
 }
 
-# Lift the two functions out of the installer verbatim.
-sed -n '/^unlock_device() {/,/^}/p;/^device_of() {/,/^}/p' "$SRC" > /tmp/joan-inst-fns.sh
-grep -q 'unlock_device()' /tmp/joan-inst-fns.sh || { echo "  FAIL: unlock_device not found in $SRC"; exit 1; }
-grep -q 'device_of()' /tmp/joan-inst-fns.sh || { echo "  FAIL: device_of not found in $SRC"; exit 1; }
+# Lift the functions under test out of the installer verbatim.
+sed -n '/^unlock_device() {/,/^}/p;/^device_of() {/,/^}/p;/^ro_state() {/,/^}/p;/^dev_is_ro() {/,/^}/p;/^write_probe() {/,/^}/p;/^release_ext4_reserve() {/,/^}/p' "$SRC" > /tmp/joan-inst-fns.sh
+# release_ext4_reserve talks to the caller through ui_print; the installer
+# defines it, the harness only needs it to not be a missing command.
+printf 'ui_print() { :; }\n' >> /tmp/joan-inst-fns.sh
+for fn in unlock_device device_of ro_state dev_is_ro write_probe release_ext4_reserve; do
+  grep -q "^$fn()" /tmp/joan-inst-fns.sh || { echo "  FAIL: $fn not found in $SRC"; exit 1; }
+done
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -69,9 +73,13 @@ w=$(why_case dm-3 0)
 case "$w" in *already-writable*) check 0 "why distinguishes an already-writable node (got $w)";;
   *) check 1 "why distinguishes an already-writable node (got $w)";; esac
 
+# No force_ro, no sysfs ro, no blockdev: nothing on this recovery can say
+# whether the device is read-only. That is not the same as writable and
+# must not be filed under it -- absence of a declaration is not the value
+# zero, which is a lesson this tree has paid for elsewhere.
 w=$(why_case dm-3 none)
-case "$w" in *no-force_ro-in-sysfs*) check 0 "why distinguishes a missing force_ro (got $w)";;
-  *) check 1 "why distinguishes a missing force_ro (got $w)";; esac
+case "$w" in *no-ro-indicator*) check 0 "why distinguishes having no read-only indicator (got $w)";;
+  *) check 1 "why distinguishes having no read-only indicator (got $w)";; esac
 
 w=$(why_case sda7 1)
 case "$w" in *not-a-dm-node*) check 0 "why distinguishes a non-dm device (got $w)";;
@@ -121,6 +129,63 @@ out=$(
 ) || true
 check "$([ -z "$out" ] && echo 0 || echo 1)" \
       "device_of is empty for a mount point that is not mounted (got '$out')"
+
+# --- the write probe -------------------------------------------------
+# The point of the probe is the errno. A recovery shell prints nothing for
+# a failed redirection, and touch only needs an inode, so it succeeds on
+# the full filesystem that started all of this. Only dd reports why.
+out=$(
+  . /tmp/joan-inst-fns.sh
+  write_probe "$WORK/probe_ok" >/dev/null 2>&1
+  printf '%s|%s' "$?" "$WERR"
+)
+check "$([ "$out" = "0|" ] && echo 0 || echo 1)" \
+      "write_probe succeeds silently on a writable path (got '$out')"
+
+mkdir -p "$WORK/nowrite" && chmod 500 "$WORK/nowrite"
+out=$(
+  . /tmp/joan-inst-fns.sh
+  write_probe "$WORK/nowrite/x" >/dev/null 2>&1
+  printf '%s|%s' "$?" "$WERR"
+)
+chmod 700 "$WORK/nowrite"
+case "$out" in
+  1\|?*) check 0 "write_probe reports an errno when the write fails (got '$out')";;
+  *) check 1 "write_probe reports an errno when the write fails (got '$out')";;
+esac
+
+# --- the ext4 reserve ------------------------------------------------
+# ext4 holds back reserved_clusters that even CAP_SYS_RESOURCE cannot
+# allocate from, so a nearly full partition returns ENOSPC while df still
+# shows free blocks and inodes. That, not verity, is what refused the
+# InfinityX install: 805 free blocks against a 4096-cluster reserve.
+reserve_case() {
+  # reserve_case <starting value or "none"> ; echoes "rc:value"
+  rm -rf "$WORK/sysfs" "$WORK/dev"; mkdir -p "$WORK/dev" "$WORK/sysfs/fs/ext4/dm-3"
+  : > "$WORK/dev/dm-3"
+  [ "$1" != "none" ] && printf '%s\n' "$1" > "$WORK/sysfs/fs/ext4/dm-3/reserved_clusters"
+  sed "s#/sys/fs/ext4/#$WORK/sysfs/fs/ext4/#" /tmp/joan-inst-fns.sh > "$WORK/rfns.sh"
+  # shellcheck disable=SC1090
+  # $name is the partition label mount_part is holding when it calls this;
+  # supply one, or set -u kills the subshell before it reports a status.
+  rc=$( . "$WORK/rfns.sh"; name=system; release_ext4_reserve "$WORK/dev/dm-3" >/dev/null 2>&1; echo $? )
+  val="-"
+  [ -f "$WORK/sysfs/fs/ext4/dm-3/reserved_clusters" ] &&
+    val=$(cat "$WORK/sysfs/fs/ext4/dm-3/reserved_clusters")
+  echo "$rc:$val"
+}
+
+r=$(reserve_case 4096)
+check "$([ "$r" = "0:0" ] && echo 0 || echo 1)" \
+      "a held-back ext4 reserve is released and reports success (got $r)"
+
+r=$(reserve_case 0)
+check "$([ "$r" = "1:0" ] && echo 0 || echo 1)" \
+      "an already-zero reserve is left alone and claims nothing (got $r)"
+
+r=$(reserve_case none)
+check "$([ "${r%%:*}" = "1" ] && echo 0 || echo 1)" \
+      "a filesystem with no reserved_clusters knob is refused, not guessed at (got $r)"
 
 if [ "$fail" -ne 0 ]; then
   echo "installer tests: FAIL $fail"; exit 1

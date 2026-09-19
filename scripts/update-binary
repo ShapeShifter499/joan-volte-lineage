@@ -1,5 +1,38 @@
 #!/sbin/sh
-# Lineage recovery installer — joan-volte (no Magisk, no CIL append).
+# Recovery installer — joan-volte (no Magisk, no CIL append).
+# Targets AOSP-based ROMs on Android 15 (SDK 35). No ROM-specific checks.
+#
+# v7.5: merges v7.1-v7.4 (contributed by a tester working an InfinityX
+# install, who found the ENOSPC cause and sent back a fixed installer)
+# with the dm-verity reporting this tree had added in parallel. The
+# unlock path keeps UNLOCK_WHY, so a refusal still names which of its
+# paths it took, and the failure message hangs the verity guidance off a
+# clear that was REFUSED rather than off ro.boot.veritymode. The SDK gate
+# refuses an older platform and only warns about a newer one.
+#
+# v7.4: fixes the "writable but refuses a write" abort on a nearly full
+# ext4 system. The write fails with ENOSPC while free blocks remain,
+# because ext4 holds back reserved_clusters that even root cannot
+# allocate. On a failed write test the reserve is set to 0 (runtime
+# only, resets at the next mount) and the write is retried. The write
+# probe now gets its errno from dd instead of touch.
+#
+# v7.3: on a write failure the errno now comes from touch (the recovery
+# shell prints none), and the log gets probes: touch/mkdir/dd on the
+# partition with a /tmp control, SELinux mode and avc lines, directory
+# context and attributes, and the ext4 features and state.
+#
+# v7.2: every ui_print line is also appended to /tmp/joan-volte.log
+# (recovery ramdisk; pull with adb before rebooting).
+#
+# v7.1: a failed write test now reports the real error text, the block
+# device's read-only state (sysfs force_ro/ro and blockdev) and the
+# relevant dmesg lines. unlock_device also tries blockdev --setrw when
+# sysfs has no force_ro node.
+#
+# v7: retargeted to AOSP Android 15. Detects EROFS and ext4 shared_blocks
+# and aborts with a specific error, handles system_ext as its own
+# (optional) partition, and refuses system images other than TARGET_SDK.
 #
 # v6: SAR/verity-safe. On system-as-root devices (all joan variants),
 # /system is a read-only dm-verity logical partition. A blind
@@ -11,10 +44,16 @@
 OUTFD="/proc/self/fd/$2"
 ZIP="$3"
 TMP=/tmp/joan-volte
+# Kept outside $TMP, which is wiped at the start of every run.
+LOG=/tmp/joan-volte.log
+
+# SDK level of the system image this package is built for (35 = Android 15).
+TARGET_SDK=35
 
 ui_print() {
   echo "ui_print $1" > "$OUTFD"
   echo "ui_print" > "$OUTFD"
+  echo "$1" >> "$LOG" 2>/dev/null
 }
 
 error() {
@@ -51,7 +90,8 @@ copy_file() {
   chcon "$con" "$dst" 2>/dev/null || true
 }
 
-ui_print "joan-volte v6: ImsService apk (SAR/verity-safe installer)"
+echo "=== joan-volte run $(date) ===" >> "$LOG" 2>/dev/null
+ui_print "joan-volte v7.5: ImsService apk (SAR/verity-safe installer)"
 
 rm -rf "$TMP"
 mkdir -p "$TMP"
@@ -67,11 +107,15 @@ need_file "$TMP/app/joan-ims.apk" 5000
 # nothing installed. v6 refused, correctly, but could not install either.
 #
 # The partitions are logical (dynamic/super). Recovery creates them as
-# /dev/block/mapper/<name>. On the US998 LineageOS build they mount
-# read-write and dm-verity is not in the way; that is a property of that
-# recovery, not a rule, which unlock_device below exists to handle.
+# /dev/block/mapper/<name>. Some recoveries mount them read-write with
+# dm-verity out of the way (observed: LineageOS recovery on US998); that
+# is a property of the recovery, not a rule, which unlock_device below
+# exists to handle. Some ROMs ship EROFS, or ext4 with shared_blocks,
+# which no recovery can mount read-write; mount_part detects both and
+# aborts with a specific error.
 SYSMNT=/mnt/joan_system
 PRODMNT=/mnt/joan_product
+SYSEXTMNT=/mnt/joan_system_ext
 TMPDM=$(stat -c %d /tmp 2>/dev/null)
 
 # Clear the read-only flag on a device-mapper node.
@@ -93,36 +137,23 @@ TMPDM=$(stat -c %d /tmp 2>/dev/null)
 # no dm node and nothing to do, a recovery that already handed us a
 # writable device is untouched, and a failure here changes nothing --
 # the write test still decides whether we install.
+#
 # UNLOCK_WHY records what was actually observed, because this returns
 # false for four different reasons and the failure message used to assert
 # only one of them. An InfinityX report (alpha49) came back saying the dm
 # node "could not be cleared" when the truth might equally have been that
-# there was no dm node, no force_ro in sysfs, or a node already writable.
-# One screenshot should be enough to tell those apart; it was not.
-# dm-verity is a different animal from a read-only dm-linear node.
-#
-# force_ro is about a logical partition the bootloader handed over
-# read-only; clearing it makes writes land. A verity target is a
-# hash-verified read-only mapping, and there is no flag that makes it
-# writable -- a write that did land would simply make the next read fail
-# verification. An InfinityX tester reported a dm-verity error on dm-0,
-# which is the device saying exactly that.
-#
-# ro.boot.veritymode is NOT how to tell the two apart, and a check that
-# said it was very nearly shipped. The joan bench, where installs work,
-# also reports veritymode=enforcing: its dm-0 is name=system ro=1, a
-# plain dm-linear partition whose force_ro clears and which then mounts
-# rw with no overlay. veritymode is the bootloader's cmdline, not a
-# statement about how /system is mapped.
-#
-# The honest signal is what was observed: a clear that was REFUSED. So
-# veritymode is reported as context, never as a verdict, and the
-# guidance hangs off the refusal.
+# there was no dm node, no read-only indicator at all, or a node already
+# writable. One screenshot should be enough to tell those apart.
+UNLOCK_WHY=""
+
+# The bootloader's verity mode. Context for a failure message only: it is
+# the kernel cmdline, not a statement about how /system is mapped, and a
+# check that treated it as one very nearly shipped. See the failure
+# branch in mount_part.
 verity_mode() {
   getprop ro.boot.veritymode 2>/dev/null
 }
 
-UNLOCK_WHY=""
 unlock_device() {
   ud_dev=$(readlink -f "$1" 2>/dev/null)
   [ -n "$ud_dev" ] || ud_dev="$1"
@@ -131,29 +162,31 @@ unlock_device() {
     */dm-*) ;;
     *) UNLOCK_WHY="$UNLOCK_WHY not-a-dm-node"; return 1 ;;
   esac
+  # Read-only by any of sysfs force_ro, sysfs ro, or blockdev. A recovery
+  # can lack the force_ro node and still have blockdev, so a missing node
+  # must not end the attempt.
   ud_ro="/sys/block/${ud_dev##*/}/force_ro"
-  if [ ! -f "$ud_ro" ]; then
-    UNLOCK_WHY="$UNLOCK_WHY no-force_ro-in-sysfs"
-    return 1
-  fi
-  ud_before=$(cat "$ud_ro" 2>/dev/null)
-  UNLOCK_WHY="$UNLOCK_WHY force_ro=${ud_before:-?}"
-  if [ "$ud_before" != "1" ]; then
+  if dev_is_ro "$ud_dev"; then
+    :
+  elif [ -f "$ud_ro" ] || blockdev --getro "$ud_dev" >/dev/null 2>&1; then
     UNLOCK_WHY="$UNLOCK_WHY already-writable"
+    return 1
+  else
+    # Nothing on this recovery can say. That is not the same as writable,
+    # so it gets its own token rather than being filed under one.
+    UNLOCK_WHY="$UNLOCK_WHY no-ro-indicator"
     return 1
   fi
   echo 0 > "$ud_ro" 2>/dev/null || true
   # Some recoveries ship blockdev and not a writable sysfs, some the
-  # reverse. Try both, then believe only what sysfs reads back.
+  # reverse. Try both, then believe only what reads back.
   blockdev --setrw "$ud_dev" 2>/dev/null || true
-  ud_after=$(cat "$ud_ro" 2>/dev/null)
-  UNLOCK_WHY="$UNLOCK_WHY after=${ud_after:-?}"
-  if [ "$ud_after" = "0" ]; then
-    UNLOCK_WHY="$UNLOCK_WHY cleared"
-    return 0
+  if dev_is_ro "$ud_dev"; then
+    UNLOCK_WHY="$UNLOCK_WHY clear-refused"
+    return 1
   fi
-  UNLOCK_WHY="$UNLOCK_WHY clear-refused"
-  return 1
+  UNLOCK_WHY="$UNLOCK_WHY cleared"
+  return 0
 }
 
 # The block device currently backing a mount point, or empty.
@@ -161,17 +194,170 @@ device_of() {
   mount | grep " $1 " | head -1 | cut -d" " -f1
 }
 
+# Read-only state of a block device as one line, for logs. "-" means
+# that source does not exist on this recovery.
+ro_state() {
+  rs_dev=$(readlink -f "$1" 2>/dev/null)
+  [ -n "$rs_dev" ] || rs_dev="$1"
+  rs_n="${rs_dev##*/}"
+  rs_f=$(cat "/sys/block/$rs_n/force_ro" 2>/dev/null) || rs_f="-"
+  rs_r=$(cat "/sys/block/$rs_n/ro" 2>/dev/null) || rs_r="-"
+  rs_b=$(blockdev --getro "$rs_dev" 2>/dev/null) || rs_b="-"
+  echo "$rs_dev force_ro=$rs_f ro=$rs_r blockdev=$rs_b"
+}
+
+# True if any read-only indicator for the device says 1.
+dev_is_ro() {
+  case "$(ro_state "$1")" in
+    *force_ro=1*|*" ro=1"*|*blockdev=1*) return 0 ;;
+  esac
+  return 1
+}
+
+# Try the 5-byte write. On failure, WERR holds the reason. The recovery
+# shell prints no message for a failed redirection, so ask dd, which
+# reports the errno through libc. (touch is no good here: creating the
+# file needs only an inode, so it succeeds when the data write hits
+# ENOSPC.)
+write_probe() {
+  if echo joan > "$1" 2>/dev/null; then
+    WERR=""
+    return 0
+  fi
+  WERR=$(dd if=/dev/zero of="$1" bs=1 count=5 2>&1)
+  wp_rc=$?
+  if [ "$wp_rc" = "0" ]; then
+    WERR="echo failed but dd wrote 5 bytes"
+  else
+    WERR=$(echo "$WERR" | head -1)
+  fi
+  return 1
+}
+
+# Log stdin line by line, prefixed with $1.
+log_lines() {
+  while IFS= read -r ll_l; do
+    ui_print "  $1: $ll_l"
+  done
+}
+
+# Run a command and log its combined output and exit status on one line.
+# usage: probe <label> <command> [args...]
+probe() {
+  pr_label="$1"
+  shift
+  pr_out=$("$@" 2>&1)
+  pr_rc=$?
+  ui_print "  probe $pr_label: rc=$pr_rc $(echo "$pr_out" | tr '\n' ' ')"
+}
+
+# Evidence for a write that failed on a filesystem that claims rw.
+# $1 = block device, $2 = mount point.
+write_diag() {
+  ui_print "  diag: $(grep " $2 " /proc/mounts | head -1)"
+  ui_print "  diag: block device $(ro_state "$1")"
+
+  # The same three operations on the partition, plus one on the ramdisk
+  # as a control: if the control fails too, the probes prove nothing.
+  probe tmp-touch touch /tmp/.joan_probe
+  probe touch touch "$2/.joan_probe_t"
+  probe mkdir mkdir "$2/.joan_probe_d"
+  probe dd dd if=/dev/zero of="$2/.joan_probe_z" bs=1024 count=1
+  rm -rf /tmp/.joan_probe "$2/.joan_probe_t" "$2/.joan_probe_d" \
+         "$2/.joan_probe_z" "$wt" 2>/dev/null
+
+  # Directory context, mode and attributes (an immutable flag would do it).
+  probe ls ls -ldZ "$2"
+  probe lsattr lsattr -d "$2"
+  probe getenforce getenforce
+  rc_dev=$(readlink -f "$1" 2>/dev/null)
+  probe reserved_clusters cat "/sys/fs/ext4/${rc_dev##*/}/reserved_clusters"
+
+  # ext4 features and state; try dumpe2fs, fall back to tune2fs.
+  d_out=$(dumpe2fs -h "$1" 2>&1)
+  case "$d_out" in
+    *"Filesystem features"*) ;;
+    *) d_out=$(tune2fs -l "$1" 2>&1) ;;
+  esac
+  echo "$d_out" | grep -iE 'features|state|reserved|free|not found|no such' \
+    | log_lines ext4
+
+  dmesg 2>/dev/null | grep -iE 'ext4-fs|erofs|verity|dm-[0-9]|i/o error' \
+    | grep -v 'init:' | tail -8 | log_lines dmesg
+  dmesg 2>/dev/null | grep -i 'avc:' | tail -5 | log_lines avc
+}
+
+# The filesystem type of a mount point (ext4, erofs, ...), or empty.
+fstype_of() {
+  grep " $1 " /proc/mounts | head -1 | cut -d" " -f3
+}
+
+# True if an ext4 device carries the shared_blocks feature. Such a
+# filesystem is deduplicated and the kernel refuses to mount it rw.
+# Best effort: needs dumpe2fs or tune2fs in the recovery, and reports
+# false if neither is there.
+has_shared_blocks() {
+  { dumpe2fs -h "$1" 2>/dev/null; tune2fs -l "$1" 2>/dev/null; } \
+    | grep -q shared_blocks
+}
+
+# ext4 holds back reserved_clusters (up to 4096 blocks by default) that
+# even root cannot allocate from. On a nearly full read-mostly partition
+# that is more than what is free, so data writes fail with ENOSPC while
+# df and the superblock still report free blocks and inodes. Observed on
+# US998 system: 805 free blocks, 0 root-reserved, every mkdir and dd
+# failed; echo 0 > reserved_clusters made the same write succeed.
+# The setting is runtime only and is restored at the next mount.
+# Returns 0 if it lowered the reserve.
+release_ext4_reserve() {
+  rr_dev=$(readlink -f "$1" 2>/dev/null)
+  [ -n "$rr_dev" ] || rr_dev="$1"
+  rr_f="/sys/fs/ext4/${rr_dev##*/}/reserved_clusters"
+  [ -f "$rr_f" ] || return 1
+  rr_old=$(cat "$rr_f" 2>/dev/null)
+  [ -n "$rr_old" ] && [ "$rr_old" != "0" ] || return 1
+  echo 0 > "$rr_f" 2>/dev/null || return 1
+  [ "$(cat "$rr_f" 2>/dev/null)" = "0" ] || return 1
+  ui_print "  $name: ext4 reserved_clusters $rr_old -> 0 (runtime only, resets at next mount)"
+  return 0
+}
+
+# Failure inside mount_part. A required partition aborts the install; an
+# optional one warns, releases anything it mounted itself, and returns 1
+# so the caller can skip it.
+fail() {
+  if [ "$MP_OPTIONAL" = "1" ]; then
+    ui_print "  WARNING: $1"
+    ui_print "  Skipping $name."
+    if [ "$MP_OWNED" = "1" ] && mount | grep -q " $mp "; then
+      umount "$mp" 2>/dev/null
+    fi
+    MP_RESULT=""
+    MP_OWNED=0
+    return 1
+  fi
+  error "$1"
+}
+
+# mount_part <name> <mountpoint> [optional]
+# Sets MP_RESULT (where it ended up mounted, empty if skipped) and
+# MP_OWNED (1 if we mounted it and must unmount it). Returns 1 only when
+# an optional partition was skipped.
 mount_part() {
   name="$1"
   mp="$2"
+  MP_OPTIONAL=0
+  [ "$3" = "optional" ] && MP_OPTIONAL=1
   MP_RESULT="$mp"
   MP_OWNED=0
   mkdir -p "$mp"
   if mount | grep -q " $mp "; then
     MP_OWNED=1
   else
+    found=0
     for dev in /dev/block/mapper/$name /dev/block/by-name/$name; do
       [ -b "$dev" ] || continue
+      found=1
       real=$(readlink -f "$dev" 2>/dev/null)
       [ -n "$real" ] || real="$dev"
       if unlock_device "$real"; then
@@ -197,9 +383,15 @@ mount_part() {
         break
       fi
     done
+    if [ "$found" = "0" ] && [ "$MP_OPTIONAL" = "1" ]; then
+      ui_print "  no $name partition on this device; nothing to do there"
+      MP_RESULT=""
+      return 1
+    fi
   fi
   mp="$MP_RESULT"
-  mount | grep -q " $mp " || error "cannot mount $name (looked in /dev/block/mapper and by-name)"
+  mount | grep -q " $mp " \
+    || { fail "cannot mount $name (looked in /dev/block/mapper and by-name)" || return 1; }
   mount -o rw,remount "$mp" 2>/dev/null || true
 
   # It must not be the recovery ramdisk. /tmp is unambiguously the
@@ -207,40 +399,74 @@ mount_part() {
   dm=$(stat -c %d "$mp" 2>/dev/null)
   ui_print "  $name st_dev=$dm tmp(ramdisk) st_dev=$TMPDM"
   if [ -z "$dm" ] || [ "$dm" = "$TMPDM" ]; then
-    error "$name resolved to the recovery ramdisk; refusing to write"
+    fail "$name resolved to the recovery ramdisk; refusing to write" || return 1
   fi
 
+  # EROFS and squashfs are read-only by construction. No flag, remount or
+  # unlock changes that, so say so now instead of failing the write test
+  # with a message that points at the wrong thing.
+  fs=$(fstype_of "$mp")
+  ui_print "  $name filesystem: ${fs:-unknown}"
+  case "$fs" in
+    erofs|squashfs)
+      fail "$name is $fs, a read-only filesystem; this package cannot be installed in place. Include its files in the ROM build instead (see upstream/VOLTE-PLATFORM-SETUP.md)." \
+        || return 1
+      ;;
+  esac
+
   wt="$mp/.joan_write_test"
-  if ! echo joan > "$wt" 2>/dev/null; then
-    # A mount that claims rw and refuses a five-byte write is almost
-    # always a read-only dm node underneath. Clear it and try once more
-    # before blaming the filesystem for something it is not doing.
+  if ! write_probe "$wt"; then
+    ui_print "  $name write failed: ${WERR:-no error text}"
+    ui_print "  $name block device: $(ro_state "$(device_of "$mp")")"
+    # A mount that claims rw and refuses a five-byte write is often a
+    # read-only dm node underneath. Clear it and try once more before
+    # blaming the filesystem for something it is not doing.
     if unlock_device "$(device_of "$mp")"; then
-      ui_print "  $name refused a write; cleared its read-only flag, retrying"
+      ui_print "  $name cleared its read-only flag, retrying"
       mount -o rw,remount "$mp" 2>/dev/null || true
     fi
+    # ENOSPC with free blocks left: see release_ext4_reserve.
+    release_ext4_reserve "$(device_of "$mp")" || true
   fi
-  if echo joan > "$wt" 2>/dev/null; then
+  if write_probe "$wt"; then
     got=$(cat "$wt" 2>/dev/null)
     rm -f "$wt"
-    [ "$got" = "joan" ] || error "$name failed write readback"
+    [ "$got" = "joan" ] || { fail "$name failed write readback" || return 1; }
   else
-    # Distinguish the two, because they need different answers and
+    # Distinguish the causes, because they need different answers and
     # guessing sent me chasing verity when /odm was simply full.
     # No awk in recovery -- this used to print nothing at all.
     free=$(df -k "$mp" 2>/dev/null | tail -1 | tr -s " " | cut -d" " -f4)
     if mount | grep " $mp " | grep -q "[(,]ro[,)]"; then
-      error "$name is mounted read-only; cannot install"
+      if [ "$fs" = "ext4" ] && has_shared_blocks "$(device_of "$mp")"; then
+        fail "$name is ext4 with the shared_blocks feature, which the kernel will not mount read-write; this package cannot be installed in place. Include its files in the ROM build instead (see upstream/VOLTE-PLATFORM-SETUP.md)." \
+          || return 1
+      else
+        fail "$name is mounted read-only; cannot install" || return 1
+      fi
     else
       inodes=$(df -ki "$mp" 2>/dev/null | tail -1 | tr -s " " | cut -d" " -f4)
-      opts=$(mount | grep " $mp " | head -1 | sed 's/.*type [^ ]* (//;s/).*//')
-      vm=$(verity_mode)
-      case "${UNLOCK_WHY:-}" in
-        *clear-refused*)
-          error "$name refused a write and its read-only flag could not be cleared (Unlock: $UNLOCK_WHY, veritymode: ${vm:-unknown}). A dm-verity target looks exactly like this: no recovery zip can write one, because the mapping is hash verified and a write would only make the next read fail. Nothing was written. Install over adb instead, which needs no root manager: adb root; adb disable-verity; adb reboot; then adb root; adb remount; adb push. Report this line."
-          ;;
-      esac
-      error "$name reports writable but refuses a 5-byte write (${free:-?} KB and ${inodes:-?} inodes free). This package needs about 210 KB and 8 inodes, so free space is not the limit. Unlock: ${UNLOCK_WHY:-not-attempted}. Mount opts: ${opts:-?}. Veritymode: ${vm:-unknown}. Report this line."
+      write_diag "$(device_of "$mp")" "$mp"
+      hint=""
+      if dev_is_ro "$(device_of "$mp")"; then
+        # force_ro and dm-verity look identical from here and need
+        # opposite answers. force_ro is a logical partition the bootloader
+        # handed over read-only: clearing it makes writes land, and that
+        # was just tried. A verity target is a hash-verified read-only
+        # mapping with no flag that makes it writable -- a write that did
+        # land would only make the next read fail verification. An
+        # InfinityX tester reported a dm-verity error on dm-0, which is
+        # the device saying exactly that.
+        #
+        # ro.boot.veritymode is NOT how to tell them apart: the joan
+        # bench, where installs work, also reports veritymode=enforcing,
+        # and its dm-0 is a plain dm-linear partition that clears and
+        # mounts rw. So it is printed as context and never as a verdict,
+        # and the guidance hangs off the clear that was refused.
+        hint=" The block device is still read-only after the clear was tried (unlock: ${UNLOCK_WHY:-not-attempted}, veritymode: $(verity_mode)). That is what a dm-verity target looks like from here. If it is verity, no zip installs in place: use adb -- adb root; adb disable-verity; adb reboot; then adb root; adb remount; adb push -- or build these files into the ROM."
+      fi
+      fail "$name reports writable but refuses a 5-byte write: ${WERR:-no error text}. (${free:-?} KB and ${inodes:-?} inodes free; this package needs about 210 KB and 8 inodes.)$hint Report the diag and dmesg lines above." \
+        || return 1
     fi
   fi
 }
@@ -251,10 +477,35 @@ SYSMNT="$MP_RESULT"; SYSMNT_OWNED="$MP_OWNED"
 ui_print "Mounting product"
 mount_part product "$PRODMNT"
 PRODMNT="$MP_RESULT"; PRODMNT_OWNED="$MP_OWNED"
+# system_ext is a separate logical partition on Android 12+ and only
+# needed to clear stale files from older installs, so it is optional.
+ui_print "Mounting system_ext"
+mount_part system_ext "$SYSEXTMNT" optional
+SYSEXTMNT="$MP_RESULT"; SYSEXTMNT_OWNED="$MP_OWNED"
 # system-as-root: the partition root is /, and the /system tree sits in
 # a system/ subdirectory of it.
 SYS="$SYSMNT/system"
 [ -d "$SYS/priv-app" ] || error "$SYS/priv-app missing; unexpected system layout"
+
+# Refuse a system image this package was not built for. Read it from the
+# mounted system, not getprop: in recovery getprop describes the recovery.
+SDK=$(grep '^ro.system.build.version.sdk=' "$SYS/build.prop" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '\r ')
+[ -n "$SDK" ] || SDK=$(grep '^ro.build.version.sdk=' "$SYS/build.prop" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '\r ')
+[ -n "$SDK" ] || error "cannot read the SDK level from $SYS/build.prop"
+ui_print "  system SDK level: $SDK (this package targets $TARGET_SDK)"
+# Refuse an OLDER platform: the ImsService calls APIs that are simply
+# absent there, and the failure would land after the install, as a
+# service that never starts. A NEWER one is untested, not known-broken,
+# and a tester on the next Android release should be able to try it and
+# report -- which is what an alpha is for.
+case "$SDK" in
+  ''|*[!0-9]*) error "system SDK level \"$SDK\" from $SYS/build.prop is not a number" ;;
+esac
+if [ "$SDK" -lt "$TARGET_SDK" ]; then
+  error "system SDK level is $SDK; this package needs $TARGET_SDK or newer (Android 15), whose ImsService APIs it calls"
+elif [ "$SDK" -gt "$TARGET_SDK" ]; then
+  ui_print "  WARNING: system SDK $SDK is newer than the $TARGET_SDK this was built against; installing anyway -- report anything odd."
+fi
 
 mkdir -p "$SYS/priv-app/JoanIms"
 chmod 755 "$SYS/priv-app/JoanIms" 2>/dev/null || true
@@ -262,8 +513,10 @@ chmod 755 "$SYS/priv-app/JoanIms" 2>/dev/null || true
 ui_print "Removing joan-ims loopback listener"
 rm -f "$SYS/bin/joan-ims" "$SYS/bin/joan-ims-ua" \
       "$SYS/etc/init/joan-ims.rc" "$SYS/etc/init/joan-imsd.rc"
-rm -f "$SYSMNT/system_ext/bin/joan-ims-ua" \
-      "$SYSMNT/system_ext/etc/init/joan-ims.rc"
+if [ -n "$SYSEXTMNT" ]; then
+  rm -f "$SYSEXTMNT/bin/joan-ims-ua" \
+        "$SYSEXTMNT/etc/init/joan-ims.rc"
+fi
 
 ui_print "Installing ImsService priv-app"
 copy_file "$TMP/app/joan-ims.apk" "$SYS/priv-app/JoanIms/JoanIms.apk" 644 u:object_r:system_file:s0
@@ -389,6 +642,7 @@ fi
 sync
 # Only unmount what we mounted. Tearing down recovery's own mount would
 # pull the ground out from under it mid-install.
+[ "$SYSEXTMNT_OWNED" = "1" ] && umount "$SYSEXTMNT" 2>/dev/null
 [ "$PRODMNT_OWNED" = "1" ] && umount "$PRODMNT" 2>/dev/null
 [ "$SYSMNT_OWNED" = "1" ] && umount "$SYSMNT" 2>/dev/null
 
