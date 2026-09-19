@@ -255,14 +255,27 @@ public class TestJoanDiscovery {
          * profiles carry groups of zeros that are not delays. */
         check(JoanCarrierProfile.parseSeconds("120,240,480").length == 3,
                 "a clean curve parses whole");
+        /* China Mobile's value, verbatim. The zero groups drop out and
+         * the 192 that follows 960 is a step backwards -- bad data, not
+         * a policy. Keeping it would clamp their retry at 192s forever,
+         * against a core whose own 404s ask for 304s to 875s. */
+        int[] cmcc = JoanCarrierProfile.parseSeconds(
+                "120,240,480,960,192,000,000,000");
+        check(cmcc.length == 4 && cmcc[3] == 960,
+                "a curve that falls back is cut at the fall, not clamped to it");
+        check(JoanAppRegister.JoanRegLifecycle.regBackoffMs(9, 30, 1800,
+                        cmcc, 99_000L) == 960_000L,
+                "so China Mobile clamps at 960s, not at 192s");
         check(JoanCarrierProfile.parseSeconds(
-                        "120,240,480,960,192,000,000,000").length == 5,
-                "zero groups are dropped rather than poisoning the curve");
+                        "120,240,480,960,1920,3840,7200").length == 7,
+                "a clean climbing curve is kept whole");
         check(JoanCarrierProfile.parseSeconds("").length == 0
                         && JoanCarrierProfile.parseSeconds(null).length == 0,
                 "an absent curve is empty, not an exception");
-        check(JoanCarrierProfile.parseSeconds("12,,x,-4,9").length == 2,
-                "blanks, words and negatives are not delays");
+        int[] junk = JoanCarrierProfile.parseSeconds("12,,x,-4,9");
+        check(junk.length == 1 && junk[0] == 12,
+                "blanks, words and negatives are not delays, and the 9 that "
+                        + "follows 12 is a fall, so the curve stops there");
 
         /* P-CSCF rotation: the reference walks forward from the node it
          * used last rather than restarting at the front every time. */

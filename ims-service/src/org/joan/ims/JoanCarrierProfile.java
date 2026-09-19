@@ -312,8 +312,31 @@ public final class JoanCarrierProfile {
                 /* Not a number is not a delay. */
             }
         }
-        int[] out = new int[n];
-        System.arraycopy(tmp, 0, out, 0, n);
+        /* A retry curve only ever climbs. Several profiles carry a
+         * value that falls back partway -- China Mobile's parses to
+         * 120,240,480,960,192 -- and since the last entry is what the
+         * curve clamps to once the steps run out, honouring that would
+         * pin the retry at 192s forever. joan's own backoff reached 900s
+         * and China Mobile's own 404s ask for between 304s and 875s, so
+         * obeying the corrupt tail would hammer the one core we most
+         * need to stop hammering.
+         *
+         * A step that goes backwards is bad data, not a policy, so the
+         * climbing prefix is kept and the rest dropped. China Mobile
+         * lands on 120,240,480,960 and clamps at 960s. The source of the
+         * corruption is upstream of this converter and could not be
+         * checked against the vendor XML here -- only 6 carrier files
+         * were extracted, and T-Mobile's, which is clean, matches what
+         * we distilled. */
+        int keep = n;
+        for (int i = 1; i < n; i++) {
+            if (tmp[i] < tmp[i - 1]) {
+                keep = i;
+                break;
+            }
+        }
+        int[] out = new int[keep];
+        System.arraycopy(tmp, 0, out, 0, keep);
         return out;
     }
 
