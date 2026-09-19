@@ -1177,21 +1177,6 @@ final class JoanSipBuilder {
     }
 
     /**
-     * Per-message TCP selection for REG1 and REG2.
-     *
-     * <p>Order, all fail-closed on TMUS/non-3GPP ({@code criterion <= 0}):
-     * stock {@code GetTCPCriterionLength}; then, for IPv6 only, RFC 3261
-     * §18.1.1 when {@code mtu > 0} ({@code sipLen + 48 + 200 > mtu});
-     * then, for IPv6 with unknown MTU, RFC's 1300-byte unknown-path-MTU
-     * rule. IPv4 stays on the stock criterion: Viettel REG1 already
-     * answers 401 over ~1568-byte IPv4 UDP.
-     *
-     * <p>pjsip {@code sip_util.c} uses the same 1300-byte UDP threshold
-     * ({@code PJSIP_UDP_SIZE_THRESHOLD}) when TCP switch is enabled.
-     * Joan's 310-260 UDP exception remains explicit Joan policy, not
-     * stock {@code AdjustTcpCriterionPerMtu}.
-     */
-    /**
      * Which source answered "what PLMN is this", and with what.
      *
      * <p>Exists because the outcome cannot distinguish the two paths:
@@ -1213,6 +1198,30 @@ final class JoanSipBuilder {
         return "none";
     }
 
+    /**
+     * Per-message TCP selection for REG1 and REG2.
+     *
+     * <p>Order: the TMUS exception, then the platform's transport policy
+     * (UDP and TCP are honoured outright; DYNAMIC_UDP_TCP is the only
+     * value that consults a length), then one MTU-derived criterion --
+     * {@link #registerTcpCriterion}, whose 200-byte threshold carries RFC
+     * 3261 §18.1.1's intent already. A realm with no PLMN from either
+     * the realm or the SIM never flips.
+     *
+     * <p><b>Both address families use that one calculation.</b> This text
+     * used to say IPv4 stayed on the stock criterion while only IPv6 got
+     * the RFC rule, and it kept saying so after the code stopped doing it
+     * -- it was sitting above {@code plmnSource}, so javadoc attached it
+     * to that method and nothing ever flagged the drift. An IPv4-only PDN
+     * is not a second-class path: Digi.Mobil RO is v4-only, and its
+     * 1596-byte REG1 correctly took TCP against a 1400-byte-MTU bearer
+     * (criterion 1200). TestJoanSip pins the IPv4 cases.
+     *
+     * <p>pjsip {@code sip_util.c} uses the same 1300-byte UDP threshold
+     * ({@code PJSIP_UDP_SIZE_THRESHOLD}) when TCP switch is enabled.
+     * Joan's 310-260 UDP exception remains explicit Joan policy, not
+     * stock {@code AdjustTcpCriterionPerMtu}.
+     */
     static boolean preferTcp(String realm, int messageLen, int mtu,
                              boolean ipv6) {
         /* The home PLMN, from the realm when it is in 3GPP form and from
