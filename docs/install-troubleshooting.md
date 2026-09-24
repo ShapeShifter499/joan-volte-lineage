@@ -1,8 +1,76 @@
 # When the zip will not install
 
-Two failures account for every install report we have had. Neither is
-what its error message first looks like, so both are written down here
-with the evidence that settled them.
+Three failures account for every install report we have had. None is
+what it first looks like, so each is written down here with the evidence
+that settled it. Start with section 0 if the phone stopped booting.
+
+## 0. Bootloop after flashing a build newer than alpha67
+
+**Fixed in alpha76.** Every build from alpha70 through alpha75 could stop
+a phone from booting when it was flashed *over an earlier install*.
+Fresh installs worked, which is why it looked like a problem with
+particular phones or ROMs.
+
+### What happened
+
+PackageManager keeps a cache of every package's parsed manifest in
+`/data/system/package_cache`, and reuses an entry for as long as the
+scanned path is *older* than the cache file
+(`PackageCacher.isCacheFileUpToDate`: `pkg.st_mtime < cache.st_mtime`,
+Android 15 source). For a priv-app the scanned path is the directory
+`/system/priv-app/JoanIms`. A recovery install overwrote the apk inside
+it, which does not change the directory's mtime, and recovery's clock on
+this handset reads 2017 anyway. So after a flash the phone went on using
+the **previous build's manifest**.
+
+alpha67's manifest requested `BIND_IMS_SERVICE`. The next change removed
+that request **and** its line in the privapp allowlist. A phone upgrading
+from alpha67 therefore booted with a cached manifest requesting
+`BIND_IMS_SERVICE` and an allowlist that no longer listed it. Under
+`ro.control_privapp_permissions=enforce` (the LineageOS default) that is
+not a denial: `PermissionManagerServiceImpl.onSystemReady()` throws
+`IllegalStateException: Signature|privileged permissions not in
+privapp-permissions allowlist`, system_server dies, and the phone
+bootloops.
+
+This is also the better explanation of the alpha73 incident in
+`HANDOFF-2026-09-19-digi-ro-registered.md`, which blamed the boot-time
+grant service: alpha73 was the first release carrying the shrunken
+allowlist.
+
+### What alpha76 changes
+
+- **The allowlist is append-only.** It lists every privileged permission
+  *any* released build requested, so whatever manifest a phone has cached
+  is covered. `tests/run-host-tests.sh` walks every manifest in git
+  history and fails if one of them requested a privileged permission the
+  allowlist no longer carries.
+- **The installer re-dates what PackageManager scans** (`stamp_future`),
+  so the cache entry is stale and the new manifest is actually read. The
+  README's old advice to distrust `dumpsys package` versions came from
+  the same cache; with the stamp it reports the build that is installed.
+- Every copy is write-then-rename, the free space is checked before
+  anything is written, and the alpha70-73 boot-time grant is removed
+  whenever it is found. `tests/installer/run-e2e-install.sh` runs the
+  real installer against ext4 images, including an upgrade from an
+  alpha67 install.
+
+### Getting a bootlooping phone back
+
+Any one of these, from recovery:
+
+1. **Sideload alpha76 or newer.** Its allowlist covers the cached
+   manifest, so the next boot succeeds, and it re-dates the package so the
+   cache is replaced. This keeps VoLTE installed.
+2. **Sideload `joan-volte-uninstall.zip`.** With the package gone there is
+   nothing to violate the allowlist.
+3. **Dirty-flash the ROM** (no wipe). It rewrites `/system`, which removes
+   everything joan installed.
+
+If it boots but permissions look wrong afterwards,
+`adb shell pm reset-permissions` restores the ROM's defaults. Only if it
+still does not boot is the damage in `/data`, and a factory reset is the
+remaining answer.
 
 ## 1. "It installed but nothing happened" — a stale zip
 

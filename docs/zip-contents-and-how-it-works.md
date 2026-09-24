@@ -115,33 +115,29 @@ the trace on a handset that cannot record, which is how this was read as
 a working microphone and a network fault. Since alpha68 the trace states
 `media capture record_audio=granted|DENIED` before opening anything.
 
-### 2b. The one runtime permission, pre-granted
+### 2b. The runtime permissions: microphone and location
 
-`etc/default-permissions/org.joan.ims.xml` is the mechanism that *does*
-apply to runtime permissions, and it carries exactly one:
-`ACCESS_FINE_LOCATION`, which `getAllCellInfo` has required since API 29
-and which P-Access-Network-Info needs so it can carry
-`utran-cell-id-3gpp`. Nothing else in the package uses location, and the
-grant is `fixed="false"` so it can be revoked.
-
-This one is **best effort and unverified on a handset**:
-`DefaultPermissionGrantPolicy` applies these when it runs, and whether it
-re-runs for a package added to `/system` after the device was provisioned
-has not been tested. If it does not apply, the header falls back to the
-bare access type, the `pani_cell` state row reads `no-permission`, and one
-command fixes it with no root:
+`etc/default-permissions/org.joan.ims.xml` lists `RECORD_AUDIO` and the
+three location permissions. `DefaultPermissionGrantPolicy` applies it on
+the first boot after the build fingerprint changes (a clean ROM install,
+or a ROM update), so flashing joan in the same recovery session as the ROM
+grants them with no taps. It is not re-run for a package added to a ROM
+that has already booted; that case was measured (alpha63). Then the
+"joan IMS" launcher entry asks once, or over adb with no root:
 
 ```
-adb shell pm grant org.joan.ims android.permission.ACCESS_FINE_LOCATION
+./scripts/grant-permissions.sh
 ```
 
-Nothing about registration depends on it.
+No recovery zip can grant a runtime permission to an already-booted ROM
+safely. alpha70-73 tried from an init service at boot, and it is gone.
 
-**This file is load-bearing in a dangerous way.**
+**The allowlist (section 2) is load-bearing in a dangerous way.**
 `ro.control_privapp_permissions=enforce` (the LineageOS default) makes a
 requested-but-not-allowlisted privileged permission a **fatal boot error**,
-not a silent denial. Pushing the APK by hand without this file bootloops the
-device. If you deploy manually, push both.
+not a silent denial, and PackageManager may be requesting on behalf of an
+older cached manifest. That is why the allowlist is append-only. If you
+deploy manually, push both the apk and the allowlist.
 
 ### 3. The platform has to admit VoLTE
 
@@ -221,7 +217,7 @@ The `volte_gate` state row reports `applied` / `applied-visibility` /
 
 ## What the installer does
 
-`update-binary` is at v6. Most of its bulk is paranoia earned from real
+`update-binary` is at v8. Most of its bulk is paranoia earned from real
 failures:
 
 1. Unzip to `/tmp/joan-volte`; refuse if the APK is implausibly small.
@@ -233,17 +229,40 @@ failures:
 3. **Prove the mount is not the recovery ramdisk** by comparing its `st_dev`
    against `/tmp`. An earlier version wrote into the ramdisk, reported
    "Install completed", and left nothing installed after reboot.
-4. Every copy is size-checked **and byte-compared after writing** — a failed
-   mount can accept a write and serve different bytes back.
-5. Remove the legacy `joan-ims` daemon binaries and init scripts.
-6. Install the APK, both overlays, and both permission files.
+4. **Check free space before writing anything.** A partition without
+   room is refused with its number and nothing changes.
+5. Remove leftovers: the legacy `joan-ims` daemon, and the alpha70-73
+   boot-time grant (`joan-grant.rc` / `joan-grant.sh`) whenever found.
+6. Install the **allowlist first**, then the APK, then the default
+   grants, the IMS feature xml, and both overlays. Every copy is
+   **write-then-rename**: the new file is written beside the old one,
+   size-checked and byte-compared, then renamed over it, so a full
+   partition leaves each file old or new and never truncated.
 7. **Record ownership of the IMS feature xml.** Absent, or byte-identical to
    ours, marks it `.joan-added`; present and different backs the ROM's copy up
    to `.joan-orig`. Decided once, before the first overwrite, so a re-flash
    cannot mistake our own file for the ROM's.
-8. Back up `apns-conf.xml`, merge, sanity-check the result is larger than the
-   overlay and contains both `ims` and `xcap`, then write it.
-9. `sync`, and unmount **only** what it mounted itself.
+8. Back up `apns-conf.xml` once, merge in the ramdisk, check the result,
+   then rename it into place. This step is optional: any failure leaves
+   the ROM's list untouched and prints a warning instead of failing the
+   flash. If the ROM replaced the list since the last merge, the backup
+   is re-based onto the new one first.
+9. **Re-date what PackageManager scans** (`stamp_future`), so the next
+   boot parses this build's manifest instead of a cached earlier one.
+10. `sync`, and unmount **only** what it mounted itself.
+
+### Why step 9 exists: the upgrade bootloop
+
+PackageManager reuses a cached parse of a package while the scanned path
+is older than the cache entry. For a priv-app that path is the
+directory, which an in-place overwrite never made newer, and recovery's
+clock reads 2017. So after a flash the phone kept parsing the previous
+build's manifest. When alpha70+ removed `BIND_IMS_SERVICE` from both the
+manifest and the allowlist, a phone upgrading from alpha67 still
+requested it through the cache, with no allowlist entry: a fatal
+privapp violation, and a bootloop. The allowlist is now append-only as
+well, so the stamp is belt and braces rather than the only defence.
+`docs/install-troubleshooting.md` has the full account.
 
 ## What the uninstall zip does
 

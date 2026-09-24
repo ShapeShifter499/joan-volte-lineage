@@ -1,54 +1,55 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Pre-grant the runtime location permissions.
+<!-- Default grants of joan's runtime permissions.
 
      privapp-permissions (org.joan.ims.xml) cannot do this. That file
      allowlists signature|privileged permissions; a dangerous runtime
      permission is neither granted by an entry there nor required to have
-     one, so such an entry is simply never consulted. LG's own
-     privapp-permissions-lge-joan.xml grants com.lge.ims nine permissions
-     and every one is signature|privileged, with no location among them,
-     which is the same rule seen from the other side.
+     one.
 
-     These are used by exactly one thing: getAllCellInfo, so that
-     P-Access-Network-Info can carry utran-cell-id-3gpp as TS 24.229
-     7.2A.4 and both reference stacks do. joan uses location for nothing
-     else, and asking for it is ordinary here rather than novel; LG's
-     shipped com.lge.ims 6.1.0.20180701 declares COARSE and FINE, and
-     AOSP's ImsStack declares COARSE, FINE and BACKGROUND.
+     WHEN THIS APPLIES. PackageManagerService.systemReady() runs
+     DefaultPermissionGrantPolicy.grantDefaultPermissions() for a user
+     whenever the fingerprint recorded at the last grant differs from
+     Build.FINGERPRINT: the first boot of a fresh install, and the first
+     boot after every ROM update. Exceptions are granted with
+     whitelistRestrictedPermissions=true, so the hard-restricted
+     background location permission is covered as well.
 
-     BACKGROUND is on that list because an ImsService has no UI and is
-     always a background process, and since API 29 that needs its own
-     grant or the cell cache reads back empty. LG could not have declared
-     it: that app targets API 28, where it did not exist.
+     So flash the joan zip in the same recovery session as the ROM,
+     after a clean install or after each ROM update (which has to be
+     followed by re-flashing joan anyway), and the microphone and
+     location are granted on the next boot with no taps and no adb.
 
-     NOT here: LOCATION_BYPASS. joan does request it, matching AOSP's
-     ImsStack, but it is signature|privileged rather than a runtime
-     permission, so it is granted by the privapp allowlist in
-     org.joan.ims.xml and this file would never be consulted for it.
+     Flashing joan alone onto a ROM that has already booted does NOT
+     change the fingerprint, so this file waits for the next ROM update.
+     That case was measured: alpha63 shipped this file and the tester's
+     row still read pani_cell=no-permission. For it, open "joan IMS" from
+     the launcher once (JoanPermissionActivity), or over adb with no root:
 
-     fixed="false" so all of these can be revoked. A revoked grant costs
-     one header parameter and nothing else, and the state row then reads
-     pani_cell=no-permission.
-
-     VERIFIED NOT TO APPLY to a sideloaded install, which is what this
-     package is. DefaultPermissionGrantPolicy.grantDefaultPermissions runs
-     on first boot and platform upgrades; there is no path that revisits a
-     system package added afterwards. alpha63 shipped this file and the
-     tester's state row still read pani_cell=no-permission.
-
-     It is kept because it IS the right mechanism for a ROM that builds
-     joan in, or for a device flashed and then wiped. For a sideload, the
-     app now asks instead: JoanPermissionActivity is a launcher entry the
-     tester opens once. RECORD_AUDIO is not listed here because it is
-     requested there rather than pretended at.
-
-     Failing both, and needing no root:
+       adb shell pm grant org.joan.ims android.permission.RECORD_AUDIO
        adb shell pm grant org.joan.ims android.permission.ACCESS_FINE_LOCATION
        adb shell pm grant org.joan.ims android.permission.ACCESS_COARSE_LOCATION
        adb shell pm grant org.joan.ims android.permission.ACCESS_BACKGROUND_LOCATION
--->
+
+     scripts/grant-permissions.sh runs exactly those.
+
+     What each is for:
+       RECORD_AUDIO   the uplink. Without it AudioRecord opens and returns
+                      digital silence: the far end hears nothing.
+       location       getAllCellInfo, so P-Access-Network-Info can carry
+                      utran-cell-id-3gpp (TS 24.229 7.2A.4). Nothing else.
+                      BACKGROUND because an ImsService has no UI and is
+                      always a background process.
+
+     fixed="false" on all of them, so every grant can be revoked in
+     Settings. A revoked location grant costs one header parameter; a
+     revoked microphone costs the uplink, and the trace says so
+     (media capture record_audio=DENIED).
+
+     NOT here: LOCATION_BYPASS, which is signature|privileged and granted
+     by the privapp allowlist instead. -->
 <exceptions>
     <exception package="org.joan.ims">
+        <permission name="android.permission.RECORD_AUDIO" fixed="false"/>
         <permission name="android.permission.ACCESS_COARSE_LOCATION" fixed="false"/>
         <permission name="android.permission.ACCESS_FINE_LOCATION" fixed="false"/>
         <permission name="android.permission.ACCESS_BACKGROUND_LOCATION" fixed="false"/>

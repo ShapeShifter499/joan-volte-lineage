@@ -2,6 +2,25 @@
 # Recovery installer — joan-volte (no Magisk, no CIL append).
 # Targets AOSP-based ROMs on Android 15 (SDK 35). No ROM-specific checks.
 #
+# v8: fixes the bootloop every build after alpha67 caused on UPGRADE.
+# PackageManager reuses its cached parse of a package for as long as the
+# scanned path's mtime is older than the cache entry, and for a priv-app
+# that path is the directory, which an in-place apk overwrite from a 2017
+# recovery clock never makes newer. A phone upgrading from alpha67 kept
+# parsing alpha67's manifest -- which requested BIND_IMS_SERVICE -- against
+# a new allowlist that no longer listed it, and under
+# ro.control_privapp_permissions=enforce that is IllegalStateException in
+# systemReady(). Fresh installs had no cache entry, which is why it looked
+# intermittent. Now: the allowlist is append-only (see
+# permissions/org.joan.ims.xml), every path PackageManager scans is stamped
+# with a future mtime so the cache is re-read (stamp_future), every copy
+# is write-then-rename so a full partition can never leave a truncated
+# file behind, the optional steps (default permissions, APN merge) warn
+# instead of aborting, and the alpha70-73 boot-time grant is removed again
+# whenever it is found. The rollback that deleted the whole app on any
+# later failure is gone: with the allowlist written first and a superset,
+# no combination of our files on disk can stop a boot.
+#
 # v7.5: merges v7.1-v7.4 (contributed by a tester working an InfinityX
 # install, who found the ENOSPC cause and sent back a fixed installer)
 # with the dm-verity reporting this tree had added in parallel. The
@@ -56,28 +75,17 @@ ui_print() {
   echo "$1" >> "$LOG" 2>/dev/null
 }
 
-# Set once the priv-app apk is on disk, cleared once everything it needs
-# to boot is also on disk. While it is set, an abort must undo it.
-ROLLBACK_APK=""
-
 error() {
-  # A half-installed priv-app does not fail politely: with
-  # ro.control_privapp_permissions=enforce, an apk requesting privileged
-  # permissions whose allowlist is missing is a FATAL BOOT ERROR, so a
-  # flash that ran out of space between the two leaves a device that will
-  # not come up. That is not hypothetical -- it is what an InfinityX
-  # handset with 805 free blocks did.
-  #
-  # So an install that cannot finish puts the device back rather than
-  # leaving it half done. Failing to flash is recoverable; failing to
-  # boot is not.
-  if [ -n "$ROLLBACK_APK" ]; then
-    rm -rf "$ROLLBACK_APK"
-    ui_print "  rolled back the priv-app: a partial install does not boot"
-  fi
   ui_print "ERROR: $1"
-  # Recovery shows the error; the flash genuinely failed.
+  # Recovery shows the error; the flash genuinely failed. Nothing needs
+  # undoing: every copy below is write-then-rename, so a failure leaves
+  # each file either as it was or complete, and the allowlist goes down
+  # before the apk and covers every permission any build ever requested.
   exit 1
+}
+
+warn() {
+  ui_print "  WARNING: $1"
 }
 
 need_file() {
@@ -89,24 +97,107 @@ need_file() {
   [ "$sz" -ge "$min" ] || error "$(basename $f) too small ($sz)"
 }
 
-copy_file() {
+# try_copy_file <src> <dst> <mode> <context>
+#
+# Writes <dst>.joan-new beside the target, proves it, then renames it
+# over <dst>. Returns 1 with CF_ERR set on any failure, leaving <dst>
+# exactly as it was.
+#
+# The old copy truncated <dst> and wrote into it. On a nearly full
+# partition that fails part way, and what it leaves is a truncated file:
+# for apns-conf.xml that is every APN on the phone gone, and for the apk
+# a package that no longer parses. rename(2) within one filesystem is
+# atomic and needs no extra blocks, so the target is only ever the old
+# bytes or the new ones.
+try_copy_file() {
   src="$1"
   dst="$2"
   mode="$3"
   con="$4"
-  mkdir -p "$(dirname "$dst")"
-  cat "$src" > "$dst" || error "write $dst"
-  chmod "$mode" "$dst"
+  new="$dst.joan-new"
+  CF_ERR=""
+  mkdir -p "$(dirname "$dst")" 2>/dev/null
+  rm -f "$new" 2>/dev/null
+  if ! cat "$src" > "$new" 2>/dev/null; then
+    rm -f "$new" 2>/dev/null
+    CF_ERR="write $dst failed (out of space?)"
+    return 1
+  fi
+  chmod "$mode" "$new" 2>/dev/null
   sz1=$(wc -c < "$src" | tr -d ' ')
-  sz2=$(wc -c < "$dst" | tr -d ' ')
-  [ "$sz1" = "$sz2" ] || error "size mismatch $dst ($sz2 != $sz1)"
+  sz2=$(wc -c < "$new" | tr -d ' ')
+  if [ "$sz1" != "$sz2" ]; then
+    rm -f "$new" 2>/dev/null
+    CF_ERR="size mismatch $dst ($sz2 != $sz1)"
+    return 1
+  fi
   # Read-back proof: a ramdisk/failed mount can accept a write and a
   # size check but serve different bytes. Compare the actual content.
-  if ! cmp -s "$src" "$dst"; then
-    error "readback mismatch $dst (wrote to wrong filesystem?)"
+  if ! cmp -s "$src" "$new"; then
+    rm -f "$new" 2>/dev/null
+    CF_ERR="readback mismatch $dst (wrote to wrong filesystem?)"
+    return 1
   fi
-  chcon "$con" "$dst" 2>/dev/null || true
+  chcon "$con" "$new" 2>/dev/null || true
+  if ! mv -f "$new" "$dst" 2>/dev/null; then
+    rm -f "$new" 2>/dev/null
+    CF_ERR="rename into $dst failed"
+    return 1
+  fi
+  if ! cmp -s "$src" "$dst"; then
+    CF_ERR="readback mismatch $dst after rename"
+    return 1
+  fi
+  return 0
 }
+
+# copy_file: the same, for a file the install cannot do without.
+copy_file() {
+  try_copy_file "$@" || error "$CF_ERR"
+}
+
+# stamp_future <path>...
+#
+# Makes PackageManager re-read what we just wrote.
+#
+# PackageCacher reuses a cached parse while the scanned path's mtime is
+# older than the cache file (isCacheFileUpToDate: pkg.st_mtime <
+# cache.st_mtime). The scanned path for a priv-app is its DIRECTORY,
+# /system/priv-app/JoanIms, and overwriting the apk inside it never
+# changes that; for an overlay it is the apk itself. Recovery's clock
+# reads 2017 on this device, so even a fresh write is older than a cache
+# entry written by the running system. Either way the phone went on
+# parsing the previous build's manifest -- its version, its components,
+# its requested permissions -- after every flash.
+#
+# A date after any cache entry that can exist makes the entry stale now
+# and on every later boot, so this one package is re-parsed at each boot,
+# which costs milliseconds. 2037-12-31 stays inside a 32-bit time_t,
+# which ext4 with 128-byte inodes cannot exceed. The cache is a
+# convenience of PackageManager's, never the record; the allowlist is
+# written to be safe even where this stamp does not take.
+FUTURE_TOUCH_T=203712312359
+FUTURE_EPOCH_MIN=2145000000
+stamp_future() {
+  for sf_p in "$@"; do
+    [ -e "$sf_p" ] || continue
+    touch -c -t "$FUTURE_TOUCH_T" "$sf_p" 2>/dev/null \
+      || touch -c -d "2037-12-31 23:59:00" "$sf_p" 2>/dev/null \
+      || true
+    sf_m=$(stat -c %Y "$sf_p" 2>/dev/null)
+    case "$sf_m" in
+      ''|*[!0-9]*) sf_m=0 ;;
+    esac
+    if [ "$sf_m" -lt "$FUTURE_EPOCH_MIN" ]; then
+      warn "could not re-date $sf_p (mtime ${sf_m}); PackageManager may keep"
+      warn "  the previous build's cached manifest until the next ROM update."
+      warn "  That is safe -- the allowlist covers every build -- but the app"
+      warn "  can report the old version until then."
+      STAMP_FAILED=1
+    fi
+  done
+}
+STAMP_FAILED=0
 
 echo "=== joan-volte run $(date) ===" >> "$LOG" 2>/dev/null
 ui_print "joan-volte v7.5: ImsService apk (SAR/verity-safe installer)"
@@ -525,49 +616,138 @@ elif [ "$SDK" -gt "$TARGET_SDK" ]; then
   ui_print "  WARNING: system SDK $SDK is newer than the $TARGET_SDK this was built against; installing anyway -- report anything odd."
 fi
 
+
+# --- Space, before anything is written -----------------------------------
+# A flash that runs out of room part way used to be the dangerous kind:
+# the InfinityX lane (805 free blocks on system) was refused mid-install.
+# Every copy is atomic now, so running out can no longer corrupt a file,
+# but refusing up front is still better than refusing half way: nothing
+# changes, and the message names the partition and the number.
+#
+# The atomic copy writes the new file beside the old one before the
+# rename, so an upgrade needs room for the new files whole, not for the
+# difference.
+
+# Available KB on a mount point as df reports it (which already excludes
+# ext4's reserved clusters), or empty when df gives nothing usable.
+free_kb() {
+  fk=$(df -k "$1" 2>/dev/null | tail -1 | tr -s " " | cut -d" " -f4)
+  case "$fk" in
+    ''|*[!0-9]*) echo "" ;;
+    *) echo "$fk" ;;
+  esac
+}
+
+# KB a set of files occupies, each rounded up to a 4 KB block, plus one
+# block per file for directory and inode overhead.
+need_kb() {
+  nk_total=0
+  for nk_f in "$@"; do
+    [ -f "$nk_f" ] || continue
+    nk_b=$(wc -c < "$nk_f" | tr -d ' ')
+    nk_total=$((nk_total + (nk_b + 4095) / 4096 * 4 + 4))
+  done
+  echo "$nk_total"
+}
+
+# ensure_space <mountpoint> <label> <KB needed>
+ensure_space() {
+  es_free=$(free_kb "$1")
+  if [ -z "$es_free" ]; then
+    ui_print "  $2: df reports nothing usable; the write checks will decide"
+    return 0
+  fi
+  if [ "$es_free" -lt "$3" ]; then
+    name="$2"
+    release_ext4_reserve "$(device_of "$1")" || true
+    es_free=$(free_kb "$1")
+    [ -n "$es_free" ] || es_free=0
+  fi
+  ui_print "  $2: ${es_free} KB free, needs about $3 KB"
+  [ "$es_free" -ge "$3" ]
+}
+
+SYS_NEED=$(need_kb "$TMP/app/joan-ims.apk" \
+  "$TMP/etc/permissions/org.joan.ims.xml" \
+  "$TMP/etc/permissions/android.hardware.telephony.ims.xml" \
+  "$TMP/etc/default-permissions/org.joan.ims.xml")
+SYS_NEED=$((SYS_NEED + 16))
+ensure_space "$SYSMNT" system "$SYS_NEED" \
+  || error "system has too little free space for this package (needs about $SYS_NEED KB). Nothing was changed."
+PROD_NEED=$(need_kb "$TMP/app/joan-ims-rro.apk" "$TMP/app/joan-fw-volte.apk")
+PROD_NEED=$((PROD_NEED + 8))
+ensure_space "$PRODMNT" product "$PROD_NEED" \
+  || error "product has too little free space for the two overlays (needs about $PROD_NEED KB). Nothing was changed."
+
 mkdir -p "$SYS/priv-app/JoanIms"
 chmod 755 "$SYS/priv-app/JoanIms" 2>/dev/null || true
+chcon u:object_r:system_file:s0 "$SYS/priv-app/JoanIms" 2>/dev/null || true
 
-ui_print "Removing joan-ims loopback listener"
+ui_print "Removing leftovers of earlier builds"
 rm -f "$SYS/bin/joan-ims" "$SYS/bin/joan-ims-ua" \
       "$SYS/etc/init/joan-ims.rc" "$SYS/etc/init/joan-imsd.rc"
 if [ -n "$SYSEXTMNT" ]; then
   rm -f "$SYSEXTMNT/bin/joan-ims-ua" \
         "$SYSEXTMNT/etc/init/joan-ims.rc"
 fi
+# The boot-time permission grant alpha70-73 installed. An init service
+# that ran `pm grant` in the shell domain at sys.boot_completed; a handset
+# that flashed it did not come back up. alpha74 deleted it and alpha75
+# stopped doing so, which left anyone who went 73 -> 75 still carrying
+# it. It is removed whenever it is found, for as long as this installer
+# exists: a leftover that can stop a boot is not somebody else's problem.
+if [ -f "$SYS/etc/init/joan-grant.rc" ] || [ -f "$SYS/bin/joan-grant.sh" ]; then
+  rm -f "$SYS/etc/init/joan-grant.rc" "$SYS/bin/joan-grant.sh"
+  ui_print "  removed the alpha70-73 boot-time permission grant"
+fi
+# Temp files an interrupted run of this installer could have left.
+rm -f "$SYS/priv-app/JoanIms/"*.joan-new \
+      "$SYS/etc/permissions/"*.joan-new \
+      "$SYS/etc/default-permissions/"*.joan-new \
+      "$PRODMNT/overlay/"*.joan-new \
+      "$PRODMNT/etc/"*.joan-new 2>/dev/null
 
 # The allowlist goes down FIRST, and the apk second.
 #
 # The apk is what makes the allowlist load-bearing: until it exists,
 # nothing requests a privileged permission and the allowlist is inert.
-# Writing them the other way round meant a flash that ran out of space
-# between the two left an apk with no allowlist, which does not boot.
-# Ordered this way, the same failure leaves an unused file.
+# Written the other way round, a flash that failed between the two left an
+# apk with no allowlist, which does not boot. The allowlist is also a
+# superset of every build's requests (permissions/org.joan.ims.xml), so a
+# cached manifest from any earlier build is covered too.
 if [ -f "$TMP/etc/permissions/org.joan.ims.xml" ]; then
   copy_file "$TMP/etc/permissions/org.joan.ims.xml" \
     "$SYS/etc/permissions/org.joan.ims.xml" 644 u:object_r:system_file:s0
 fi
 ui_print "Installing ImsService priv-app"
 copy_file "$TMP/app/joan-ims.apk" "$SYS/priv-app/JoanIms/JoanIms.apk" 644 u:object_r:system_file:s0
-# From here until the install completes, an abort removes it again.
-ROLLBACK_APK="$SYS/priv-app/JoanIms"
-# The runtime permission behind utran-cell-id-3gpp. This is a DIFFERENT
-# mechanism from the file above: privapp-permissions allowlists
-# signature|privileged permissions and does nothing for a dangerous
-# runtime one, which is what ACCESS_FINE_LOCATION is.
+
+# Default grants of the runtime permissions -- microphone and location.
+# This is a DIFFERENT mechanism from the allowlist: privapp-permissions
+# covers signature|privileged permissions and does nothing for a
+# dangerous runtime one.
 #
-# Best effort by design. If DefaultPermissionGrantPolicy does not apply
-# it to a package added after the device was provisioned, the header
-# falls back to the bare access type, the state row says
-# pani_cell=no-permission, and one adb command fixes it without root.
-# Nothing here is load-bearing for registration.
+# PackageManager applies it on the first boot after the build fingerprint
+# changes: a clean ROM install, or a ROM update. Flashed in the same
+# recovery session as the ROM, the microphone is granted with no taps.
+# Flashed alone onto a ROM that has already booted, it waits for the next
+# ROM update, and the launcher entry or scripts/grant-permissions.sh
+# grants it instead. Optional: a failure here costs a tap, not the call.
 if [ -f "$TMP/etc/default-permissions/org.joan.ims.xml" ]; then
-  mkdir -p "$SYS/etc/default-permissions"
+  mkdir -p "$SYS/etc/default-permissions" 2>/dev/null
   chmod 755 "$SYS/etc/default-permissions" 2>/dev/null || true
   chcon u:object_r:system_file:s0 "$SYS/etc/default-permissions" 2>/dev/null || true
-  copy_file "$TMP/etc/default-permissions/org.joan.ims.xml" \
-    "$SYS/etc/default-permissions/org.joan.ims.xml" 644 u:object_r:system_file:s0
+  if try_copy_file "$TMP/etc/default-permissions/org.joan.ims.xml" \
+      "$SYS/etc/default-permissions/org.joan.ims.xml" 644 u:object_r:system_file:s0; then
+    ui_print "  default grants (microphone, location): installed"
+    ui_print "    applied on the first boot after a ROM install or update;"
+    ui_print "    otherwise open \"joan IMS\" once from the launcher"
+  else
+    warn "$CF_ERR"
+    warn "  skipped the default grants; open \"joan IMS\" once from the launcher"
+  fi
 fi
+
 # The IMS feature declaration needs an ownership record, or uninstall
 # cannot put the device back as it found it. A ROM that already declares
 # android.hardware.telephony.ims must get ITS file back; a ROM that does
@@ -632,61 +812,136 @@ if [ -f "$TMP/app/joan-fw-volte.apk" ]; then
     "$PRODMNT/overlay/JoanFwVolte.apk" 644 u:object_r:system_file:s0
 fi
 
-# --- Viettel 45204 APN overlay (merge, never replace) -------------------
+# --- IMS APN rows (merge, never replace) -------------------------------
 # TelephonyProvider loads ONE conf file; product wins over system/oem.
-# Copying the 4-row overlay over product/etc/apns-conf.xml would wipe
-# every other carrier. Merge 45204 into the existing world list.
-if [ -f "$TMP/apn/viettel-45204.xml" ] && [ -f "$TMP/scripts/merge-viettel-apns.sh" ]; then
-  ui_print "Merging Viettel 45204 IMS/XCAP APNs into product apns-conf"
-  ORIG="$PRODMNT/etc/apns-conf.xml"
-  SYSORIG="$SYS/etc/apns-conf.xml"
-  BACKUP="$PRODMNT/etc/apns-conf.xml.joan-orig"
-  mkdir -p "$PRODMNT/etc"
-  if [ ! -f "$ORIG" ]; then
-    [ -f "$SYSORIG" ] || error "no apns-conf.xml on product or system; refusing overlay-only install"
-    copy_file "$SYSORIG" "$ORIG" 644 u:object_r:system_file:s0
+# Copying an overlay over product/etc/apns-conf.xml would wipe every other
+# carrier, so the rows are merged into the world list the ROM ships.
+#
+# Optional, and it cannot corrupt anything: the ROM's list is backed up
+# once, the merge runs in the ramdisk, and the result replaces the live
+# file only by rename. Any failure leaves the ROM's list exactly as it was
+# and says so.
+
+# A content checksum, from whichever tool this recovery has.
+sum_of() {
+  so_s=$(md5sum "$1" 2>/dev/null | cut -d" " -f1)
+  [ -n "$so_s" ] || so_s=$(cksum "$1" 2>/dev/null | cut -d" " -f1,2 | tr " " ":")
+  echo "$so_s"
+}
+
+merge_apns() {
+  ma_orig="$PRODMNT/etc/apns-conf.xml"
+  ma_sys="$SYS/etc/apns-conf.xml"
+  ma_bak="$PRODMNT/etc/apns-conf.xml.joan-orig"
+  ma_added="$PRODMNT/etc/apns-conf.xml.joan-added"
+  ma_mark="$PRODMNT/etc/apns-conf.xml.joan-merged"
+  mkdir -p "$PRODMNT/etc" 2>/dev/null
+
+  # Which list is the ROM's own. Taken once and kept: a re-flash merges
+  # into the ROM's list again, never into our previous merge.
+  #
+  # Unless the ROM replaced the live file since we last merged into it --
+  # a file-based ROM update, or someone editing it. Then the live file is
+  # the ROM's newer list, and the old backup would put a stale world list
+  # back. The marker holds the checksum of what we last wrote.
+  if [ -f "$ma_bak" ] && [ -f "$ma_mark" ] && [ -f "$ma_orig" ]; then
+    if [ "$(sum_of "$ma_orig")" != "$(cat "$ma_mark" 2>/dev/null)" ]; then
+      ui_print "  APN list: the ROM replaced it since the last merge; re-basing"
+      try_copy_file "$ma_orig" "$ma_bak" 644 u:object_r:system_file:s0 \
+        || { warn "$CF_ERR"; return 1; }
+    fi
   fi
-  if [ ! -f "$BACKUP" ]; then
-    copy_file "$ORIG" "$BACKUP" 644 u:object_r:system_file:s0
-    ui_print "  APN list: saved the ROM copy before merging."
-    ui_print "    Backup: /product/etc/apns-conf.xml.joan-orig"
-    ui_print "    Uninstall restores it from there."
+  if [ ! -f "$ma_bak" ] && [ ! -f "$ma_added" ]; then
+    if [ -f "$ma_orig" ]; then
+      try_copy_file "$ma_orig" "$ma_bak" 644 u:object_r:system_file:s0 \
+        || { warn "$CF_ERR"; return 1; }
+      ui_print "  APN list: saved the ROM copy before merging."
+      ui_print "    Backup: /product/etc/apns-conf.xml.joan-orig"
+      ui_print "    Uninstall restores it from there."
+    elif [ -f "$ma_sys" ]; then
+      # No product list: the ROM's lives on system. The merged list goes
+      # to product, which wins, and uninstall must remove it again rather
+      # than "restore" a file that was never there.
+      echo joan > "$ma_added" 2>/dev/null \
+        || { warn "cannot write $ma_added"; return 1; }
+      ui_print "  APN list: this ROM keeps it on /system; merging into a /product copy"
+      ui_print "    Uninstall removes the /product copy again."
+    else
+      warn "no apns-conf.xml on product or system"
+      return 1
+    fi
   fi
-  need_file "$BACKUP" 200
+  if [ -f "$ma_bak" ]; then
+    ma_base="$ma_bak"
+  else
+    ma_base="$ma_sys"
+  fi
+  [ -f "$ma_base" ] || { warn "the ROM's APN list is missing ($ma_base)"; return 1; }
+  ma_bsz=$(wc -c < "$ma_base" | tr -d ' ')
+  [ "$ma_bsz" -ge 200 ] || { warn "the ROM's APN list is implausibly small ($ma_bsz bytes)"; return 1; }
+
   MERGE_TMP="$TMP/viettel-apn-blocks"
   export MERGE_TMP
-  sh "$TMP/scripts/merge-viettel-apns.sh" "$BACKUP" \
-    "$TMP/apn/viettel-45204.xml" > "$TMP/apns-merged.xml" \
-    || error "viettel APN merge failed"
-  need_file "$TMP/apns-merged.xml" 200
-  # Merged world list must be larger than the 4-row overlay.
-  osz=$(wc -c < "$TMP/apn/viettel-45204.xml" | tr -d ' ')
-  msz=$(wc -c < "$TMP/apns-merged.xml" | tr -d ' ')
-  [ "$msz" -gt "$osz" ] || error "merged apns-conf.xml not larger than overlay ($msz <= $osz)"
+  if ! sh "$TMP/scripts/merge-viettel-apns.sh" "$ma_base" \
+      "$TMP/apn/viettel-45204.xml" > "$TMP/apns-merged.xml"; then
+    warn "the APN merge script failed"
+    return 1
+  fi
+  ma_msz=$(wc -c < "$TMP/apns-merged.xml" | tr -d ' ')
+  # Merged world list must be larger than the rows merged into it.
+  ma_osz=$(wc -c < "$TMP/apn/viettel-45204.xml" | tr -d ' ')
+  [ "$ma_msz" -gt "$ma_osz" ] \
+    || { warn "merged APN list not larger than the overlay ($ma_msz <= $ma_osz)"; return 1; }
   # These have to prove OUR rows landed, not that the file contains an
   # ims row somewhere: every world list already ships ims and xcap rows
   # for other carriers, so a bare grep for them passes even if the
   # Viettel block were dropped entirely. Check the marker the merge
   # writes, and that the block between the markers carries both rows.
   grep -q 'joan-viettel-45204-begin' "$TMP/apns-merged.xml" \
-    || error "merged APN list has no joan Viettel block"
+    || { warn "merged APN list has no joan Viettel block"; return 1; }
   sed -n '/joan-viettel-45204-begin/,/joan-viettel-45204-end/p' \
     "$TMP/apns-merged.xml" > "$TMP/apns-viettel-block.xml"
   grep -q 'apn="ims"' "$TMP/apns-viettel-block.xml" \
-    || error "joan Viettel block missing ims"
+    || { warn "joan Viettel block missing ims"; return 1; }
   grep -q 'apn="xcap"' "$TMP/apns-viettel-block.xml" \
-    || error "joan Viettel block missing xcap"
+    || { warn "joan Viettel block missing xcap"; return 1; }
   # And exactly one Viettel internet row survived, in either MNC spelling.
-  vnet=$(grep -c 'apn="v-internet"' "$TMP/apns-merged.xml" || true)
-  [ "$vnet" = "1" ] \
-    || error "merged APN list has $vnet Viettel internet rows, expected 1"
-  copy_file "$TMP/apns-merged.xml" "$ORIG" 644 u:object_r:system_file:s0
+  ma_vnet=$(grep -c 'apn="v-internet"' "$TMP/apns-merged.xml" || true)
+  [ "$ma_vnet" = "1" ] \
+    || { warn "merged APN list has $ma_vnet Viettel internet rows, expected 1"; return 1; }
+  # The rest of the world list must have survived the merge.
+  [ "$ma_msz" -ge "$ma_bsz" ] \
+    || { warn "merged APN list is smaller than the ROM's ($ma_msz < $ma_bsz)"; return 1; }
+
+  if ! try_copy_file "$TMP/apns-merged.xml" "$ma_orig" 644 u:object_r:system_file:s0; then
+    warn "$CF_ERR"
+    return 1
+  fi
+  sum_of "$ma_orig" > "$ma_mark" 2>/dev/null || true
+  chmod 644 "$ma_mark" 2>/dev/null
+  chcon u:object_r:system_file:s0 "$ma_mark" 2>/dev/null || true
+  return 0
+}
+
+if [ -f "$TMP/apn/viettel-45204.xml" ] && [ -f "$TMP/scripts/merge-viettel-apns.sh" ]; then
+  ui_print "Merging Viettel 45204 IMS/XCAP APNs into the APN list"
+  if merge_apns; then
+    ui_print "  APN list: merged"
+  else
+    warn "the APN list was left exactly as the ROM ships it."
+    warn "  Only Viettel 45204 needs these rows; everything else is installed."
+  fi
 fi
 
-# Everything the apk needs in order to boot is on disk; stop arming the
-# rollback before the unmounts, which have their own failure modes and
-# must not take the install with them.
-ROLLBACK_APK=""
+# --- Make PackageManager read what was just installed ---------------------
+# Last, because every rename into a directory moves its mtime to
+# recovery's clock. See stamp_future.
+stamp_future "$SYS/priv-app/JoanIms/JoanIms.apk" "$SYS/priv-app/JoanIms" \
+  "$PRODMNT/overlay/JoanImsPhoneDefault.apk" "$PRODMNT/overlay/JoanFwVolte.apk"
+if [ "$STAMP_FAILED" = "0" ]; then
+  ui_print "  package cache: stamped, so this build's manifest is read at boot"
+fi
+
 sync
 # Only unmount what we mounted. Tearing down recovery's own mount would
 # pull the ground out from under it mid-install.
@@ -696,4 +951,6 @@ sync
 
 sync
 ui_print "Done. Reboot system."
+ui_print "If a call's far end hears nothing, grant the microphone:"
+ui_print "  open \"joan IMS\" once, or: adb shell pm grant org.joan.ims android.permission.RECORD_AUDIO"
 exit 0

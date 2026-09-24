@@ -79,6 +79,9 @@ with zipfile.ZipFile(unsigned, 'a', zipfile.ZIP_DEFLATED) as z:
 
 ks = os.path.join(root, 'ims-service', 'build', 'keystore', 'joan-dev.jks')
 if not os.path.exists(ks):
+    # keytool will not create the directory, and on a fresh checkout it
+    # does not exist yet: build/ is ignored by git.
+    os.makedirs(os.path.dirname(ks), exist_ok=True)
     subprocess.run(['keytool', '-genkeypair', '-keystore', ks,
                     '-alias', 'joan', '-keyalg', 'RSA', '-keysize', '2048',
                     '-validity', '10950', '-storepass', 'joanims',

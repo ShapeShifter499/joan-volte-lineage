@@ -1,22 +1,58 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Privapp permissions for the Joan ImsService priv-app. -->
+<!-- Privapp permissions for the Joan ImsService priv-app.
+
+     APPEND-ONLY. Never remove an entry from this file, even when the
+     manifest stops requesting that permission.
+
+     PackageManager keeps a parse cache under /data/system/package_cache
+     and reuses a package's cached manifest for as long as the scanned
+     path's mtime is older than the cache entry (PackageCacher
+     .isCacheFileUpToDate: pkg.st_mtime < cache.st_mtime). For a priv-app
+     the scanned path is the directory /system/priv-app/JoanIms, which a
+     recovery install never makes newer than the cache: overwriting the
+     apk in place does not touch the directory's mtime, and recovery's
+     clock reads 2017 in any case. So after a flash the device can keep
+     parsing the PREVIOUS build's manifest, with the previous build's
+     <uses-permission> list, against THIS file.
+
+     If an entry is missing for a signature|privileged permission that
+     the cached manifest still requests, ro.control_privapp_permissions=
+     enforce turns it into IllegalStateException in systemReady(), and
+     system_server does not come up. That is exactly what happened after
+     alpha67: BIND_IMS_SERVICE was dropped from the manifest and from
+     this file together, every phone upgrading from alpha67 or earlier
+     still had it in its cached manifest, and the upgrade bootlooped.
+
+     So this file lists every privileged permission that ANY released
+     build has requested. An entry for a permission the current manifest
+     does not request is inert: SystemConfig records it and nothing
+     grants it. The installer also stamps the package directory so the
+     cache is re-read (scripts/update-binary, stamp_future), but this file
+     must be safe even when that stamp did not take.
+
+     tests/run-host-tests.sh enforces both directions: every privileged
+     permission in the current manifest, and every one requested by any
+     manifest in git history, must appear here. -->
 <permissions>
     <privapp-permissions package="org.joan.ims">
         <permission name="android.permission.MODIFY_PHONE_STATE" />
         <permission name="android.permission.READ_PRIVILEGED_PHONE_STATE" />
         <permission name="android.permission.READ_PRECISE_PHONE_STATE" />
         <permission name="android.permission.CONNECTIVITY_USE_RESTRICTED_NETWORKS" />
-        <!-- BIND_IMS_SERVICE removed with the uses-permission that
-             needed it: the service guards itself with android:permission
-             and the app never held it for any purpose. AOSP's
-             privapp-permissions_com.android.imsstack.xml does not list
-             it either. -->
-        <!-- Load-bearing: the manifest requests LOCATION_BYPASS, and a
-             requested signature|privileged permission with no entry here
-             is a fatal boot error under ro.control_privapp_permissions=
-             enforce, not a silent denial. AOSP's ImsStack allowlists the
-             same one. -->
+        <!-- Requested by every build up to and including alpha67, then
+             removed from the manifest because the service only needs it
+             as android:permission on the <service>. Kept here for the
+             cached-manifest reason above: removing it is what made every
+             build after alpha67 bootloop on upgrade. -->
+        <permission name="android.permission.BIND_IMS_SERVICE" />
+        <!-- Requested by v0.1.0 through v0.2.1. Same reason. -->
+        <permission name="android.permission.CAPTURE_AUDIO_OUTPUT" />
+        <!-- The manifest requests LOCATION_BYPASS, matching AOSP's
+             ImsStack, which allowlists the same one. -->
         <permission name="android.permission.LOCATION_BYPASS" />
+        <!-- RECORD_AUDIO is a dangerous runtime permission and
+             MODIFY_AUDIO_SETTINGS a normal one; neither is consulted here.
+             Harmless, and kept because this file is append-only. -->
         <permission name="android.permission.RECORD_AUDIO" />
         <permission name="android.permission.MODIFY_AUDIO_SETTINGS" />
     </privapp-permissions>

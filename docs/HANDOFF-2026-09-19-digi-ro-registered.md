@@ -39,6 +39,22 @@ exchange, which a tester can now send without root.
 
 ## Incident: alpha70-73 broke a tester's ROM
 
+> **Correction, 2026-09-24 (alpha76).** The cause below is incomplete,
+> and the more important cause was a third one. alpha70+ removed
+> `BIND_IMS_SERVICE` from the manifest *and* from the privapp allowlist,
+> while PackageManager kept parsing the previously installed build's
+> manifest from `/data/system/package_cache` -- the cache is only
+> invalidated when the scanned path (for a priv-app, the directory) is
+> newer than the cache entry, which a recovery install never made it.
+> Any phone upgrading from alpha67 or earlier therefore requested
+> `BIND_IMS_SERVICE` through the stale cache with no allowlist entry:
+> `IllegalStateException` in `onSystemReady()`, system_server down,
+> bootloop. That is why "alpha67 is the last build that flashes cleanly"
+> and fresh installs did not reproduce it. alpha76 makes the allowlist
+> append-only, re-dates the scanned paths, and keeps removing the boot
+> grant. See `docs/install-troubleshooting.md` section 0.
+
+
 The boot-time permission grant added in alpha70 ran `pm grant` in the
 shell domain at `sys.boot_completed`, racing the framework's own
 first-boot permission setup. It broke the ROM's permissions device-wide

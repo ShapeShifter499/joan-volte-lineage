@@ -142,13 +142,16 @@ out=$(
 check "$([ "$out" = "0|" ] && echo 0 || echo 1)" \
       "write_probe succeeds silently on a writable path (got '$out')"
 
-mkdir -p "$WORK/nowrite" && chmod 500 "$WORK/nowrite"
+# The parent is a regular file, so the write fails with ENOTDIR. A
+# read-only directory was used here before, and root ignores directory
+# modes: run as root, the probe "succeeded" and the case failed for a
+# reason that had nothing to do with the installer.
+: > "$WORK/nowrite"
 out=$(
   . /tmp/joan-inst-fns.sh
   write_probe "$WORK/nowrite/x" >/dev/null 2>&1
   printf '%s|%s' "$?" "$WERR"
 )
-chmod 700 "$WORK/nowrite"
 case "$out" in
   1\|?*) check 0 "write_probe reports an errno when the write fails (got '$out')";;
   *) check 1 "write_probe reports an errno when the write fails (got '$out')";;
@@ -189,37 +192,34 @@ check "$([ "${r%%:*}" = "1" ] && echo 0 || echo 1)" \
 
 # --- a failed install must not leave a device that cannot boot -------
 # With ro.control_privapp_permissions=enforce, a priv-app whose allowlist
-# is missing is a fatal boot error, so an install that aborts between the
-# two is worse than one that never started. Checked by structure, because
-# the failure only happens on a full partition.
+# is missing is a fatal boot error, so the allowlist goes down before the
+# apk. And PackageManager keeps parsing the previous build's cached
+# manifest unless the scanned path is newer than its cache entry, so the
+# stamp has to come after the last write into those directories.
+# Checked by structure here; run-e2e-install.sh checks the result on disk.
 order_ok=$(python3 - "$SRC" <<'PYORD'
 import sys
 s = open(sys.argv[1], encoding="utf-8").read()
 allow = s.index('"$SYS/etc/permissions/org.joan.ims.xml" 644')
 apk = s.index('"$SYS/priv-app/JoanIms/JoanIms.apk" 644')
-arm = s.index('ROLLBACK_APK="$SYS/priv-app/JoanIms"')
-print("yes" if allow < apk < arm else "no")
+last_copy = max(s.rindex('try_copy_file "$TMP/apns-merged.xml"'),
+                s.rindex('"$PRODMNT/overlay/JoanFwVolte.apk" 644'))
+stamp = s.rindex('stamp_future "$SYS/priv-app/JoanIms/JoanIms.apk" "$SYS/priv-app/JoanIms"')
+print("yes" if allow < apk < last_copy < stamp else "no")
 PYORD
 )
 check "$([ "$order_ok" = "yes" ] && echo 0 || echo 1)" \
-      "the allowlist is written before the apk, and the rollback armed after it"
+      "allowlist before apk, and the cache stamp after every write"
 
-grep -q 'rm -rf "$ROLLBACK_APK"' "$SRC" &&
-  grep -q 'ROLLBACK_APK=""' "$SRC"
-check $? "error() removes a half-installed priv-app"
+grep -q 'rm -f "$SYS/etc/init/joan-grant.rc" "$SYS/bin/joan-grant.sh"' "$SRC"
+check $? "the alpha70-73 boot-time grant is removed whenever found"
 
-# And the arming must be cleared before the install ends, or every later
-# failure would roll back a good install.
-tail_ok=$(python3 - "$SRC" <<'PYTAIL'
-import sys
-s = open(sys.argv[1], encoding="utf-8").read()
-arm = s.index('ROLLBACK_APK="$SYS/priv-app/JoanIms"')
-clear = s.rindex('ROLLBACK_APK=""')
-print("yes" if clear > arm else "no")
-PYTAIL
-)
-check "$([ "$tail_ok" = "yes" ] && echo 0 || echo 1)" \
-      "and disarmed once everything needed to boot is on disk"
+# Every copy is write-then-rename: nothing may truncate a target in place.
+# `cat src > dst` onto a live file is exactly how a full partition used to
+# leave a truncated apns-conf.xml.
+bad_cats=$(grep -nE 'cat "[^"]+" > "\$(SYS|PRODMNT|SYSMNT)' "$SRC" || true)
+check "$([ -z "$bad_cats" ] && echo 0 || echo 1)" \
+      "no in-place truncating writes onto a partition (got: ${bad_cats:-none})"
 
 if [ "$fail" -ne 0 ]; then
   echo "installer tests: FAIL $fail"; exit 1

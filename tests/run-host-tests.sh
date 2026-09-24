@@ -25,6 +25,8 @@ echo "== apn overlay merge"
 echo "== carrier assets"
 "$ROOT/tests/carrier/run-carrier-tests.sh"
 "$ROOT/tests/installer/run-installer-tests.sh"
+# Real update-binary on loop-mounted ext4 images. Needs root; skips without.
+"$ROOT/tests/installer/run-e2e-install.sh"
 
 # The UA suite was NOT run here, and that hole cost four tester builds.
 # A stale assertion on the registration expiry went red in alpha57 and
@@ -105,6 +107,11 @@ for f in files:
 # (the LineageOS default), not a silent denial. Nothing in the build
 # catches that; the device simply does not come back. So the invariant is
 # checked here instead of remembered.
+#
+# Which permissions are signature|privileged is read from the platform's
+# own manifest inside the SDK's android.jar when aapt2 can dump it, rather
+# than from a hand-kept list that silently goes stale.
+import subprocess, re
 PRIVILEGED = {
     "android.permission.MODIFY_PHONE_STATE",
     "android.permission.READ_PRIVILEGED_PHONE_STATE",
@@ -112,7 +119,37 @@ PRIVILEGED = {
     "android.permission.CONNECTIVITY_USE_RESTRICTED_NETWORKS",
     "android.permission.BIND_IMS_SERVICE",
     "android.permission.LOCATION_BYPASS",
+    "android.permission.CAPTURE_AUDIO_OUTPUT",
+    "android.permission.WRITE_APN_SETTINGS",
 }
+sdk = os.environ.get("ANDROID_SDK", os.path.expanduser("~/Android/Sdk"))
+jar = os.path.join(sdk, "platforms", "android-35", "android.jar")
+bts = sorted(glob.glob(os.path.join(sdk, "build-tools", "*", "aapt2")))
+if os.path.exists(jar) and bts:
+    dump = subprocess.run([bts[-1], "dump", "xmltree", jar, "--file",
+                           "AndroidManifest.xml"], capture_output=True,
+                          text=True).stdout
+    derived, cur = set(), None
+    for line in dump.splitlines():
+        t = line.strip()
+        if t.startswith("E: "):
+            cur = {} if t.startswith("E: permission ") else None
+            continue
+        if cur is None:
+            continue
+        m = re.search(r':name\(0x01010003\)="([^"]+)"', t)
+        if m:
+            cur["name"] = m.group(1)
+        m = re.search(r':protectionLevel\(0x01010009\)=(0x[0-9a-f]+)', t)
+        if m:
+            cur["pl"] = int(m.group(1), 16)
+        if "name" in cur and "pl" in cur:
+            if cur["pl"] & 0xf == 2 and cur["pl"] & 0x10:
+                derived.add(cur["name"])
+            cur = None
+    if len(derived) > 100:
+        PRIVILEGED = derived
+        print("ok   %d signature|privileged permissions read from the platform manifest" % len(derived))
 mf = ET.parse(os.path.join(root, "ims-service/AndroidManifest.xml")).getroot()
 ns = "{http://schemas.android.com/apk/res/android}"
 asked = {e.get(ns + "name") for e in mf.iter("uses-permission")}
@@ -128,6 +165,35 @@ if missing:
 else:
     n = len(asked & PRIVILEGED)
     print("ok   all %d privileged permissions requested are allowlisted" % n)
+
+# And the allowlist is APPEND-ONLY. PackageManager can go on parsing ANY
+# earlier build's cached manifest after a flash (see the comment in
+# permissions/org.joan.ims.xml), so a privileged permission that any
+# manifest in history requested must stay allowlisted forever. Dropping
+# BIND_IMS_SERVICE after alpha67 is what bootlooped every upgrade.
+hist = set()
+try:
+    revs = subprocess.run(["git", "-C", root, "log", "--format=%H", "--",
+                           "ims-service/AndroidManifest.xml"],
+                          capture_output=True, text=True, check=True).stdout.split()
+    for r in revs:
+        body = subprocess.run(["git", "-C", root, "show",
+                               r + ":ims-service/AndroidManifest.xml"],
+                              capture_output=True, text=True).stdout
+        hist |= set(re.findall(r'uses-permission\s+android:name="([^"]+)"', body))
+except Exception as e:
+    revs = []
+if revs:
+    gone = sorted((hist & PRIVILEGED) - allow)
+    if gone:
+        for m in gone:
+            print("FAIL %s was requested by an earlier build and is no longer allowlisted: an upgrade with a stale package cache bootloops" % m)
+        bad += len(gone)
+    else:
+        print("ok   allowlist covers all %d privileged permissions any of %d manifest revisions requested"
+              % (len(hist & PRIVILEGED), len(revs)))
+else:
+    print("skip no git history here; allowlist history not checked")
 
 if bad:
     sys.exit(1)

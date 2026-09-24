@@ -69,50 +69,72 @@ loopback control socket.
 > Caller ID is the asserted number; Dialer can still overlay a matching
 > contact.
 
-## Current tester build: v0.4.0-alpha38
+## Current tester build: v0.4.0-alpha76
 
-`v0.4.0-alpha38` (versionCode 48) is the current tester zip: 804 host
-checks and the UA, registration, discovery, merge, xfrm, carrier and
-installer suites pass, and it registers on T-Mobile 310-260 on
-the bench handset. That is not a live-carrier qualifier for anyone else.
-
-alpha38 fixes the EF_DIR read that alpha37 shipped broken: the platform
-returns the legacy TS 51.011 GET RESPONSE structure, not the UICC's
-BER-TLV FCP, so every live read answered "no record geometry" and fell
-back to guessed AIDs. Both formats are read now.
-
-What alpha38 adds over alpha34 is mostly about reading the SIM and the
-network correctly rather than new call behaviour. The SIM applet is now
-selected by its 3GPP AID prefix instead of one card's issuer suffix, so
-cards whose ISIM sits behind a different suffix are found at all; EF_DIR
-is read to ask the card what it actually holds; and ADF_ISIM is read
-directly when the framework claims there is none, which also gives a
-third source for the P-CSCF address. A P-CSCF delivered as a hostname is
-now resolved, on the IMS network and behind a deadline, instead of being
-dropped. Every `Security-Server` row is read rather than only the first.
-The `algorithm=` parameter in Authorization is now the carrier profile's
-decision, defaulting to RFC 3310's behaviour where no profile says
-otherwise.
-
-Two settings surfaces are now read but deliberately not advertised: the
-Ut/XCAP configuration we already shipped, and the carrier's RTT settings
-with a T.140 parser. Neither is reachable from a call, and neither
-declares a capability to the network or the dialer.
+**If a build after alpha67 stopped your phone booting, flash alpha76.**
+Every build from alpha70 to alpha75 could bootloop a phone when flashed
+*over* an earlier install (fresh installs were fine). PackageManager kept
+using the previous build's cached manifest, which still requested
+`BIND_IMS_SERVICE`, while the new allowlist had dropped it; under
+`ro.control_privapp_permissions=enforce` that stops system_server. alpha76
+puts the allowlist entry back and keeps every entry any build ever needed,
+re-dates the installed files so the cache is actually refreshed, writes
+every file atomically, checks free space before touching anything, and
+removes the alpha70-73 boot-time grant if it finds it. The whole story and
+the recovery steps are in
+[`docs/install-troubleshooting.md`](docs/install-troubleshooting.md).
 
 Sideload `joan-volte-recovery.zip`, reboot, then confirm:
 
 ```
 adb shell content query --uri content://org.joan.ims.state/state | grep key=build
-→ 0.4.0-alpha38 (48)
+→ 0.4.0-alpha76 (86)
 ```
 
-Check that row, **not** `dumpsys package`, which serves a stale version
-on this device indefinitely.
+### Microphone and location: how they get granted
+
+These are runtime permissions, and no recovery zip can safely grant one to
+a ROM that has already booted. So, in order of convenience:
+
+1. **Flash joan in the same recovery session as the ROM** (a clean
+   install, or a ROM update, which needs joan re-flashed anyway). The zip
+   ships `etc/default-permissions`, which Android applies on the first
+   boot after the ROM's fingerprint changes: nothing else to do.
+2. **Open "joan IMS" from the app drawer once** and allow the microphone.
+3. **Over adb, no root:** `./scripts/grant-permissions.sh`, or by hand:
+
+   ```
+   adb shell pm grant org.joan.ims android.permission.RECORD_AUDIO
+   adb shell pm grant org.joan.ims android.permission.ACCESS_FINE_LOCATION
+   adb shell pm grant org.joan.ims android.permission.ACCESS_COARSE_LOCATION
+   adb shell pm grant org.joan.ims android.permission.ACCESS_BACKGROUND_LOCATION
+   ```
+
+Without `RECORD_AUDIO` calls connect and the other side hears silence.
+Location only adds the serving cell to `P-Access-Network-Info`.
+
+Nothing runs at boot to grant them. alpha70-73 tried that with an init
+service and it is gone for good.
 
 **`joan-volte-uninstall.zip` ships with the release.** Flash it to take
 the ImsService, permissions file and overlays back off and return the
 handset to stock LineageOS behaviour. If a build makes things worse,
 that is the way back — flash it first, then tell us what happened.
+
+### Earlier: alpha38
+
+alpha38 fixed the EF_DIR read that alpha37 shipped broken: the platform
+returns the legacy TS 51.011 GET RESPONSE structure, not the UICC's
+BER-TLV FCP, so every live read answered "no record geometry" and fell
+back to guessed AIDs. Both formats are read now.
+
+It also selects the SIM applet by its 3GPP AID prefix instead of one
+card's issuer suffix, reads EF_DIR to ask the card what it holds, reads
+ADF_ISIM directly when the framework claims there is none (a third source
+for the P-CSCF address), resolves a P-CSCF delivered as a hostname on the
+IMS network, reads every `Security-Server` row rather than only the
+first, and makes the `algorithm=` parameter in Authorization the carrier
+profile's decision.
 
 ## China Mobile: what we know, and what alpha33 tries
 
@@ -622,7 +644,9 @@ system`, and that is not something the zip can work around.
 
 1. Install LineageOS 22 (and GApps if you want them).
 2. Sideload `joan-volte-recovery.zip` (skip signature verification if
-   recovery asks).
+   recovery asks). Doing this in the same recovery session as the ROM
+   install or update also pre-grants the microphone and location on the
+   next boot; see "Microphone and location" above.
 3. Reboot to system.
 
 **To remove it, sideload `joan-volte-uninstall.zip` from the same
@@ -643,12 +667,14 @@ Our installer's own verdict is the last line it prints on screen --
 failed. That text goes to recovery's display and is **not** kept in
 `last_log` or `last_install`, so read it on the handset.
 
-**Check the install by the trace build row, not by `dumpsys`.** These
-files are written by recovery, whose clock is wrong, so they land with a
-2017 timestamp. That is older than PackageManager's package cache, which
-therefore may not invalidate: `dumpsys package org.joan.ims` can keep
-reporting the *previous* `versionName` indefinitely while the correct
-APK is installed and running. What is trustworthy:
+**Check the install by the trace build row.** Up to alpha75, files
+written by recovery landed older than PackageManager's package cache, so
+the cache was never invalidated and `dumpsys package org.joan.ims` kept
+reporting the *previous* `versionName` -- and, worse, the previous
+build's requested permissions, which is what bootlooped upgrades (see
+[`docs/install-troubleshooting.md`](docs/install-troubleshooting.md)).
+From alpha76 the installer re-dates what PackageManager scans, so
+`dumpsys` should agree again; the trace row is still the direct answer:
 
 ```sh
 adb shell 'grep -o "build=[^ ]* ([0-9]*)" \
@@ -659,8 +685,13 @@ adb shell md5sum /system/priv-app/JoanIms/JoanIms.apk   # vs the built apk
 The zip installs:
 
 - `/system/priv-app/JoanIms/JoanIms.apk`
-- `/system/etc/permissions/org.joan.ims.xml`
+- `/system/etc/permissions/org.joan.ims.xml` (privileged allowlist)
 - `/system/etc/permissions/android.hardware.telephony.ims.xml`
+- `/system/etc/default-permissions/org.joan.ims.xml` (runtime grants,
+  applied on the first boot after a ROM install or update)
+- `/product/overlay/JoanImsPhoneDefault.apk`, `/product/overlay/JoanFwVolte.apk`
+- IMS APN rows merged into `/product/etc/apns-conf.xml`, with the ROM's
+  own list kept beside it as `apns-conf.xml.joan-orig`
 
 To undo, sideload `joan-volte-uninstall.zip` and reboot.
 

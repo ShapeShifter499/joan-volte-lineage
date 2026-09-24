@@ -60,8 +60,11 @@ fi
 SYSMNT="$MP_RESULT"; SYSMNT_OWNED="$MP_OWNED"
 mount -o rw,remount "$SYSMNT" 2>/dev/null || true
 SYS="$SYSMNT/system"
+# The apk goes before its allowlist -- the reverse of the install order,
+# for the same reason: an apk without its allowlist does not boot, an
+# allowlist without its apk is inert.
 rm -rf "$SYS/priv-app/JoanIms"
-rm -f "$SYS/etc/permissions/org.joan.ims.xml"
+rm -f "$SYS/etc/permissions/org.joan.ims.xml" "$SYS/etc/permissions/"*.joan-new
 # The runtime-permission pre-grant. The directory is left alone: it is a
 # platform directory on most ROMs and ours only when we had to create it,
 # and rmdir on a non-empty one fails harmlessly anyway.
@@ -74,9 +77,9 @@ rmdir "$SYS/etc/default-permissions" 2>/dev/null || true
 # than deleting one the ROM needs.
 IMSFEAT="$SYS/etc/permissions/android.hardware.telephony.ims.xml"
 if [ -f "$IMSFEAT.joan-orig" ]; then
-  cat "$IMSFEAT.joan-orig" > "$IMSFEAT" \
+  mv -f "$IMSFEAT.joan-orig" "$IMSFEAT" \
     || ui_print "  /system: IMS feature restore FAILED"
-  rm -f "$IMSFEAT.joan-orig" "$IMSFEAT.joan-added"
+  rm -f "$IMSFEAT.joan-added"
   ui_print "  IMS feature xml: restored the ROM copy from"
   ui_print "    /system/etc/permissions/android.hardware.telephony.ims.xml.joan-orig"
 elif [ -f "$IMSFEAT.joan-added" ]; then
@@ -103,12 +106,23 @@ PRODMNT="$MP_RESULT"; PRODMNT_OWNED="$MP_OWNED"
 mount -o rw,remount "$PRODMNT" 2>/dev/null || true
 rm -f "$PRODMNT/overlay/JoanImsPhoneDefault.apk"
 rm -f "$PRODMNT/overlay/JoanFwVolte.apk"
-if [ -f "$PRODMNT/etc/apns-conf.xml.joan-orig" ]; then
-  cat "$PRODMNT/etc/apns-conf.xml.joan-orig" > "$PRODMNT/etc/apns-conf.xml" \
-    || ui_print "  /product: APN backup restore failed"
-  rm -f "$PRODMNT/etc/apns-conf.xml.joan-orig"
-  ui_print "  APN list: restored the ROM copy from"
-  ui_print "    /product/etc/apns-conf.xml.joan-orig"
+rm -f "$PRODMNT/overlay/"*.joan-new "$PRODMNT/etc/"*.joan-new 2>/dev/null
+APNS="$PRODMNT/etc/apns-conf.xml"
+if [ -f "$APNS.joan-orig" ]; then
+  # Rename, not rewrite: the backup IS the ROM's file, so moving it back
+  # needs no free space and cannot leave a truncated list behind.
+  if mv -f "$APNS.joan-orig" "$APNS"; then
+    ui_print "  APN list: restored the ROM copy from"
+    ui_print "    /product/etc/apns-conf.xml.joan-orig"
+  else
+    ui_print "  /product: APN backup restore FAILED; the backup is still at"
+    ui_print "    /product/etc/apns-conf.xml.joan-orig"
+  fi
+  rm -f "$APNS.joan-merged"
+elif [ -f "$APNS.joan-added" ]; then
+  # The ROM keeps its list on /system; the /product copy was ours.
+  rm -f "$APNS" "$APNS.joan-added" "$APNS.joan-merged"
+  ui_print "  APN list: removed our /product copy; the ROM's /system list applies"
 else
   ui_print "  APN list: no backup at /product/etc/apns-conf.xml.joan-orig,"
   ui_print "    so apns-conf.xml was left as it is."
