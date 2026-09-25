@@ -69,7 +69,25 @@ loopback control socket.
 > Caller ID is the asserted number; Dialer can still overlay a matching
 > contact.
 
-## Current tester build: v0.4.0-alpha76
+## Current tester build: v0.4.0-alpha77
+
+alpha77 = alpha76's installer fix below, plus two carrier changes, neither
+yet run against a live core:
+
+- **Networks without IPsec can register.** LG configures Verizon, U.S.
+  Cellular, Sprint, Beeline, MegaFon, CSL, 3 and PCCW Hong Kong, Eastlink,
+  Freedom and Telenor Bulgaria without sec-agree; joan refused any challenge
+  that lacked a `Security-Server`, so none of them could register. Look for
+  `sec=none` in `last_register`.
+- **The carrier profile is chosen by Android's carrier id**, then PLMN. AT&T,
+  Verizon and U.S. Cellular no longer get T-Mobile's settings, MVNOs like
+  Cricket and MetroPCS get LG's own profiles for them, and 149 carrier
+  profiles ship (was 136). `via=` in the `carrier profile` trace line says
+  which table chose.
+
+Handoff and next steps: [`docs/HANDOFF-2026-09-25-carrier-coverage.md`](docs/HANDOFF-2026-09-25-carrier-coverage.md).
+
+### alpha76
 
 **If a build after alpha67 stopped your phone booting, flash alpha76.**
 Every build from alpha70 to alpha75 could bootloop a phone when flashed
@@ -88,7 +106,7 @@ Sideload `joan-volte-recovery.zip`, reboot, then confirm:
 
 ```
 adb shell content query --uri content://org.joan.ims.state/state | grep key=build
-→ 0.4.0-alpha76 (86)
+→ 0.4.0-alpha77 (87)
 ```
 
 ### Microphone and location: how they get granted
