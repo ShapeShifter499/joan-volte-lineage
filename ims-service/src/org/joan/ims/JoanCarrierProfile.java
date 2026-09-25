@@ -160,6 +160,12 @@ public final class JoanCarrierProfile {
      */
     public final boolean ipsec;
     public final String srcKey;
+    /**
+     * How {@link #srcKey} was chosen: {@code carrier-id:<id>},
+     * {@code plmn:<mccmnc>}, {@code rule} or {@code default}. In the trace
+     * so a wrong profile can be traced to the table that picked it.
+     */
+    public String via = "default";
 
     private static volatile JoanCarrierProfile sCached;
     private static volatile String sCachedMccMnc;
@@ -410,15 +416,55 @@ public final class JoanCarrierProfile {
         if (mcc == null || mnc == null || mcc.isEmpty() || mnc.isEmpty()) {
             return defaults(mcc, mnc);
         }
-        String cacheKey = mcc + ":" + mnc;
+        int[] ids = simCarrierIds(ctx, mcc, mnc);
+        String cacheKey = mcc + ":" + mnc + ":" + ids[0] + ":" + ids[1];
         JoanCarrierProfile hit = sCached;
         if (hit != null && cacheKey.equals(sCachedMccMnc)) {
             return hit;
         }
-        JoanCarrierProfile p = load(ctx, mcc, mnc);
+        JoanCarrierProfile p = load(ctx, mcc, mnc, ids);
         sCached = p;
         sCachedMccMnc = cacheKey;
         return p;
+    }
+
+    /**
+     * The SIM's specific and canonical Android carrier ids, or -1s.
+     *
+     * <p>Android resolves a SIM to a carrier with the carrier id database
+     * in TelephonyProvider -- an MVNO to its own id, by GID1, SPN or IMSI
+     * prefix -- and hands the answer to any app without a permission.
+     * That is the key AOSP's own ImsStack selects carrier configuration
+     * by, and the only way to tell Cricket from AT&T or MetroPCS from
+     * T-Mobile, which share their host's PLMN.
+     *
+     * <p>Only trusted when the SIM being described is the one whose PLMN
+     * we were asked about: the ids come from the default data
+     * subscription, and a second SIM's carrier must never pick this one's
+     * profile.
+     */
+    private static int[] simCarrierIds(Context ctx, String mcc, String mnc) {
+        int[] none = { -1, -1 };
+        try {
+            android.telephony.TelephonyManager tm = ctx.getSystemService(
+                    android.telephony.TelephonyManager.class);
+            if (tm == null) {
+                return none;
+            }
+            int sub = android.telephony.SubscriptionManager
+                    .getDefaultDataSubscriptionId();
+            if (sub >= 0) {
+                tm = tm.createForSubscriptionId(sub);
+            }
+            String op = tm.getSimOperator();
+            if (op == null || !op.equals(mcc + mnc)) {
+                return none;
+            }
+            return new int[] { tm.getSimSpecificCarrierId(),
+                    tm.getSimCarrierId() };
+        } catch (Throwable t) {
+            return none;
+        }
     }
 
     /** Read a whole JSON asset, or null. */
@@ -468,10 +514,40 @@ public final class JoanCarrierProfile {
         return null;
     }
 
-    private static JoanCarrierProfile load(Context ctx, String mcc, String mnc) {
-        String key = mappedKey(ctx, mcc, mnc);
-        if (key == null) {
-            key = carrierKey(mcc, mnc);
+    /**
+     * The profile key for a carrier id, from the shipped carrier id map
+     * (tools/make-carrier-id-map.py), or null. The specific id wins: it is
+     * the MVNO where there is one.
+     */
+    private static String carrierIdKey(Context ctx, int[] ids) {
+        if (ids == null || (ids[0] <= 0 && ids[1] <= 0)) {
+            return null;
+        }
+        JSONObject map = asset(ctx, "carrier-id-map.json");
+        if (map == null) {
+            return null;
+        }
+        for (int id : ids) {
+            if (id > 0 && map.has(String.valueOf(id))) {
+                return map.optString(String.valueOf(id), null);
+            }
+        }
+        return null;
+    }
+
+    private static JoanCarrierProfile load(Context ctx, String mcc, String mnc,
+                                           int[] ids) {
+        String via;
+        String key = carrierIdKey(ctx, ids);
+        if (key != null) {
+            via = "carrier-id:" + (ids[0] > 0 ? ids[0] : ids[1]);
+        } else {
+            key = mappedKey(ctx, mcc, mnc);
+            via = "plmn:" + mcc + mnc;
+            if (key == null) {
+                key = carrierKey(mcc, mnc);
+                via = "rule";
+            }
         }
         try {
             JSONObject all = asset(ctx, "carrier-profiles.json");
@@ -483,7 +559,7 @@ public final class JoanCarrierProfile {
                 String conf = o.optString("conf_uri", "");
                 String base = conf.isEmpty()
                         ? defaults(mcc, mnc).confUri : conf;
-                return new JoanCarrierProfile(
+                JoanCarrierProfile hit = new JoanCarrierProfile(
                         base,
                         o.optBoolean("refer_sub", true),
                         o.optBoolean("conf_sub", true),
@@ -522,6 +598,8 @@ public final class JoanCarrierProfile {
                         o.optString("ut_control_preference", ""),
                         o.optBoolean("ipsec", true),
                         key);
+                hit.via = via;
+                return hit;
             }
         } catch (Throwable t) {
             Log.w(TAG, "carrier profile load failed "
@@ -552,52 +630,36 @@ public final class JoanCarrierProfile {
             new java.util.HashSet<>(java.util.Arrays.asList(
                     "000", "002", "004", "007", "008"));
 
-    /**
-     * MCC/MNC -> profile key, from the distilled stock XML tree.
-     * US carriers keyed by MCC only where stock keys them by brand;
-     * these are the LG profile families, not a PLMN database.
-     */
     /** True for a China Mobile PLMN, by the confirmed MNC set. */
     static boolean isCmcc(String mcc, String mnc) {
         return "460".equals(mcc) && mnc != null
                 && CMCC_MNCS.contains(pad3(mnc));
     }
 
+    /**
+     * The hand-kept rule for a PLMN neither map lists, or null.
+     *
+     * <p>This used to guess by MCC: every PLMN in 310-316 got T-Mobile's
+     * profile unless it was one of three hard-coded MNCs, all of 440/441
+     * got NTT DoCoMo's, and all of 450 got LG U+'s. So AT&T, Verizon and
+     * U.S. Cellular subscribers registered with T-Mobile's settings --
+     * including T-Mobile's IPsec, which Verizon and U.S. Cellular do not
+     * negotiate -- and Rakuten, SoftBank-MVNO and KT MVNO subscribers with
+     * a competitor's. Those operators are now in the PLMN and carrier id
+     * maps by their own PLMNs, and a PLMN still unlisted gets the 3GPP
+     * defaults, which are right far more often than another operator's
+     * file.
+     *
+     * <p>One rule remains: China Mobile's MNC 004, which LG's table does
+     * not list but the OnePlus CarrierConfig in LineageOS confirms.
+     */
     static String carrierKey(String mcc, String mnc) {
-        // T-Mobile family (US): MCC 310-316 across the merged TMUS/Sprint
-        // network; stock keys all of these profiles as TMO.US.NAO.
-        if (mcc.compareTo("310") >= 0 && mcc.compareTo("316") <= 0) {
-            if ("120".equals(mnc)) {
-                return "SPR.US";
-            }
-            if ("030".equals(mnc)) {
-                return "ATT.US.NAO";
-            }
-            if ("004".equals(mnc)) {
-                return "VZW.US.VOWIFI";
-            }
-            return "TMO.US.NAO";
-        }
         if ("460".equals(mcc)) {
-            /* MCC 460 is all of China, not one operator. Mapping the whole
-             * MCC to CMCC handed China Unicom and China Telecom
-             * subscribers China Mobile's conference URI, session timers,
-             * TCP criterion and offer response code -- another operator's
-             * settings, applied with no way to tell from the outside.
-             *
-             * Only China Mobile's own MNCs get the profile; everything
-             * else under 460 falls through to the 3GPP defaults, which is
-             * what an unknown carrier has always got. LG shipped no
-             * Unicom or Telecom profile, so there is nothing better to
-             * return for them -- and the defaults are right far more
-             * often than a competitor's file. */
+            /* MCC 460 is all of China, not one operator. Only China
+             * Mobile's own MNCs get its profile; Unicom and Telecom get
+             * the 3GPP defaults, because LG shipped no profile for them
+             * and a competitor's is worse than none. */
             return CMCC_MNCS.contains(pad3(mnc)) ? "CMCC.CN" : null;
-        }
-        if ("440".equals(mcc) || "441".equals(mcc)) {
-            return "DCM.JP";
-        }
-        if ("450".equals(mcc)) {
-            return "LGU.KR";
         }
         return null;
     }

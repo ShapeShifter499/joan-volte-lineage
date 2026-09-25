@@ -175,13 +175,19 @@ public final class TestJoanFreshPass extends TestJoanUa {
                 "CMCC.CN".equals(JoanCarrierProfile.carrierKey("460", "002")));
         check("cn-460-001-padded-form-not-cmcc",
                 JoanCarrierProfile.carrierKey("460", "001") == null);
-        /* And the other regions must be untouched by the change. */
-        check("us-310-260-still-tmo",
-                "TMO.US.NAO".equals(JoanCarrierProfile.carrierKey("310", "260")));
-        check("kr-450-still-lgu",
-                "LGU.KR".equals(JoanCarrierProfile.carrierKey("450", "06")));
-        check("jp-440-still-dcm",
-                "DCM.JP".equals(JoanCarrierProfile.carrierKey("440", "10")));
+        /* No other region is guessed by MCC any more. 310-316 used to be
+         * T-Mobile's wholesale, 440/441 DoCoMo's and 450 LG U+'s, which
+         * gave AT&T, Verizon, Rakuten and every Korean MVNO a competitor's
+         * settings. Those PLMNs resolve through carrier-plmn-map.json and
+         * carrier-id-map.json now, which tests/carrier pins. */
+        check("us-310-260-not-guessed-by-rule",
+                JoanCarrierProfile.carrierKey("310", "260") == null);
+        check("us-311-480-verizon-not-guessed-by-rule",
+                JoanCarrierProfile.carrierKey("311", "480") == null);
+        check("kr-450-not-guessed-by-rule",
+                JoanCarrierProfile.carrierKey("450", "06") == null);
+        check("jp-440-11-rakuten-not-guessed-by-rule",
+                JoanCarrierProfile.carrierKey("440", "11") == null);
 
         System.out.println("FRESH_PASS_CHECKS=" + checks + " FAILURES=" + failures);
         System.exit(failures == 0 ? 0 : 1);

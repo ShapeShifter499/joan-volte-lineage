@@ -18,6 +18,7 @@ def check(cond, name):
 
 prof = json.load(open("ims-service/assets/carrier-profiles.json"))
 pmap = json.load(open("ims-service/assets/carrier-plmn-map.json"))
+cmap = json.load(open("ims-service/assets/carrier-id-map.json"))
 
 missing = sorted({v for v in pmap.values() if v not in prof})
 check(not missing, f"every mapped key has a profile (missing: {missing[:5]})")
@@ -26,10 +27,45 @@ bad = [k for k in pmap if not (k.isdigit() and 5 <= len(k) <= 6)]
 check(not bad, f"every PLMN is 5-6 digits (bad: {bad[:5]})")
 
 # A profile nothing can address is dead weight in the apk.
-hand = {"ATT.US.NAO", "CMCC.CN", "DCM.JP", "LGU.KR", "SPR.US",
-        "TMO.US.NAO", "VZW.US.VOWIFI"}
-orphan = sorted(set(prof) - set(pmap.values()) - hand)
+hand = {"CMCC.CN"}
+orphan = sorted(set(prof) - set(pmap.values()) - set(cmap.values()) - hand)
 check(not orphan, f"no unreachable profiles (orphans: {orphan[:5]})")
+cmiss = sorted({v for v in cmap.values() if v not in prof})
+check(not cmiss, f"every carrier id resolves to a shipped profile ({cmiss[:5]})")
+badid = [k for k in cmap if not k.isdigit()]
+check(not badid, f"carrier id keys are numeric ({badid[:5]})")
+
+# North America. LG sold carrier-branded SKUs there, so its PLMN table has
+# no row for these; joan used to hand all of MCC 310-316 T-Mobile's
+# profile. They come from Android's carrier id database now.
+na = {"310260": "TMO.US.NAO", "310410": "ATT.US.NAO", "311480": "VZW.US.NAO",
+      "310590": "VZW.US.NAO", "311580": "USC.US.NAO", "310150": "ATT.US.CRK",
+      "302610": "BELL.CA", "302720": "RGS.CA", "302220": "TLS.CA",
+      "302500": "VTR.CA", "302490": "FRD.CA", "310120": "SPR.US"}
+for p, k in na.items():
+    check(pmap.get(p) == k, f"{p} resolves to {k} (got {pmap.get(p)})")
+ids = {"1": "TMO.US.NAO", "1187": "ATT.US.NAO", "1839": "VZW.US.NAO",
+       "1952": "USC.US.NAO", "1779": "ATT.US.CRK", "1949": "MPCS.US",
+       "10000": "ATT.US.TRF", "10001": "TMO.US.TRF", "576": "BELL.CA",
+       "2008": "VTR.CA", "1659": "ORG.PL", "2101": "BT.GB"}
+for i, k in ids.items():
+    check(cmap.get(i) == k, f"carrier id {i} resolves to {k} (got {cmap.get(i)})")
+# Operators LG ships nothing for must fall to the 3GPP defaults, not to a
+# neighbour: Rakuten used to get DoCoMo's profile, Unicom and Telecom once
+# got China Mobile's.
+for p in ("44011", "46001", "46003", "46011"):
+    check(p not in pmap, f"{p} is not mapped to a borrowed profile")
+for i in ("2109", "2429", "1436", "2237"):
+    check(i not in cmap, f"carrier id {i} is not mapped to a borrowed profile")
+
+# The networks registration depends on distinguishing: these do not
+# negotiate IPsec in LG's configuration, and joan has to register there
+# without sec-agree.
+for k in ("VZW.US.NAO", "USC.US.NAO", "SPR.US", "CSL.HK", "PCCW.HK",
+          "H3G.HK", "BEE.RU", "MGF.RU", "EST.CA", "FRD.CA", "TELE.BG"):
+    check(prof.get(k, {}).get("ipsec") is False, f"{k} registers without IPsec")
+for k in ("TMO.US.NAO", "ATT.US.NAO", "CMCC.CN", "KT.KR", "DCM.JP"):
+    check(prof.get(k, {}).get("ipsec") is True, f"{k} registers with IPsec")
 
 # China Mobile is more than one PLMN. Mapping MCC 460 wholesale once gave
 # Unicom and Telecom subscribers China Mobile's settings.
@@ -73,8 +109,9 @@ check(not bad_e,
 
 # common_sip_features bit 24 (AUTHENTICATION_ALGORITHM_PARAMETER) is what
 # decides, in stock, whether the REGISTER's Authorization header carries
-# "algorithm=". The runtime does NOT read it -- joan always sends the
-# parameter, as RFC 3310 s3 requires. These checks pin the finding that
+# "algorithm=". Since alpha38 the runtime follows it per carrier
+# (JoanCarrierProfile.sendAuthAlgorithm), with RFC 3310's behaviour where
+# no profile answers. These checks pin the finding that
 # docs/lg-ims-carrier-extract-2026-09-04.md rests on, so a regenerated
 # profile set cannot quietly invalidate what that document claims.
 AUTH_ALGO_BIT = 0x01000000
@@ -98,15 +135,14 @@ check(tm is not None and (tm & AUTH_ALGO_BIT),
       f"TMO.US.NAO sets the algorithm-parameter bit (0x{tm:08x})"
       if tm is not None else "TMO.US.NAO carries a sip_features mask")
 # Omission is stock's NORM, not a China Mobile quirk: only the Korean
-# three, two Russian carriers and T-Mobile US send the parameter. That
-# 130-of-136 split is the reason joan does not copy stock here -- there is
-# no carrier-shaped exception to make, only a global change we have no
-# trace to justify. If this set moves, re-read that decision.
+# three, two Russian carriers and the T-Mobile US family (T-Mobile and its
+# MetroPCS and TracFone variants) send the parameter. If this set moves,
+# re-read that decision.
 senders = sorted(k for k in prof
                  if (sip_features(k) or 0) & AUTH_ALGO_BIT)
-check(senders == ["BEE.RU", "KT.KR", "LGU.KR", "SKT.KR", "TELE2.RU",
-                  "TMO.US.NAO"],
-      f"the same six profiles send algorithm= ({len(senders)} of "
+check(senders == ["BEE.RU", "KT.KR", "LGU.KR", "MPCS.US", "SKT.KR",
+                  "TELE2.RU", "TMO.US.NAO", "TMO.US.TRF"],
+      f"the same eight profiles send algorithm= ({len(senders)} of "
       f"{len(prof)}): {senders}")
 
 print(f"carrier asset tests: {'FAIL %d' % fail if fail else 'all passed'}")

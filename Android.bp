@@ -18,6 +18,14 @@ android_app {
     srcs: ["ims-service/src/**/*.java"],
     manifest: "ims-service/AndroidManifest.xml",
 
+    // The carrier tables: carrier-profiles.json, carrier-plmn-map.json and
+    // carrier-id-map.json. Soong's default is assets/ beside this file,
+    // which does not exist, so without this line a ROM build shipped an
+    // apk with no carrier data at all and every network fell back to the
+    // 3GPP defaults -- Verizon and U.S. Cellular included, which then
+    // tried to negotiate an IPsec their cores do not offer.
+    asset_dirs: ["ims-service/assets"],
+
     // system_ext, and the privapp-permissions prebuilt below must follow
     // it. SystemConfig reads privapp allowlists per partition and applies
     // them only to apps on that same partition, so an app on /system_ext
@@ -25,13 +33,16 @@ android_app {
     // privileged permissions -- which on a user build is fatal at boot.
     system_ext_specific: true,
 
-    // Needs BIND_IMS_SERVICE and the privileged phone-state permissions,
-    // so it must be privileged and platform-signed.
+    // Needs the privileged phone-state and restricted-network
+    // permissions, so it must be privileged and platform-signed.
     privileged: true,
     certificate: "platform",
     platform_apis: true,
 
-    required: ["privapp-permissions-org.joan.ims.xml"],
+    required: [
+        "privapp-permissions-org.joan.ims.xml",
+        "default-permissions-org.joan.ims.xml",
+    ],
 }
 
 prebuilt_etc {
@@ -40,6 +51,19 @@ prebuilt_etc {
     sub_dir: "permissions",
     src: "permissions/org.joan.ims.xml",
     filename_from_src: true,
+}
+
+// The microphone and location grants. In a ROM this is the whole answer:
+// DefaultPermissionGrantPolicy reads system_ext/etc/default-permissions on
+// the first boot and after every OTA, so a ROM that builds joan in never
+// asks the user for them. (The zip installs the same file to /system; it
+// only takes effect there on the first boot after a ROM update.)
+prebuilt_etc {
+    name: "default-permissions-org.joan.ims.xml",
+    system_ext_specific: true,
+    sub_dir: "default-permissions",
+    src: "permissions/default-permissions-org.joan.ims.xml",
+    filename: "org.joan.ims.xml",
 }
 
 // The device-default ImsService pointer, as a runtime resource overlay.

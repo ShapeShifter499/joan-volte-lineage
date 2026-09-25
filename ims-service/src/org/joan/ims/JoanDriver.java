@@ -866,7 +866,7 @@ final class JoanDriver {
                 + " retry{base=" + cp.regRetryBaseTime
                 + " max=" + cp.regRetryMaxTime
                 + " steps=" + cp.regRetryIntervals.length + "}"
-                + " src=" + cp.srcKey;
+                + " src=" + cp.srcKey + " via=" + cp.via;
         return cs;
     }
 

@@ -12,7 +12,12 @@ Mobile -- which handed Unicom and Telecom subscribers another operator's
 settings. A real PLMN table removes the guessing.
 
 Usage:
-    tools/make-plmn-map.py <SmartConfiguration.xml> <profiles.json> <out.json>
+    tools/make-plmn-map.py <SmartConfiguration.xml> <profiles.json> <out.json> [extra.json]
+
+extra.json holds PLMN rows the stock table lacks -- the North American
+operators LG sold carrier-branded SKUs for -- produced by
+tools/make-carrier-id-map.py from Android's carrier id database. A row
+there never overrides one from the stock table.
 """
 import json
 import re
@@ -27,10 +32,11 @@ PREFER = {
 
 
 def main():
-    if len(sys.argv) != 4:
+    if len(sys.argv) not in (4, 5):
         print(__doc__)
         return 2
     smart, profiles_path, out = sys.argv[1:4]
+    extra = json.load(open(sys.argv[4])) if len(sys.argv) == 5 else {}
     text = open(smart, encoding="utf-8", errors="replace").read()
     block = re.search(r'<table id="mccmnc_list">(.*?)</table>', text, re.S)
     if not block:
@@ -68,6 +74,22 @@ def main():
                 f"{plmn}:{out_map[plmn]}/{key}")
             continue
         out_map[plmn] = key
+
+    added = 0
+    for plmn, key in sorted(extra.items()):
+        if plmn in out_map:
+            if out_map[plmn] != key:
+                skipped.setdefault("extra-conflict", []).append(
+                    f"{plmn}:{out_map[plmn]}/{key}")
+            continue
+        if key not in profiles:
+            skipped.setdefault("extra-no-profile", []).append(
+                f"{plmn}:{key}")
+            continue
+        out_map[plmn] = key
+        added += 1
+    if extra:
+        print(f"  added {added} PLMNs from {sys.argv[4]}")
 
     with open(out, "w") as f:
         json.dump(dict(sorted(out_map.items())), f, indent=1, sort_keys=True)
