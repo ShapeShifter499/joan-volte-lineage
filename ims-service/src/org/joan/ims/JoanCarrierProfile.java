@@ -145,6 +145,20 @@ public final class JoanCarrierProfile {
     public final boolean xcapTls;
     public final String xcapPdn;
     public final String utControl;
+    /**
+     * Whether this carrier negotiates RFC 3329 sec-agree and protects
+     * signalling with IPsec, {@code aos_reg_0_ipsec}.
+     *
+     * <p>False for Verizon (every variant), US Cellular, Sprint, Beeline
+     * and MegaFon, CSL, 3 and PCCW Hong Kong, Eastlink, Freedom and
+     * Telenor Bulgaria in LG's own configuration: their cores challenge
+     * with AKA but never answer a Security-Client, and a REGISTER that
+     * insists on sec-agree gets a 401 with no Security-Server -- which
+     * joan used to treat as a fatal protocol error, so none of those
+     * networks could register at all. True where nothing says otherwise,
+     * which is what every network joan registers on today uses.
+     */
+    public final boolean ipsec;
     public final String srcKey;
 
     private static volatile JoanCarrierProfile sCached;
@@ -171,6 +185,7 @@ public final class JoanCarrierProfile {
                                String xcapServer, int xcapPort,
                                boolean xcapTls, String xcapPdn,
                                String utControl,
+                               boolean ipsec,
                                String srcKey) {
         this.confUri = confUri;
         this.referSub = referSub;
@@ -208,6 +223,7 @@ public final class JoanCarrierProfile {
         this.xcapTls = xcapTls;
         this.xcapPdn = xcapPdn;
         this.utControl = utControl;
+        this.ipsec = ipsec;
         this.srcKey = srcKey;
     }
 
@@ -261,7 +277,7 @@ public final class JoanCarrierProfile {
         return new JoanCarrierProfile(factory, true, true, false,
                 2, 1, true, 183, -1, 0, 0, 0, null, 0, true, -1, true,
                 false, false, DEFAULT_IPSEC_PORT_INTERVAL, 0, 1, 2, 0,
-                0, 0, null, "", 0, false, "", "", "3gpp-default");
+                0, 0, null, "", 0, false, "", "", true, "3gpp-default");
     }
 
     /**
@@ -504,6 +520,7 @@ public final class JoanCarrierProfile {
                         o.optBoolean("xcap_tls", false),
                         o.optString("xcap_pdn", ""),
                         o.optString("ut_control_preference", ""),
+                        o.optBoolean("ipsec", true),
                         key);
             }
         } catch (Throwable t) {

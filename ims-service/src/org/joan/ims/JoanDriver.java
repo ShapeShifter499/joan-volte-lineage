@@ -817,6 +817,7 @@ final class JoanDriver {
          * -1 keeps the full offer for any carrier without a profile, so
          * nothing already registering changes what it offers. */
         JoanSipCrypto.setOfferMask(cp.ipsecAlgs);
+        JoanSipBuilder.setSecAgree(cp.ipsec);
         JoanSipBuilder.setSendAuthAlgorithm(cp.sendAuthAlgorithm);
         JoanSipBuilder.setRouteHeaderInReg(cp.routeHeaderInReg);
         JoanSipBuilder.setSupportsGruu(cp.supportsGruu);
@@ -838,6 +839,7 @@ final class JoanDriver {
                         : "")
                 + (platformExpirySec > 0 ? "(platform)" : "(profile)")
                 + " pcscf_port=" + JoanSipBuilder.pcscfSipPort()
+                + " ipsec=" + (JoanSipBuilder.secAgree() ? "yes" : "no")
                 + " ua=" + (JoanSipBuilder.sendUserAgent() ? "yes" : "no")
                 + " auth_algo="
                 + (JoanSipBuilder.sendAuthAlgorithm() ? "yes" : "no")

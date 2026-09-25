@@ -44,6 +44,7 @@ public final class TestJoanSip {
         testXcap();
         testAuthAlgorithmGate();
         testSecurityServerRows();
+        testUnprotectedRegister();
         if (gFail != 0) {
             System.out.println("FAIL " + gFail);
             System.exit(1);
@@ -2522,8 +2523,75 @@ public final class TestJoanSip {
         check(without.contains("Security-Verify: ipsec-3gpp"),
                 "retry INVITE keeps Security-Verify");
         check(JoanSipBuilder.buildInvite(id, new JoanSipBuilder.Dialog(),
-                "tel:+1", null, null, 40000, "x").contains("Require: sec-agree"),
+                "tel:+1", null, "ipsec-3gpp;alg=hmac-sha-1-96", 40000, "x")
+                .contains("Require: sec-agree"),
                 "the 7-arg form still defaults to sending it");
+        /* An unprotected registration has no Security-Verify, and the
+         * option tags must not travel without one: Verizon and the other
+         * networks without sec-agree would answer 420 to every call. */
+        String plain = JoanSipBuilder.buildInvite(id,
+                new JoanSipBuilder.Dialog(), "tel:+1", null, null, 40000, "x");
+        check(!plain.contains("sec-agree") && !plain.contains("Security-"),
+                "INVITE on an unprotected registration carries no sec-agree");
+    }
+
+    /**
+     * Carriers LG configures with aos_reg_0_ipsec=false -- Verizon, US
+     * Cellular, Sprint, the Hong Kong and Russian networks -- challenge
+     * with AKA and never answer a Security-Client. REGISTER must then
+     * carry none of the sec-agree machinery, in either leg.
+     */
+    private static void testUnprotectedRegister() {
+        JoanSipBuilder.Id id = new JoanSipBuilder.Id(
+                "1112223333@vzims.com", "sip:+11112223333@vzims.com",
+                "vzims.com", "2600::5", 15060, 15060, "123456789012345");
+        java.security.SecureRandom rng = new java.security.SecureRandom();
+        JoanSipBuilder.Params mine = JoanSipBuilder.Params.random(rng);
+        JoanSipBuilder.Txn txn = new JoanSipBuilder.Txn(mine, rng);
+        boolean was = JoanSipBuilder.secAgree();
+        try {
+            JoanSipBuilder.setSecAgree(true);
+            String prot = JoanSipBuilder.buildRegister(id, txn, 1, null,
+                    null, null, null, "3GPP-E-UTRAN-FDD", false);
+            check(prot.contains("Require: sec-agree")
+                    && prot.contains("Security-Client: ipsec-3gpp"),
+                    "a profile with IPsec still offers sec-agree on REG1");
+
+            JoanSipBuilder.setSecAgree(false);
+            String reg1 = JoanSipBuilder.buildRegister(id, txn, 1, null,
+                    null, null, null, "3GPP-E-UTRAN-FDD", false);
+            check(!reg1.contains("sec-agree") && !reg1.contains("Security-"),
+                    "REG1 without IPsec carries no sec-agree header at all");
+            check(reg1.contains("Supported: path")
+                    && reg1.contains("Authorization: Digest username=\"1112223333@vzims.com\""),
+                    "REG1 without IPsec still names the private identity");
+
+            /* A challenge with no Security-Server, as those cores send. */
+            JoanSipBuilder.Challenge ch = new JoanSipBuilder.Challenge(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+                    "AKAv1-MD5", null, "vzims.com", "auth");
+            byte[] res = new byte[8];
+            byte[] ck = new byte[16];
+            byte[] ik = new byte[16];
+            String reg2 = JoanSipBuilder.buildRegister(id, txn, 2, ch, res,
+                    ck, ik, "3GPP-E-UTRAN-FDD", false, false);
+            check(!reg2.contains("sec-agree") && !reg2.contains("Security-"),
+                    "REG2 without IPsec carries no sec-agree header at all");
+            check(reg2.contains("response=\"") && reg2.contains("qop=auth"),
+                    "REG2 without IPsec still answers the AKA challenge");
+
+            /* The explicit argument wins over the profile: a challenge that
+             * came back without a Security-Server means the network did not
+             * negotiate, whatever the profile expected. */
+            JoanSipBuilder.setSecAgree(true);
+            String declined = JoanSipBuilder.buildRegister(id, txn, 2, ch,
+                    res, ck, ik, "3GPP-E-UTRAN-FDD", false, false);
+            check(!declined.contains("sec-agree")
+                    && !declined.contains("Security-"),
+                    "REG2 after a network declined sec-agree offers none");
+        } finally {
+            JoanSipBuilder.setSecAgree(was);
+        }
     }
 
     /** RFC 4867 octet-aligned framing. */

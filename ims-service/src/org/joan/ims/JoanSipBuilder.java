@@ -1652,6 +1652,41 @@ final class JoanSipBuilder {
                                 Challenge ch, byte[] res,
                                 byte[] ck, byte[] ik, String pani,
                                 boolean tcp) {
+        return buildRegister(id, txn, cseq, ch, res, ck, ik, pani, tcp,
+                sSecAgree);
+    }
+
+    /**
+     * Whether REGISTER negotiates RFC 3329 sec-agree: the carrier
+     * profile's {@code ipsec}. True unless a profile says otherwise.
+     *
+     * <p>When false the REGISTER carries no Security-Client and no
+     * sec-agree option tags, the registration is authenticated by the
+     * digest alone, and signalling runs over the unprotected socket --
+     * what LG configures for Verizon, US Cellular and the other networks
+     * listed at {@link JoanCarrierProfile#ipsec}.
+     */
+    private static volatile boolean sSecAgree = true;
+
+    static void setSecAgree(boolean on) {
+        sSecAgree = on;
+    }
+
+    static boolean secAgree() {
+        return sSecAgree;
+    }
+
+    /**
+     * @param secAgree offer sec-agree on this REGISTER. The registration
+     *   path passes false for a REGISTER that follows a challenge with no
+     *   Security-Server in it, whatever the profile said: the network has
+     *   already declined to negotiate, and repeating the offer without a
+     *   Security-Verify to go with it is a malformed sec-agree exchange.
+     */
+    static String buildRegister(Id id, Txn txn, int cseq,
+                                Challenge ch, byte[] res,
+                                byte[] ck, byte[] ik, String pani,
+                                boolean tcp, boolean secAgree) {
         txn.newBranch(RNG);
         String publicId = id.impu;
         String aor;
@@ -1767,13 +1802,18 @@ final class JoanSipBuilder {
          * sends it, and it is kept because a registrar that inserts a
          * Path header is entitled to know we understand one. */
         a.append("Supported: path\r\n");
-        a.append("Supported: sec-agree\r\n");
+        if (secAgree) {
+            a.append("Supported: sec-agree\r\n");
+        }
         if (sSupportsGruu) {
             a.append("Supported: gruu\r\n");
         }
-        a.append("Require: sec-agree\r\n");
-        a.append("Proxy-Require: sec-agree\r\n");
-        appendSecAgree(a, "Security-Client", securityClientValue(txn.mine));
+        if (secAgree) {
+            a.append("Require: sec-agree\r\n");
+            a.append("Proxy-Require: sec-agree\r\n");
+            appendSecAgree(a, "Security-Client",
+                    securityClientValue(txn.mine));
+        }
         a.append("P-Access-Network-Info: ").append(pani).append("\r\n");
         /* No P-Preferred-Identity here.
          *
@@ -3455,11 +3495,17 @@ final class JoanSipBuilder {
         if (sSendUa) {
             a.append("User-Agent: ").append(userAgent()).append("\r\n");
         }
-        if (requireSecAgree) {
+        /* The option tags travel with a Security-Verify or not at all.
+         * A registration that negotiated no sec-agree has nothing to
+         * verify, and Require: sec-agree without it asks every proxy on
+         * the path for an extension this dialog is not using -- a 420
+         * from any of them. */
+        boolean haveVerify = secVerify != null && !secVerify.isEmpty();
+        if (requireSecAgree && haveVerify) {
             a.append("Require: sec-agree\r\n");
             a.append("Proxy-Require: sec-agree\r\n");
         }
-        if (secVerify != null && !secVerify.isEmpty()) {
+        if (haveVerify) {
             appendSecAgree(a, "Security-Verify", secVerify);
         }
         a.append("Accept-Contact: *;+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\"\r\n");

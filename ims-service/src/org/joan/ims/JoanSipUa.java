@@ -912,7 +912,10 @@ final class JoanSipUa {
             /* Same as native hold_protected_ports: TCP listen on port-s
              * and port-c. P-CSCF delivers inbound INVITE over TCP. */
             sTcpS = tcpListen(id.contactPort, sInS, sOutS);
-            sTcpC = tcpListen(id.viaPort, sInC, sOutC);
+            /* An unprotected registration uses one port for both roles;
+             * a second listen on it would only fail with EADDRINUSE. */
+            sTcpC = id.viaPort == id.contactPort ? null
+                    : tcpListen(id.viaPort, sInC, sOutC);
             JoanRegistration.setRegistered(true, null);
             startListen();
             JoanTrace.note("app UA registered public=yes tcp_s="

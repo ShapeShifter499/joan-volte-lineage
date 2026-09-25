@@ -510,9 +510,12 @@ final class JoanAppRegister {
         }
         JoanSipBuilder.setPcscfRoute(routeHost, 0);
         StringBuilder sb = new StringBuilder();
+        /* Whether this REGISTER offers sec-agree at all: the carrier
+         * profile's choice, unless this network already refused it. */
+        final boolean offerSecAgree = offerSecAgree();
         String reg1Udp = JoanSipBuilder
                 .buildRegister(sipId, txn, reg1Cseq, null, null, null, null, pani,
-                        false);
+                        false, offerSecAgree);
         byte[] reg1Bytes = reg1Udp.getBytes(StandardCharsets.US_ASCII);
         String reg1Str = reg1Udp;
         boolean ipv6 = n.local instanceof Inet6Address;
@@ -552,7 +555,7 @@ final class JoanAppRegister {
         if (tcpReg1) {
             String reg1Tcp = JoanSipBuilder.buildRegister(sipId, txn, reg1Cseq,
                     null,
-                    null, null, null, pani, true);
+                    null, null, null, pani, true, offerSecAgree);
             reg1Identity = reg1Tcp;
             reg1OnTcp = true;
             first = exchangeReg1Tcp(n, pcscf, reg1Tcp, reg1TimeoutMs);
@@ -600,11 +603,38 @@ final class JoanAppRegister {
             }
             return sb + "FAIL: reg1 redirect";
         }
+        if (p1.status == 420 && offerSecAgree) {
+            /* 420 Bad Extension to a REGISTER that required sec-agree: a
+             * core that does not negotiate it said so in the only way
+             * RFC 3261 8.2.2.3 gives it. Remember that for this network
+             * and let the driver's next attempt register without it,
+             * rather than asking again every retry. */
+            sSecAgreeRefusedPlmn = profilePlmn();
+            return sb + "sec=refused(420) FAIL: reg1 420 sec-agree"
+                    + " (next attempt unprotected)";
+        }
         if (p1.status != 401) {
             return sb + "FAIL: reg1 unexpected";
         }
-        if (p1.wwwAuth == null || p1.secServer == null) {
-            return sb + "FAIL: 401 missing challenge/sec-server";
+        if (p1.wwwAuth == null) {
+            return sb + "FAIL: 401 missing challenge";
+        }
+        /* No Security-Server in the challenge: this core authenticates by
+         * the digest alone and never protects signalling with IPsec.
+         * Verizon, US Cellular and the other networks LG configures with
+         * aos_reg_0_ipsec=false all look like this. It used to be a fatal
+         * "missing sec-server", which is why none of them could register;
+         * it is now the unprotected registration those networks expect.
+         *
+         * When the profile asked for sec-agree and the network ignored
+         * the offer, the challenge still decides: the S-CSCF has already
+         * issued a vector for this REGISTER, and TS 33.203 leaves the
+         * choice of protection to the P-CSCF's answer. */
+        final boolean unprotected =
+                p1.secServer == null || p1.secServer.isEmpty();
+        if (unprotected) {
+            sb.append("sec=none")
+                    .append(offerSecAgree ? "(network-declined) " : "(profile) ");
         }
 
         String nonce;
@@ -651,6 +681,9 @@ final class JoanAppRegister {
              * in it are the network's own, for an SA that is torn down
              * before any log is read. Printed once per attempt so a
              * tester's trace answers the question without a capture. */
+            if (unprotected) {
+                pcscfSec = null;
+            } else {
             JoanTrace.note("sec-server raw: "
                     + (p1.secServer == null ? "(absent)" : p1.secServer));
             sb.append("sec_rows=")
@@ -667,6 +700,7 @@ final class JoanAppRegister {
                     .append(" offered=")
                     .append(JoanSecAgree.offerSummary(p1.secServer, pcscfSec))
                     .append(' ');
+            }
             if (superseded(epoch)) {
                 return sb + "FAIL: superseded by network/state change";
             }
@@ -737,7 +771,8 @@ final class JoanAppRegister {
                     sipId, txn, REG_SERIES.nextCseq(),
                     new JoanSipBuilder.Challenge(nonce, algo, null, realm, qop)
                             .resync(autsB64),
-                    new byte[0], null, null, pani, reg1OnTcp);
+                    new byte[0], null, null, pani, reg1OnTcp,
+                    offerSecAgree && !unprotected);
             Reg1Result again;
             if (reg1OnTcp) {
                 again = exchangeReg1Tcp(n, pcscf, resyncMsg, reg1TimeoutMs);
@@ -764,7 +799,8 @@ final class JoanAppRegister {
             if (pr.status != 401) {
                 return sb + "FAIL: resync unexpected";
             }
-            if (pr.wwwAuth == null || pr.secServer == null) {
+            if (pr.wwwAuth == null
+                    || (!unprotected && pr.secServer == null)) {
                 return sb + "FAIL: resync 401 missing challenge/sec-server";
             }
             if (JoanSipBuilder.extractNonce(pr.wwwAuth) == null
@@ -792,6 +828,12 @@ final class JoanAppRegister {
         }
         if (superseded(epoch)) {
             return sb + "FAIL: superseded by network/state change";
+        }
+
+        if (unprotected) {
+            return sb + reg2Unprotected(ctx, n, id, pani, pcscf, txn,
+                    new JoanSipBuilder.Challenge(nonce, algo, null, realm, qop),
+                    res, ck, ik, mine, reg1OnTcp, epoch);
         }
 
         JoanSipCrypto.EspKeys keys;
@@ -1077,6 +1119,162 @@ final class JoanAppRegister {
             closeQuietly(spiUeS);
             closeQuietly(spiPeerC);
             closeQuietly(spiPeerS);
+        }
+    }
+
+    /**
+     * The PLMN that last answered our sec-agree with 420, or null. Scoped
+     * to the network so a SIM swap or roaming onto another core offers
+     * sec-agree again.
+     */
+    private static volatile String sSecAgreeRefusedPlmn;
+
+    private static String profilePlmn() {
+        return JoanSipBuilder.profileMcc() + "/" + JoanSipBuilder.profileMnc();
+    }
+
+    /** Whether the next REGISTER offers sec-agree. */
+    static boolean offerSecAgree() {
+        if (!JoanSipBuilder.secAgree()) {
+            return false;
+        }
+        String refused = sSecAgreeRefusedPlmn;
+        return refused == null || !refused.equals(profilePlmn());
+    }
+
+    /**
+     * The authenticated REGISTER for a core that negotiated no sec-agree.
+     *
+     * <p>Sent from a fresh port chosen for this attempt ({@code
+     * mine.portC}), which is also the Via and Contact port and the socket
+     * the UA keeps for every later request. REG1's own port is not
+     * reused: the UA holds its socket until the next successful
+     * registration replaces it, so a refresh that tried to rebind REG1's
+     * port would collide with the live one. The IPsec path does the same
+     * with its protected ports.
+     *
+     * <p>Transport follows RFC 3261 18.1.1 exactly as the protected path
+     * does -- the same criterion, the same TCP-then-UDP fallback on a
+     * refused connect only -- and to the P-CSCF's ordinary SIP port,
+     * since there is no protected server port to send to. A UDP socket is
+     * bound on the port either way, because the network may deliver a
+     * request to the Contact over UDP whichever transport REGISTER took.
+     */
+    private static String reg2Unprotected(Context ctx, Net n, Id id,
+            String pani, InetAddress pcscf, JoanSipBuilder.Txn txn,
+            JoanSipBuilder.Challenge ch, byte[] res, byte[] ck, byte[] ik,
+            JoanSipBuilder.Params mine, boolean reg1OnTcp, long epoch) {
+        StringBuilder sb = new StringBuilder();
+        int port = mine.portC;
+        int dport = JoanSipBuilder.pcscfSipPort();
+        JoanSipBuilder.Id sip2 = new JoanSipBuilder.Id(
+                id.impi, id.impu, id.realm, n.localHost, port, port, id.imei);
+        int reg2Cseq = REG_SERIES.nextCseq();
+        String reg2Udp = JoanSipBuilder.buildRegister(sip2, txn, reg2Cseq,
+                ch, res, ck, ik, pani, false, false);
+        boolean ipv6 = n.local instanceof Inet6Address;
+        boolean tcp = reg1OnTcp
+                || JoanSipBuilder.preferTcp(id.realm, reg2Udp.length(),
+                        n.mtu, ipv6);
+        sb.append("reg2len=").append(reg2Udp.length())
+                .append(" reg2_hdrs=")
+                .append(JoanSipBuilder.headerShape(reg2Udp)).append(' ');
+        DatagramSocket sock = null;
+        Socket tcpKeep = null;
+        String r2 = null;
+        String r2Identity = null;
+        int reg2Retx = 0;
+        try {
+            sock = boundUdp(n.network, n.local, port);
+            if (tcp) {
+                String reg2Tcp = JoanSipBuilder.buildRegister(sip2, txn,
+                        reg2Cseq, ch, res, ck, ik, pani, true, false);
+                sb.append("reg2send=").append(port).append("->").append(dport)
+                        .append(" tpt=tcp ");
+                try {
+                    JoanSipCapture.record("REG2 request (tcp, unprotected)",
+                            reg2Tcp);
+                    JoanRegTransport.TcpResult tr = JoanRegTransport
+                            .sendRecvTcp(n.network, n.local, port, pcscf,
+                                    dport,
+                                    reg2Tcp.getBytes(StandardCharsets.US_ASCII),
+                                    REG2_TIMEOUT_MS, null, null, null, reg2Tcp);
+                    r2 = tr.reply;
+                    tcpKeep = tr.keep;
+                    r2Identity = reg2Tcp;
+                    JoanSipCapture.record("REG2 response (tcp, unprotected)",
+                            r2);
+                } catch (JoanRegTransport.TcpFail tf) {
+                    sb.append("tcp_fail=").append(tf.phase).append(' ');
+                    if (!JoanRegTransport.fallbackUnprotectedTcp(tf.phase)
+                            || !JoanSipBuilder.udpFallbackOnTcpConnectFail()) {
+                        return sb + "FAIL: reg2 tcp " + tf.phase;
+                    }
+                    tcp = false;
+                }
+            }
+            if (!tcp) {
+                sb.append("reg2send=").append(port).append("->").append(dport)
+                        .append(" tpt=udp ");
+                JoanSipCapture.record("REG2 request (udp, unprotected)",
+                        reg2Udp);
+                JoanRegTransport.UdpResult ur = JoanRegTransport.sendRecvUdp(
+                        sock, null, pcscf, dport,
+                        reg2Udp.getBytes(StandardCharsets.US_ASCII),
+                        REG2_TIMEOUT_MS, reg2Udp);
+                if (ur != null) {
+                    r2 = ur.reply;
+                    reg2Retx = ur.retx;
+                    if (ur.stats != null) {
+                        sb.append(ur.stats.summary("reg2"));
+                    }
+                }
+                r2Identity = reg2Udp;
+                JoanSipCapture.record("REG2 response (udp, unprotected)", r2);
+            }
+            sb.append("reg2retx=").append(reg2Retx).append(' ');
+            if (r2 == null) {
+                return sb + "FAIL: reg2 timeout";
+            }
+            JoanSipBuilder.Reply p2 = JoanSipBuilder.parseReply(r2);
+            if (p2 == null) {
+                return sb + "FAIL: reg2 parse";
+            }
+            if (!JoanRegTransport.finalMatches(r2Identity, r2)) {
+                return sb + "FAIL: reg2 mismatch (fail closed)";
+            }
+            if (superseded(epoch)) {
+                return sb + "FAIL: superseded by network/state change";
+            }
+            sb.append("reg2=").append(p2.status);
+            if (p2.status == 423) {
+                int min = JoanSipBuilder.minExpiresOf(r2);
+                if (min > 0) {
+                    JoanSipBuilder.adoptMinExpires(min,
+                            JoanSipBuilder.profileMcc(),
+                            JoanSipBuilder.profileMnc());
+                    sb.append(" min_expires=").append(min)
+                            .append(" expires_raised");
+                } else {
+                    sb.append(" min_expires=absent");
+                }
+            }
+            if (p2.status >= 300) {
+                sb.append(rejectDetail(p2, r2, r2Identity));
+            }
+            if (p2.status >= 200 && p2.status < 300) {
+                sb.append(" OK");
+                JoanSipUa.adopt(ctx, n.network, n.local, pcscf, dport, sip2,
+                        pani, null, r2, sock, sock, tcpKeep, null, null);
+                sock = null;
+                tcpKeep = null;
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return sb + "FAIL: reg2 unprotected " + brief(e);
+        } finally {
+            closeQuietly(sock);
+            closeQuietly(tcpKeep);
         }
     }
 
