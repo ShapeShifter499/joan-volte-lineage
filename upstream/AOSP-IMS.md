@@ -76,8 +76,10 @@ From the top of a LineageOS 22.2 tree that already builds joan:
      2025-02-11);
    - the per-carrier IMS config (below), spliced into joan-common's
      CarrierConfig `vendor.xml` as a commit of its own. It is 7 MB of
-     generated XML, so it is not in the device patch; `--no-carrier-data`
-     leaves it out.
+     generated XML, so it is not in the device patch;
+   - the IMS, XCAP and emergency APNs LineageOS's list lacks (below), as
+     `vendor/apn/aosp-ims.xml`, a commit in `vendor/apn`.
+   `--no-carrier-data` leaves out the last two.
 
    The device patch:
    - adds `ImsStack`, `ImsMediaService`, `Iwlan` and
@@ -165,6 +167,32 @@ merged result for every carrier id and PLMN Android knows: 2866 SIM
 identities, 477 of them with an ePDG address from the imported data, no
 differences. Given `--patch` and the device patch, it also checks that
 the patch carries exactly the generated blocks; CI runs both.
+
+## IMS APNs
+
+LineageOS's APN list (`vendor/apn`) has IMS APNs for about 200 networks;
+the Pixel carrier settings LineageOS converts have them for about 1400,
+and XCAP (Ut) and emergency APNs for hundreds more. Android 15 makes up
+an IMS APN named `ims` and an emergency APN named `sos` when a SIM has
+none, so what the tree lacks is the carriers whose APNs are named
+otherwise (Verizon's MVNOs, among others) and every XCAP APN.
+
+`apply-patches.sh` writes those as `vendor/apn/aosp-ims.xml`, which
+`vendor/apn`'s `make-apns.sh` includes with the country files, and
+commits it there. `aosp-ims/tools/make-apns.py` computes it against the
+tree's own country files, following how TelephonyProvider picks a SIM's
+APNs (its MVNO's rows if any match, else its MCC/MNC's): a row is added
+only for a type the SIM has none of, only at the level its APNs already
+come from, and at the MCC/MNC level only when the MVNOs sharing those
+rows use the same APN. IMS and emergency APNs allow IWLAN, and a network
+whose IMS APNs all leave IWLAN out gets an IWLAN-only copy, for Wi-Fi
+calling. At the `vendor/apn` commit pinned in `aosp-ims/upstream.lock`
+that is 939 rows; `aosp-ims/tests/check-apns.py` checks them for 2714
+SIM identities (no SIM's APNs change level or lose a row) and validates
+the assembled list against `vendor/apn`'s schema. CI runs it.
+
+`vendor/apn` serves every device in the tree, and the APNs are right for
+any of them: this is also the shape of a change for LineageOS itself.
 
 ## What was checked, and against what
 

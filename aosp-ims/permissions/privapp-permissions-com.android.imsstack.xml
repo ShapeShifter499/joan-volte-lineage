@@ -5,6 +5,8 @@
   privileged permission the merged manifest requests; tools/build-apk.sh
   refuses to build if the manifest asks for one this file lacks, because
   an unlisted privileged permission stops the phone from booting.
+  Plus WRITE_APN_SETTINGS, the zip's own: ImsApnGate adds the IMS, XCAP and
+  emergency APNs a SIM lacks (a source build puts them in vendor/apn).
 -->
 <permissions>
     <privapp-permissions package="com.android.imsstack">
@@ -17,6 +19,7 @@
         <permission name="android.permission.READ_PRIVILEGED_PHONE_STATE"/>
         <permission name="android.permission.RECEIVE_STK_COMMANDS"/>
         <permission name="android.permission.MANAGE_USERS"/>
+        <permission name="android.permission.WRITE_APN_SETTINGS"/>
         <permission name="android.permission.WRITE_SECURE_SETTINGS"/>
         <permission name="com.android.telephony.permission.USE_IMSMEDIA"/>
     </privapp-permissions>

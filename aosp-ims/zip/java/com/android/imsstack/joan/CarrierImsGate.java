@@ -55,6 +55,9 @@ import org.xmlpull.v1.XmlPullParser;
  * top of whatever the ROM ships, so a LineageOS-based ROM keeps its own
  * carrier config; a source build puts the same blocks in its vendor.xml.
  *
+ * The IMS, XCAP and emergency APNs a SIM lacks come from ImsApnGate, run
+ * at the same moments.
+ *
  * A SIM is resolved to an LG profile the way joan does, by Android carrier
  * id and then PLMN (joan's maps), for the ePDG table. Nothing is
  * overridden that the config already sets, except by the imported data.
@@ -169,8 +172,9 @@ public final class CarrierImsGate {
                             if (tm0 == null) {
                                 return;
                             }
-                            applyIfNeeded(app, sub,
-                                    tm0.createForSubscriptionId(sub));
+                            TelephonyManager tm = tm0.createForSubscriptionId(sub);
+                            applyIfNeeded(app, sub, tm);
+                            ImsApnGate.apply(app, sub, tm);
                         } catch (Throwable t) {
                             Log.w(TAG, "volte_gate watch: " + t);
                         }
@@ -213,7 +217,9 @@ public final class CarrierImsGate {
             }
             for (android.telephony.SubscriptionInfo si : subs) {
                 int sub = si.getSubscriptionId();
-                applyIfNeeded(app, sub, tm.createForSubscriptionId(sub));
+                TelephonyManager subTm = tm.createForSubscriptionId(sub);
+                applyIfNeeded(app, sub, subTm);
+                ImsApnGate.apply(app, sub, subTm);
             }
         } catch (Throwable t) {
             Log.w(TAG, "volte_gate start: " + t);

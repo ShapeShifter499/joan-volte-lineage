@@ -26,6 +26,11 @@ CARRIERSETTINGS_COMMIT=7085ddc01630fdfed802c5900db1b1b6a42cd90c
 CARRIERSETTINGS_PATH=proprietary/product/etc/CarrierSettings
 LINEAGE_SCRIPTS_URL=https://github.com/LineageOS/scripts
 LINEAGE_SCRIPTS_COMMIT=e81615b64084478eae6af876908e77371bd08660
+# carrier/lineage-pixel-apns.xml is the converter's APN list from the same
+# inputs (tools/import-carrier-apns.py). tests/check-apns.py checks the
+# APNs tools/make-apns.py adds against LineageOS's own list at this commit.
+LINEAGE_APN_URL=https://github.com/LineageOS/android_vendor_apn
+LINEAGE_APN_COMMIT=6e73ba90cc9438d1aefb4c323289b281b006a59a
 
 # Android 15 QPR2, what LineageOS 22.2 is built on (BP1A.250505.005):
 # platform headers come from this branch, libc++ headers from the clang

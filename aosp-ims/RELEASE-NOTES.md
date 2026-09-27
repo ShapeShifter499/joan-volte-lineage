@@ -31,7 +31,10 @@ works where the carrier's ePDG accepts the SIM, and IMS stays on LTE
 elsewhere. Each carrier's IMS settings (SIP, SMS over IMS, Ut, emergency,
 video, RTT, ePDG) come from the carrier data LineageOS ships for Pixels,
 1361 entries for 576 carriers, applied on top of whatever carrier config
-your ROM already has.
+your ROM already has. The same data supplies the IMS, XCAP (Ut) and
+emergency APNs your ROM's APN list lacks for your SIM (Verizon's MVNOs,
+among others), added on the phone and taken back if the ROM later
+brings its own.
 
 ## Which file
 

@@ -41,6 +41,9 @@ python3 "$HERE/tests/check-carrier-config.py" \
     --imported "$HERE/carrier/lineage-pixel-ims.xml" | tail -1
 python3 "$HERE/tools/make-carrier-config.py" --imported "$HERE/carrier/lineage-pixel-ims.xml" \
     --assets "$OUT/assets/joan/carrier"
+# ImsApnGate's data: the Pixel APNs LineageOS converts, one file per PLMN.
+python3 "$HERE/tools/make-apns.py" "$HERE/carrier/lineage-pixel-apns.xml" \
+    --assets "$OUT/assets/joan/apns"
 "$BT/aapt2" compile --dir "$S/ImsStack/java/res" -o "$OUT/res/stack.zip"
 "$BT/aapt2" compile --dir "$S/ImsMedia/service/res" -o "$OUT/res/media.zip"
 "$BT/aapt2" link --manifest "$OUT/AndroidManifest.xml" -I "$PUB" -A "$OUT/assets" \
@@ -60,9 +63,12 @@ javac -J-Xmx4g -encoding UTF-8 -nowarn -proc:none -source 21 -target 21 \
     -d "$OUT/classes" -classpath "$CP" @"$OUT/srcs"
 # The annotation stubs exist only to compile; the platform owns those names.
 rm -rf "$OUT/classes/android/annotation" "$OUT/classes/com/android/internal"
-# USAT call control and MO SMS control decisions (ImsStack 0005, 0006).
-javac -d "$OUT/check" "$HERE/tests/UsatCheck.java"
+# USAT call control and MO SMS control decisions (ImsStack 0005, 0006),
+# and the APNs ImsApnGate adds.
+javac -d "$OUT/check" -cp "$OUT/classes" "$HERE/tests/UsatCheck.java" "$HERE/tests/ApnPlanCheck.java"
 java -cp "$OUT/check:$OUT/classes:$ML/android.jar" UsatCheck
+java -cp "$OUT/check:$OUT/classes" com.android.imsstack.joan.ApnPlanCheck \
+    "$HERE/carrier/lineage-pixel-apns.xml"
 
 # 3. Dex. The framework is library, not program: it is on the device.
 LIBS=()

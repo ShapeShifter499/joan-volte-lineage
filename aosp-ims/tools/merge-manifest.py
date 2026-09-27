@@ -66,6 +66,13 @@ def main(stack_path, media_path, out, code, name):
             comp.set(a('exported'), 'false')
         app.append(comp)
 
+    # ImsApnGate adds the IMS, XCAP and emergency APNs a SIM lacks.
+    if 'android.permission.WRITE_APN_SETTINGS' not in have:
+        e = ET.Element('uses-permission')
+        e.set(a('name'), 'android.permission.WRITE_APN_SETTINGS')
+        sroot.insert(list(sroot).index(app), e)
+        have.add('android.permission.WRITE_APN_SETTINGS')
+
     # Asks for the microphone and the other runtime permissions on the phone
     # when the default-permissions file did not apply (flashed onto a ROM
     # that had already booted). Out of the app drawer unless the stack finds

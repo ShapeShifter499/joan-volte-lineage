@@ -132,6 +132,17 @@ brings it along, for every SIM:
   for T-Mobile, MetroPCS, AT&T and Verizon otherwise, whose ePDGs are not
   at the 3GPP default name, joan's table. Everyone else uses the default
   name derived from the SIM.
+- **IMS, XCAP and emergency APNs** from the same Pixel data
+  (`carrier/lineage-pixel-apns.xml`, the converter's APN list, imported
+  by `tools/import-carrier-apns.py`). LineageOS's own list has IMS APNs
+  for about 200 networks, the Pixel data for about 1400. Android 15 makes
+  up an IMS APN named `ims` and an emergency APN named `sos` by itself,
+  so what was missing is the carriers whose APNs are named otherwise
+  (Verizon's MVNOs, among others) and every XCAP APN, which Ut needs. An
+  APN is added only for a type the SIM has none of, and only at the level
+  its APNs already come from (Android picks a SIM's MVNO rows over its
+  MCC/MNC rows, so a row at the wrong level would hide its internet APN).
+  IMS and emergency APNs allow IWLAN, for Wi-Fi calling.
 
 Where it lives: the zip and the ROM apply it at run time, on top of
 whatever carrier config the ROM ships
@@ -142,6 +153,17 @@ CarrierConfig `vendor.xml` blocks (`tools/make-carrier-config.py`,
 spliced in by `upstream/aosp-ims/apply-patches.sh`).
 `tests/check-carrier-config.py` checks the result for all 2866 SIM
 identities Android's carrier database knows.
+
+The APNs likewise: the zip adds them on the phone
+(`zip/java/.../ImsApnGate.java`, deciding with `ApnPlan.java` against the
+APNs Android actually gives the SIM), as rows keyed by the SIM's carrier
+id, which Android appends to the SIM's other rows; it takes them back
+once the ROM has its own. A source build gets them as
+`vendor/apn/aosp-ims.xml` (`tools/make-apns.py`, from `apply-patches.sh`),
+939 rows against LineageOS's list at the commit pinned in
+`upstream.lock`. `tests/check-apns.py` checks that list for 2714 SIM
+identities: no SIM's APNs change level or lose a row, and the list still
+validates against LineageOS's schema.
 
 ## Status (2026-09-27)
 

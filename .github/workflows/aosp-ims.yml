@@ -115,6 +115,15 @@ jobs:
               --imported aosp-ims/carrier/lineage-pixel-ims.xml \
               --patch upstream/aosp-ims/device/0001-joan-common-Add-the-AOSP-IMS-stack.patch
 
+      - name: IMS APNs added to LineageOS's own list
+        run: |
+          . aosp-ims/upstream.lock
+          git init -q "$RUNNER_TEMP/vendor-apn"
+          git -C "$RUNNER_TEMP/vendor-apn" fetch -q --depth 1 "$LINEAGE_APN_URL" "$LINEAGE_APN_COMMIT"
+          git -C "$RUNNER_TEMP/vendor-apn" checkout -q FETCH_HEAD
+          python3 aosp-ims/tests/check-apns.py aosp-ims/carrier/lineage-pixel-apns.xml \
+              "$RUNNER_TEMP/vendor-apn"
+
       - name: Installer end-to-end tests
         run: |
           sudo env "PATH=$PATH" aosp-ims/tests/run-e2e-install.sh | tee "$RUNNER_TEMP/e2e.log"
