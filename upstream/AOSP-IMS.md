@@ -92,7 +92,11 @@ From the top of a LineageOS 22.2 tree that already builds joan:
      `config_support_rtt` true;
    - adds the carrier blocks to CarrierConfig's `vendor.xml` (below);
    - adds `system_ext/etc/default-permissions/default-permissions-ims.xml`
-     (below).
+     (below);
+   - sets `ro.telephony.block_binder_thread_on_incoming_calls=true` in
+     `system.prop`: joan's tree ships it false for the modem IMS, and with
+     it false the framework's `ImsPhoneCallTracker` returns null for every
+     incoming call, which the stack reads as a rejection and answers 480.
 
 3. **Build and flash** as usual (`breakfast joan`, `brunch joan`). On a
    phone that had the flashable zip, flash the zip's `-uninstall` first

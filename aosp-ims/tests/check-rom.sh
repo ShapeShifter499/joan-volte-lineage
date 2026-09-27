@@ -73,6 +73,10 @@ debugfs -R "cat /etc/apns-conf.xml" "$T/product.img" 2>/dev/null > "$T/apns.xml"
 debugfs -R "cat /etc/apns-conf.xml.joan-orig" "$T/product.img" 2>/dev/null > "$T/apns-orig.xml"
 grep -q 'joan-viettel-45204-begin' "$T/apns.xml" \
     && ok "product: Viettel IMS APNs merged" || bad "product: Viettel IMS APNs missing"
+[ "$(debugfs -R "cat /build.prop" "$T/system.img" 2>/dev/null \
+    | grep -c '^ro.telephony.block_binder_thread_on_incoming_calls=true$')" = "1" ] \
+    && ok "system: framework incoming-call handling enabled" \
+    || bad "system: framework incoming-call handling not enabled"
 # As the uninstall zip will see them: the backup is the ROM's own list, and
 # the marker is the checksum of the live one (else it re-bases).
 if ! grep -q 'joan-viettel' "$T/apns-orig.xml" && [ "$(wc -c < "$T/apns-orig.xml")" -gt 200 ]; then

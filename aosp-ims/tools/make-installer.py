@@ -89,6 +89,23 @@ if [ -f "$TMP/etc/sysconfig/com.google.android.iwlan.xml" ]; then
 fi
 ui_print "Installing ImsService priv-app (AOSP ImsStack + ImsMedia)"
 ''', 1),
+    # The AOSP stack delivers MT calls through the framework's
+    # ImsPhoneCallTracker, which LineageOS's joan tree gates off
+    # (ro.telephony.block_binder_thread_on_incoming_calls=false, for the
+    # modem IMS this stack replaces): with false the listener returns null
+    # for every incoming call and the stack answers 480. Back the original
+    # build.prop up once, then turn the handling on.
+    ('ui_print "Installing ImsService priv-app (AOSP ImsStack + ImsMedia)"\n',
+     '''ui_print "Installing ImsService priv-app (AOSP ImsStack + ImsMedia)"
+BP="$SYS/build.prop"
+if [ -f "$BP" ] && ! grep -q "^ro.telephony.block_binder_thread_on_incoming_calls=true$" "$BP"; then
+  if [ ! -f "$BP.joan-orig" ]; then
+    copy_file "$BP" "$BP.joan-orig" 644 u:object_r:system_file:s0
+  fi
+  echo "ro.telephony.block_binder_thread_on_incoming_calls=true" >> "$BP"
+  ui_print "  build.prop: framework incoming-call handling enabled"
+fi
+''', 1),
     # After ImsStack: the VoWiFi apps, IWLAN (ePDG tunnel) and QNS
     # (LTE <-> Wi-Fi transport choice).
     ('copy_file "$TMP/app/ImsStack.apk" "$SYS/priv-app/ImsStack/ImsStack.apk" 644 u:object_r:system_file:s0\n',
@@ -166,6 +183,15 @@ UNINSTALL = [
      '      "$SYS/etc/permissions/com.android.telephony.qns.xml" \\\n'
      '      "$SYS/etc/sysconfig/com.google.android.iwlan.xml" "$SYS/etc/sysconfig/"*.joan-new\n', 1),
     ('JoanIms + leftovers removed', 'ImsStack + leftovers removed', 1),
+    # Undo the incoming-call property: the backed-up build.prop goes back.
+    ('rm -f "$PRODMNT/overlay/"*.joan-new "$PRODMNT/etc/"*.joan-new 2>/dev/null\n',
+     '''BP="$SYS/build.prop"
+if [ -f "$BP.joan-orig" ]; then
+  copy_file "$BP.joan-orig" "$BP" 644 u:object_r:system_file:s0
+  rm -f "$BP.joan-orig"
+  ui_print "  build.prop: restored"
+fi
+rm -f "$PRODMNT/overlay/"*.joan-new "$PRODMNT/etc/"*.joan-new 2>/dev/null\n''', 1),
     ('rm -f "$PRODMNT/overlay/JoanImsPhoneDefault.apk"\n',
      'rm -f "$PRODMNT/overlay/ImsStackPhoneOverlay.apk"\n', 1),
     ('rm -f "$PRODMNT/overlay/JoanFwVolte.apk"\n',
