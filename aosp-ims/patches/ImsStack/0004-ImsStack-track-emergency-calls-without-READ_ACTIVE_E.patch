@@ -1,0 +1,185 @@
+From 583d4fea94983f8f6ebbc3403d4e82dfd6d8f5e5 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 15:51:27 +0000
+Subject: [PATCH] ImsStack: track emergency calls without
+ READ_ACTIVE_EMERGENCY_SESSION
+
+TelephonyRegistry only delivers outgoing emergency call events to a
+holder of READ_ACTIVE_EMERGENCY_SESSION, a signature permission.
+Installed without the platform key, as the Android 15 backport's
+flashable zip is, ImsStack cannot hold it (pm grant refuses it even as
+root): registering the listener threw SecurityException at startup and
+on every SIM change, and the persistent process crash-looped before it
+could register (seen on an LG V30 US998 on LineageOS 22.2).
+
+Catch the denial once and fall back to the call state: when the
+subscription goes off-hook, ask Telecom whether the call is an emergency
+call (TelecomManager#isInEmergencyCall, READ_PRIVILEGED_PHONE_STATE,
+which a privileged app holds) and run the same handling. The fallback
+follows SIM changes, and if READ_PHONE_STATE is not granted yet it logs
+and waits for the next init or SIM change instead of crashing.
+
+A platform-signed build registers the original listener as before and
+never uses the fallback.
+---
+ .../aos/AosTelephonyCallbackTracker.java      | 102 +++++++++++++++++-
+ 1 file changed, 99 insertions(+), 3 deletions(-)
+
+diff --git a/java/src/com/android/imsstack/enabler/aos/AosTelephonyCallbackTracker.java b/java/src/com/android/imsstack/enabler/aos/AosTelephonyCallbackTracker.java
+index 5d8d46d..5d2d964 100644
+--- a/java/src/com/android/imsstack/enabler/aos/AosTelephonyCallbackTracker.java
++++ b/java/src/com/android/imsstack/enabler/aos/AosTelephonyCallbackTracker.java
+@@ -29,6 +29,7 @@ import androidx.annotation.VisibleForTesting;
+ 
+ import com.android.imsstack.base.AppContext;
+ import com.android.imsstack.base.MSimUtils;
++import com.android.imsstack.base.SystemServiceProxy;
+ import com.android.imsstack.base.TelephonyManagerProxy;
+ import com.android.imsstack.core.agents.AgentFactory;
+ import com.android.imsstack.core.agents.ConfigInterface;
+@@ -51,6 +52,12 @@ public class AosTelephonyCallbackTracker {
+     private boolean mNullIntegrityAlgorithm = false;
+     private int mCallState = TelephonyManager.CALL_STATE_IDLE;
+     private long mNetworkTypesBitMask = 0;
++    /** The platform refused the outgoing emergency call listener; do not retry. */
++    private boolean mEmergencyCallListenerDenied = false;
++
++    /** Stands in for {@link #mEmergencyCallListener} when that is refused. */
++    @VisibleForTesting
++    protected EmergencyCallStateListener mEmergencyCallStateListener;
+ 
+     @VisibleForTesting
+     protected EmergencyCallListener mEmergencyCallListener;
+@@ -109,6 +116,7 @@ public class AosTelephonyCallbackTracker {
+         mNullIntegrityAlgorithm = false;
+         mCallState = TelephonyManager.CALL_STATE_IDLE;
+         mNetworkTypesBitMask = 0;
++        mEmergencyCallListenerDenied = false;
+     }
+ 
+     private void handleSimStateChanged() {
+@@ -127,6 +135,11 @@ public class AosTelephonyCallbackTracker {
+             }
+ 
+             mSubId = subId;
++            // The call state fallback is bound to a subscription; follow the new one.
++            if (mEmergencyCallStateListener != null) {
++                mEmergencyCallStateListener.unregister();
++                mEmergencyCallStateListener = null;
++            }
+             registerForEmergencyCall();
+ 
+             if (mSecurityAlgorithmsListener != null) {
+@@ -233,9 +246,37 @@ public class AosTelephonyCallbackTracker {
+     }
+ 
+     protected void registerForEmergencyCall() {
+-        if (mEmergencyCallListener == null) {
+-            mEmergencyCallListener = new EmergencyCallListener();
+-            mEmergencyCallListener.register();
++        if (mEmergencyCallListener != null || mEmergencyCallStateListener != null) {
++            return;
++        }
++        if (!mEmergencyCallListenerDenied) {
++            EmergencyCallListener listener = new EmergencyCallListener();
++            try {
++                listener.register();
++                mEmergencyCallListener = listener;
++                return;
++            } catch (SecurityException e) {
++                // Outgoing emergency call events need READ_ACTIVE_EMERGENCY_SESSION,
++                // a signature permission. Installed without the platform key (the
++                // Android 15 backport's flashable zip) ImsStack cannot hold it, and
++                // the exception crash-looped the whole stack at startup and on each
++                // SIM change. Fall back to the call state below.
++                ImsLog.w(this, mSlotId, "registerForEmergencyCall: " + e.getMessage()
++                        + "; detecting emergency calls from the call state instead");
++                mEmergencyCallListenerDenied = true;
++            }
++        }
++        if (!MSimUtils.isValidSubId(mSubId)) {
++            return;
++        }
++        EmergencyCallStateListener fallback = new EmergencyCallStateListener(mSubId);
++        try {
++            fallback.register();
++            mEmergencyCallStateListener = fallback;
++        } catch (SecurityException e) {
++            // READ_PHONE_STATE not granted yet. The next init or SIM change retries.
++            ImsLog.w(this, mSlotId, "registerForEmergencyCall: no call state either ("
++                    + e.getMessage() + "); outgoing emergency calls are not tracked");
+         }
+     }
+ 
+@@ -244,6 +285,10 @@ public class AosTelephonyCallbackTracker {
+             mEmergencyCallListener.unregister();
+             mEmergencyCallListener = null;
+         }
++        if (mEmergencyCallStateListener != null) {
++            mEmergencyCallStateListener.unregister();
++            mEmergencyCallStateListener = null;
++        }
+     }
+ 
+     @VisibleForTesting
+@@ -361,6 +406,57 @@ public class AosTelephonyCallbackTracker {
+         }
+     }
+ 
++    /**
++     * Detects outgoing emergency calls without {@link EmergencyCallListener}, whose events
++     * need READ_ACTIVE_EMERGENCY_SESSION: when this subscription goes off-hook, asks Telecom
++     * whether the call is an emergency call. That needs only READ_PRIVILEGED_PHONE_STATE,
++     * which a privileged app holds, and the call state only READ_PHONE_STATE.
++     */
++    private final class EmergencyCallStateListener extends TelephonyCallback implements
++            TelephonyCallback.CallStateListener {
++        private final int mSubId;
++        private boolean mInEmergencyCall = false;
++
++        EmergencyCallStateListener(int subId) {
++            mSubId = subId;
++        }
++
++        public void register() {
++            TelephonyManagerProxy tmp = AppContext.getTelephonyManagerProxy(mSubId);
++            tmp.registerTelephonyCallback(mHandler::post, this);
++        }
++
++        public void unregister() {
++            TelephonyManagerProxy tmp = AppContext.getTelephonyManagerProxy(mSubId);
++            tmp.unregisterTelephonyCallback(this);
++        }
++
++        @Override
++        public void onCallStateChanged(@CallState int state) {
++            if (state == TelephonyManager.CALL_STATE_IDLE) {
++                mInEmergencyCall = false;
++                return;
++            }
++            if (state != TelephonyManager.CALL_STATE_OFFHOOK || mInEmergencyCall) {
++                return;
++            }
++            boolean emergency;
++            try {
++                emergency = AppContext.getInstance().getSystemServiceProxy(
++                        SystemServiceProxy.TelecomManagerProxy.class).isInEmergencyCall();
++            } catch (SecurityException e) {
++                ImsLog.w(this, mSlotId, "onCallStateChanged: " + e.getMessage());
++                return;
++            }
++            if (!emergency) {
++                return;
++            }
++            mInEmergencyCall = true;
++            ImsLog.d(this, mSlotId, "onCallStateChanged: emergency call, subId=" + mSubId);
++            handleOutgoingEmergencyCall();
++        }
++    }
++
+     private final class SecurityAlgorithmsListener extends TelephonyCallback implements
+             TelephonyCallback.SecurityAlgorithmsListener {
+         private final int mSubId;
+-- 
+2.43.0
+

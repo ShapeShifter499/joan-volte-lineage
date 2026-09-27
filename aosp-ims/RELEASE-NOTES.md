@@ -1,7 +1,9 @@
-**Unofficial alpha. Nothing in it has run on a phone yet.** It is built
-entirely from source by this repository's `aosp-ims` workflow and passes
-its installer, carrier-config and ROM checks. Keep a way back: the
-`-uninstall` zip, or the official LineageOS nightly.
+**Unofficial alpha.** First bench result (US998 on T-Mobile): the migrate
+zip installs and ImsStack registers with IPsec. No call has been made
+with it yet. It is built entirely from source by this repository's
+`aosp-ims` workflow and passes its installer, carrier-config and ROM
+checks. Keep a way back: the `-uninstall` zip, or the official LineageOS
+nightly.
 
 ## What this is
 
@@ -75,6 +77,8 @@ adb shell pm grant com.android.telephony.qns android.permission.READ_PHONE_STATE
 - Without the IWLAN app-op, Wi-Fi calling can't build its tunnel.
 - Location is used for emergency calls and the network location header.
 
+Reboot afterwards, so the IMS stack starts with the permissions in place.
+
 Then turn on **VoLTE** (Settings > Network & internet > SIMs), and
 **Wi-Fi calling** where it is offered.
 
@@ -84,9 +88,12 @@ Then turn on **VoLTE** (Settings > Network & internet > SIMs), and
   for can't be granted to an app not signed with the ROM's key:
   `ACCESS_SURFACE_FLINGER` and `INTERACT_ACROSS_USERS_FULL`. Their
   features (video surfaces, work profiles) may misbehave.
-- **Emergency mode.** Android 16's domain-selection emergency-mode
-  callback doesn't exist on Android 15, so ImsStack doesn't see that
-  state.
+- **Emergency calls.** The listener ImsStack uses to see outgoing
+  emergency calls needs a permission only the ROM's own key can grant, so
+  this build detects them from the call state instead (patch 0004). A
+  LineageOS build made from source keeps the original. Android 16's
+  domain-selection emergency-mode callback doesn't exist on Android 15,
+  so ImsStack doesn't see that state either way.
 - **Carrier activation portals.** Wi-Fi calling activation portals open in
   the browser, not in an in-app tab.
 - **US E911 address.** US carriers need an E911 address on the account

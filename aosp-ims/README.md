@@ -16,10 +16,10 @@ Qualcomm's IMS core (`docs/v30-modem-and-qualcomm-ims-2026-09-27.md`).
 AOSP's stack runs on the application processor and needs the modem only
 for the LTE bearer and SIM authentication, which the V30 has.
 
-> **Alpha. Nothing here has run on a phone yet.** Everything is built from
-> source and the installers pass their end-to-end tests, but no call has
-> been made with it. Keep a way back: the `-uninstall` zip, or the
-> official nightly.
+> **Alpha.** First bench result (US998, T-Mobile): the migrate zip installs
+> and ImsStack registers with IPsec, once patch 0004 stopped a startup
+> crash. No call has been made with it yet. Keep a way back: the
+> `-uninstall` zip, or the official nightly.
 
 ## Three ways to get it
 
@@ -94,14 +94,14 @@ identities Android's carrier database knows.
 
 | Step | State |
 |---|---|
-| ImsStack + ImsMedia Java, against LineageOS 22.2's own framework | done: 3 ImsStack patches, 1 ImsMedia |
+| ImsStack + ImsMedia Java, against LineageOS 22.2's own framework | done: 4 ImsStack patches, 1 ImsMedia |
 | `libimsstack.so`, `libimsmedia.so`, linked against the ROM's libraries | done |
 | IWLAN + QNS (Android 17) for the zip | done: 1 patch each |
 | Single-APK packaging, overlays, permission files | done |
 | Flashable zips (fresh, migrate, uninstall) | done; 164 end-to-end installer checks pass |
 | Repacked LineageOS 22.2 ROM | done; `tests/check-rom.sh` passes |
 | Source-tree integration (`upstream/AOSP-IMS.md`) | written and checked piece by piece; not yet built in a tree |
-| **Tested on a phone** | **never** |
+| **Tested on a phone** | US998 on T-Mobile: the migrate zip installs and ImsStack registers (IPsec sec-agree, reg-event) once 0004 stops the startup crash. Calls not yet tested |
 
 ## What the backport changes
 
@@ -113,6 +113,7 @@ pinned in `upstream.lock`.
 | ImsStack 0001 | The four Android 16/17 APIs ImsStack uses, on Android 15: `requestUiccIari` (no IARIs, RCS only), `BarringInfo#getCellIdentity` (read back from the parcel), `EXTRA_SETUP_EVENT_LIST` (local constant), `DomainSelectionEmergencyModeListener` (not registered) |
 | ImsStack 0002 | Debug menus without androidx.appcompat |
 | ImsStack 0003 | Hands call audio to Android (`AUDIO_HANDLER_ANDROID`), so Telecom puts the call in `MODE_IN_COMMUNICATION`, the mode ImsMedia's audio path needs on this HAL |
+| ImsStack 0004 | Emergency call tracking without `READ_ACTIVE_EMERGENCY_SESSION` (signature-only). Without the platform key the listener is refused, which crash-looped the stack on a US998; ImsStack now falls back to the call state plus `TelecomManager#isInEmergencyCall` (a privileged permission the zip holds). Platform-signed builds keep the original listener |
 | ImsMedia 0001 | `ImsMediaManager` binds the ImsMedia service in its own package when that package has one (the zip's single APK) |
 | Iwlan 0001 | No physical-network reporting in `DataCallResponse` (Android 16 API) |
 | QNS 0001 | Wi-Fi calling activation without androidx: the activity is a plain `Activity`, and carrier portals open in the browser |
