@@ -117,6 +117,14 @@ Rakuten, China Unicom/Telecom deliberately get defaults (LG ships nothing).
   timers, XCAP/BSF, CS-retry codes). Not yet transcribed into profiles.
   `vo_config.xml` = LG's per-PLMN VoLTE/VoWiFi enable flags. SMS-over-IMS is
   on for 62 of 91 EU entries.
+- **Qualcomm's IMS binaries cannot work on the V30** (asked 2026-09-27;
+  `docs/v30-modem-and-qualcomm-ims-2026-09-27.md`). The V60 gets VoLTE from
+  Qualcomm's AP IMS blobs driving the IMS core in its modem; the V30 modem
+  (US998 30b, 5,092 source files per its `qdsp6m.qdb`) was built without
+  that core, and modem images are signed by LG. What it has instead is LG's
+  MMPF media engine (RTP, jitter buffer, DTMF, RTT, AMR/EVS through the
+  voice DSP) behind LG's `vss_ims` QMI service: a lead for call audio in a
+  device-tree build, not for the zip (needs the vendor HAL plus SELinux).
 
 ## 5. Next steps, in priority order
 
@@ -153,7 +161,8 @@ Rakuten, China Unicom/Telecom deliberately get defaults (LG ships nothing).
    a KDZ/DZ chunk reader — chunks are zlib with target offsets, so
    range-fetching only needed chunks is possible).
 5. **Upstream** (`upstream/`): produce actual patches for
-   `LineageOS/android_device_lge_joan` / `msm8998-common` lineage-22.2
+   `LineageOS/android_device_lge_joan` / `android_device_lge_joan-common`
+   lineage-22.2
    (`config_device_volte_available` overlay, AGC declaration, inherit line).
    `Android.bp` was fixed this session but has never been through Soong.
 6. **LineageOS image**: a source build does not fit (30 GB disk here). Plan:
