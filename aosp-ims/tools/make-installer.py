@@ -45,6 +45,22 @@ INSTALL = [
      '    warn "  skipped the default grants; grant them over adb (aosp-ims/zip/grant-permissions.sh)"\n', 1),
     ('ui_print "  open \\"joan IMS\\" once, or: adb shell pm grant org.joan.ims android.permission.RECORD_AUDIO"\n',
      'ui_print "  adb shell pm grant com.android.imsstack android.permission.RECORD_AUDIO"\n', 1),
+    # Free space as a write can use it. toybox df (recovery's) counts ext4's
+    # reserved clusters as free -- up to 16 MB -- so on a nearly full
+    # partition the check passed and the write failed part way, after
+    # system was already written. statfs's f_bavail leaves them out.
+    ('''free_kb() {
+  fk=$(df -k "$1" 2>/dev/null | tail -1 | tr -s " " | cut -d" " -f4)
+''', '''free_kb() {
+  fk=$(stat -f -c "%a %S" "$1" 2>/dev/null)
+  fk_a=${fk% *}
+  fk_s=${fk#* }
+  case "$fk_a:$fk_s" in
+    *[!0-9:]*|:*|*:) ;;
+    *) if [ "$fk_s" -ge 1024 ]; then echo $((fk_a * (fk_s / 1024))); return 0; fi ;;
+  esac
+  fk=$(df -k "$1" 2>/dev/null | tail -1 | tr -s " " | cut -d" " -f4)
+''', 1),
     # Space: the sysconfig file is installed too.
     ('  "$TMP/etc/default-permissions/com.android.imsstack.xml")\n',
      '  "$TMP/etc/default-permissions/com.android.imsstack.xml" \\\n'
