@@ -1,0 +1,220 @@
+From 5a2d2309f8c790b9eed4b258a03a7933abefe833 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 16:30:46 +0000
+Subject: [PATCH] ImsStack: set the call up when USAT call control gets no
+ answer
+
+On the LG V30 (Qualcomm RIL, LineageOS 22.2), TelephonyManager
+#sendEnvelopeWithStatus completes an ENVELOPE (CALL CONTROL) with status
+words '00 00' and no data. No UICC sends that: ISO/IEC 7816-4 status
+words start with '6X' or '9X'. The UICC's answer never reached ImsStack,
+but UsatAgent read the missing '90 00' as a failure and returned
+RESULT_NOT_ALLOWED, so on a SIM with call control by USIM (service 30,
+as T-Mobile US SIMs have) every MO call failed with CODE_UNSPECIFIED
+before an INVITE was sent. An empty response, as the platform returns
+when the RIL fails the request, was read the same way.
+
+With no answer from the UICC there is no verdict to apply: set the call
+up as dialled, as for '90 00', and send an SMS under MO SMS control as
+is. Answers from the UICC are kept as before: '93 00' and error status
+words still block, and a control result in the response data ('01' not
+allowed, '02' allowed with modifications) is applied even when the
+status words are missing.
+---
+ .../imsstack/core/agents/UsatAgent.java       | 40 +++++++++++--
+ .../imsstack/core/agents/UsatAgentTest.java   | 58 +++++++++++++++++++
+ 2 files changed, 94 insertions(+), 4 deletions(-)
+
+diff --git a/java/src/com/android/imsstack/core/agents/UsatAgent.java b/java/src/com/android/imsstack/core/agents/UsatAgent.java
+index 8726b04..cb2340f 100644
+--- a/java/src/com/android/imsstack/core/agents/UsatAgent.java
++++ b/java/src/com/android/imsstack/core/agents/UsatAgent.java
+@@ -117,6 +117,8 @@ public class UsatAgent extends Handler implements UsatInterface {
+         public int sw1 = 0x93;
+         public int sw2 = 0x00;
+         public byte[] data = null;
++        // Whether the response carried status words at all.
++        public boolean received = false;
+ 
+         UsatResult() {
+         }
+@@ -125,6 +127,27 @@ public class UsatAgent extends Handler implements UsatInterface {
+             return sw1 == 0x90 || sw1 == 0x91 || sw1 == 0x9e || sw1 == 0x9f;
+         }
+ 
++        /**
++         * Checks if the response carries status words the UICC can send: SW1 '61' to '6F'
++         * or '90' to '9F' (ISO/IEC 7816-4). An empty response, or the '00 00' some RILs
++         * complete an envelope with, carries no answer from the UICC.
++         *
++         * @return true if the status words came from the UICC, false otherwise.
++         */
++        boolean hasUiccStatus() {
++            return received && ((sw1 >= 0x61 && sw1 <= 0x6F) || (sw1 >= 0x90 && sw1 <= 0x9F));
++        }
++
++        /**
++         * Checks if the UICC's answer to a control envelope never reached the terminal:
++         * no status words from the UICC and no control result.
++         *
++         * @return true if there is no answer from the UICC, false otherwise.
++         */
++        boolean isAnswerMissing() {
++            return !hasUiccStatus() && (data == null || data.length == 0);
++        }
++
+         boolean isValidForClass2Sms() {
+             return (sw1 == 0x6F || sw1 == 0x62 || sw1 == 0x63) || isOk();
+         }
+@@ -348,7 +371,9 @@ public class UsatAgent extends Handler implements UsatInterface {
+                     + ", response=" + response + ", result=" + result);
+         }
+ 
+-        if (!result.isOk()) {
++        if (result.isAnswerMissing()) {
++            logw(this, "call-control - no answer from the UICC, set up as dialled - " + result);
++        } else if (!result.isOk()) {
+             logw(this, "call-control failed - " + result);
+         }
+ 
+@@ -450,7 +475,10 @@ public class UsatAgent extends Handler implements UsatInterface {
+             return null;
+         }
+ 
+-        int cmdResult = result.isOk() ? Usat.RESULT_ALLOWED : Usat.RESULT_NOT_ALLOWED;
++        // With no answer from the UICC (the platform could not deliver it) there is no
++        // verdict to apply, so the call is set up as dialled, as for '90 00'.
++        int cmdResult = (result.isOk() || result.isAnswerMissing())
++                ? Usat.RESULT_ALLOWED : Usat.RESULT_NOT_ALLOWED;
+         int ccType = Usat.CALL_CONTROL_TYPE_NONE;
+         String dialedString = null;
+         int mediaType = Usat.MEDIA_TYPE_NONE;
+@@ -544,7 +572,9 @@ public class UsatAgent extends Handler implements UsatInterface {
+                     + ", response=" + response + ", result=" + result);
+         }
+ 
+-        if (!result.isOk()) {
++        if (result.isAnswerMissing()) {
++            logw(this, "mo-sms-control - no answer from the UICC, sent as is - " + result);
++        } else if (!result.isOk()) {
+             logw(this, "mo-sms-control failed - " + result);
+         }
+ 
+@@ -623,7 +653,8 @@ public class UsatAgent extends Handler implements UsatInterface {
+             return null;
+         }
+ 
+-        if (!result.isOk()) {
++        // With no answer from the UICC there is no verdict to apply: the SMS is sent as is.
++        if (!result.isOk() && !result.isAnswerMissing()) {
+             return new Usat.MoSmsControlCommandResponse(cmd, Usat.RESULT_NOT_ALLOWED, null, null);
+         }
+ 
+@@ -1274,6 +1305,7 @@ public class UsatAgent extends Handler implements UsatInterface {
+ 
+         result.sw1 = (res[res.length - 2] & 0xFF);
+         result.sw2 = (res[res.length - 1] & 0xFF);
++        result.received = true;
+         result.data = new byte[res.length - 2];
+ 
+         if (result.data.length != 0) {
+diff --git a/tests/java/src/com/android/imsstack/core/agents/UsatAgentTest.java b/tests/java/src/com/android/imsstack/core/agents/UsatAgentTest.java
+index fb4a880..c718945 100644
+--- a/tests/java/src/com/android/imsstack/core/agents/UsatAgentTest.java
++++ b/tests/java/src/com/android/imsstack/core/agents/UsatAgentTest.java
+@@ -23,6 +23,7 @@ import static org.junit.Assert.assertFalse;
+ import static org.junit.Assert.assertNotEquals;
+ import static org.junit.Assert.assertTrue;
+ import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.Mockito.mock;
+ import static org.mockito.Mockito.verify;
+ import static org.mockito.Mockito.when;
+ 
+@@ -57,6 +58,11 @@ public class UsatAgentTest {
+             ImsUtils.hexStringToBytes("00000000000000000000000000");
+     private static final String SEND_ENVELOPE_OK = "9000";
+     private static final String SEND_ENVELOPE_ERROR = "9300";
++    /** No answer from the UICC: a RIL that completes the envelope with '00 00', or none. */
++    private static final String SEND_ENVELOPE_NO_STATUS = "0000";
++    private static final String SEND_ENVELOPE_EMPTY = "";
++    /** Call control result 'not allowed' (data '01 00') with the RIL's '00 00'. */
++    private static final String SEND_ENVELOPE_NOT_ALLOWED_NO_STATUS = "01000000";
+     /** MO SMS control */
+     private static final byte[] SMS_TPDU = new byte[] {0, 10, 50, 15};
+     private static final String TARGET_NUMBER = "9902219632";
+@@ -286,6 +292,21 @@ public class UsatAgentTest {
+         assertEquals(cmd, cmdResponse.getCommand());
+     }
+ 
++    @Test
++    @SmallTest
++    public void testSendCommand_callControlNoAnswerFromUicc() {
++        for (String response : new String[] {SEND_ENVELOPE_NO_STATUS, SEND_ENVELOPE_EMPTY}) {
++            assertEquals(response, Usat.RESULT_ALLOWED, sendCallControl(response).getResult());
++        }
++    }
++
++    @Test
++    @SmallTest
++    public void testSendCommand_callControlNotAllowedWithoutStatus() {
++        assertEquals(Usat.RESULT_NOT_ALLOWED,
++                sendCallControl(SEND_ENVELOPE_NOT_ALLOWED_NO_STATUS).getResult());
++    }
++
+     @Test
+     @SmallTest
+     public void testSendCommand_smsPpDownloadOk() {
+@@ -366,6 +387,25 @@ public class UsatAgentTest {
+         assertEquals(cmd, cmdResponse.getCommand());
+     }
+ 
++    @Test
++    @SmallTest
++    public void testSendCommand_moSmsControlNoAnswerFromUicc() {
++        when(mTelephonyManagerProxy.sendEnvelopeWithStatus(any()))
++                .thenReturn(SEND_ENVELOPE_NO_STATUS);
++
++        Usat.MoSmsControlCommand cmd = mUsatAgent.createMoSmsControlCommand(TARGET_NUMBER,
++                SMSC_DEST_ADDRESS, TelephonyManager.NETWORK_TYPE_LTE, mListener);
++        ArgumentCaptor<Usat.CommandResponse> cmdResponseCaptor =
++                ArgumentCaptor.forClass(Usat.CommandResponse.class);
++
++        mUsatAgent.sendCommand(cmd);
++        processAllMessages();
++
++        verify(mListener).onCommandResponse(cmdResponseCaptor.capture());
++
++        assertEquals(Usat.RESULT_ALLOWED, cmdResponseCaptor.getValue().getResult());
++    }
++
+     @Test
+     @SmallTest
+     public void testSendCommand_regEventDownloadAllowed() {
+@@ -410,6 +450,24 @@ public class UsatAgentTest {
+         assertEquals(cmd, cmdResponse.getCommand());
+     }
+ 
++    private Usat.CommandResponse sendCallControl(String envelopeResponse) {
++        when(mTelephonyManagerProxy.sendEnvelopeWithStatus(any())).thenReturn(envelopeResponse);
++
++        Usat.Listener listener = mock(Usat.Listener.class);
++        Usat.CallControlCommand cmd = mUsatAgent.createCallControlCommand(
++                Usat.CALL_CONTROL_TYPE_MO_CALL, DIALED_STRING,
++                TelephonyManager.NETWORK_TYPE_LTE, Usat.MEDIA_TYPE_VOICE, listener);
++        ArgumentCaptor<Usat.CommandResponse> cmdResponseCaptor =
++                ArgumentCaptor.forClass(Usat.CommandResponse.class);
++
++        mUsatAgent.sendCommand(cmd);
++        processAllMessages();
++
++        verify(listener).onCommandResponse(cmdResponseCaptor.capture());
++        assertEquals(cmd, cmdResponseCaptor.getValue().getCommand());
++        return cmdResponseCaptor.getValue();
++    }
++
+     private void processAllMessages() {
+         while (!mTestableLooper.getLooper().getQueue().isIdle()) {
+             mTestableLooper.processAllMessages();
+-- 
+2.43.0
+

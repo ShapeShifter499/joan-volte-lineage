@@ -60,6 +60,9 @@ javac -J-Xmx4g -encoding UTF-8 -nowarn -proc:none -source 21 -target 21 \
     -d "$OUT/classes" -classpath "$CP" @"$OUT/srcs"
 # The annotation stubs exist only to compile; the platform owns those names.
 rm -rf "$OUT/classes/android/annotation" "$OUT/classes/com/android/internal"
+# USAT call control and MO SMS control decisions (ImsStack 0005, 0006).
+javac -d "$OUT/check" "$HERE/tests/UsatCheck.java"
+java -cp "$OUT/check:$OUT/classes:$ML/android.jar" UsatCheck
 
 # 3. Dex. The framework is library, not program: it is on the device.
 LIBS=()

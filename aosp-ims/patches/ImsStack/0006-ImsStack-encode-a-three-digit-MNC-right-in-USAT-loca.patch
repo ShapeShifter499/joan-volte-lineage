@@ -1,0 +1,94 @@
+From 474aa85abf5f4304897208af24e91bdebb870f98 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 16:30:51 +0000
+Subject: [PATCH] ImsStack: encode a three-digit MNC right in USAT location
+ information
+
+The location information UsatAgent puts in the CALL CONTROL and MO SMS
+CONTROL envelopes starts with MCC and MNC coded as in 3GPP TS 24.008
+10.5.1.3: MCC digit 2 | MCC digit 1, MNC digit 3 | MCC digit 3, MNC
+digit 2 | MNC digit 1. For a three-digit MNC it BCD-packed the digits
+in dialling order instead, so 310-260 went out as '13 20 06' rather
+than '13 00 62' and a USIM applying call control by location saw
+another network. Two-digit MNCs were coded right and still are.
+---
+ .../imsstack/core/agents/UsatAgent.java       | 31 +++++++++++++++----
+ .../imsstack/core/agents/UsatAgentTest.java   | 10 ++++++
+ 2 files changed, 35 insertions(+), 6 deletions(-)
+
+diff --git a/java/src/com/android/imsstack/core/agents/UsatAgent.java b/java/src/com/android/imsstack/core/agents/UsatAgent.java
+index cb2340f..9100f20 100644
+--- a/java/src/com/android/imsstack/core/agents/UsatAgent.java
++++ b/java/src/com/android/imsstack/core/agents/UsatAgent.java
+@@ -827,15 +827,13 @@ public class UsatAgent extends Handler implements UsatInterface {
+             return null;
+         }
+ 
+-        String plmn = ani[0];
++        String plmn = encodePlmn(ani[0], ani[1]);
+ 
+-        if (ani[1].length() == 2) {
+-            plmn += "F";
++        if (plmn == null) {
++            return null;
+         }
+ 
+-        plmn += ani[1];
+-
+-        StringBuilder sb = new StringBuilder(ImsUtils.stringToBcdString(plmn));
++        StringBuilder sb = new StringBuilder(plmn);
+ 
+         int tacOrLacLen = 4; // E-UTRAN / UTRAN / GERAN
+         int cellIdLen = 7; // E-UTRAN / UTRAN
+@@ -1284,6 +1282,27 @@ public class UsatAgent extends Handler implements UsatInterface {
+         }
+     }
+ 
++    /**
++     * Encodes MCC and MNC as the 3 bytes of the location information (3GPP TS 24.008
++     * 10.5.1.3): MCC digit 2 | MCC digit 1, MNC digit 3 | MCC digit 3, MNC digit 2 |
++     * MNC digit 1, where MNC digit 3 is 'F' for a two-digit MNC.
++     *
++     * @param mcc The mobile country code, 3 digits.
++     * @param mnc The mobile network code, 2 or 3 digits.
++     * @return A hexadecimal string of the 3 bytes, or null if the codes are malformed.
++     */
++    static String encodePlmn(String mcc, String mnc) {
++        if (mcc == null || mnc == null || mcc.length() != 3
++                || (mnc.length() != 2 && mnc.length() != 3)) {
++            return null;
++        }
++
++        String digits = mcc + (mnc.length() == 3 ? mnc.substring(2) : "F")
++                + mnc.substring(0, 2);
++
++        return ImsUtils.stringToBcdString(digits);
++    }
++
+     /**
+      * Creates a UsatResult object with the given response from UICC.
+      *
+diff --git a/tests/java/src/com/android/imsstack/core/agents/UsatAgentTest.java b/tests/java/src/com/android/imsstack/core/agents/UsatAgentTest.java
+index c718945..5ad0a5d 100644
+--- a/tests/java/src/com/android/imsstack/core/agents/UsatAgentTest.java
++++ b/tests/java/src/com/android/imsstack/core/agents/UsatAgentTest.java
+@@ -406,6 +406,16 @@ public class UsatAgentTest {
+         assertEquals(Usat.RESULT_ALLOWED, cmdResponseCaptor.getValue().getResult());
+     }
+ 
++    @Test
++    @SmallTest
++    public void testEncodePlmn() {
++        assertEquals("130062", UsatAgent.encodePlmn("310", "260"));
++        assertEquals("13F062", UsatAgent.encodePlmn("310", "26"));
++        assertEquals("54F050", UsatAgent.encodePlmn("450", "05"));
++        assertEquals(null, UsatAgent.encodePlmn("31", "260"));
++        assertEquals(null, UsatAgent.encodePlmn("310", "2600"));
++    }
++
+     @Test
+     @SmallTest
+     public void testSendCommand_regEventDownloadAllowed() {
+-- 
+2.43.0
+
