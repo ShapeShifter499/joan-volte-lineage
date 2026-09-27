@@ -1,0 +1,24 @@
+# Pinned inputs of the AOSP IMS backport. Sourced by tools/*.sh.
+
+# AOSP 17 IMS stack: sources, patched by patches/<project>/*.patch.
+IMSSTACK_URL=https://android.googlesource.com/platform/packages/modules/ImsStack
+IMSSTACK_REF=android-17.0.0_r1
+IMSSTACK_COMMIT=1e3981c23117d75d5ad304b32bb030327ad33eaa
+IMSMEDIA_URL=https://android.googlesource.com/platform/packages/modules/ImsMedia
+IMSMEDIA_REF=android-17.0.0_r1
+IMSMEDIA_COMMIT=0101cb4caf48dbcc3b8fbc6ab3e41137b90b8e67
+
+# Android 15 QPR2, what LineageOS 22.2 is built on (BP1A.250505.005):
+# platform headers come from this branch, libc++ headers from the clang
+# release Soong used for it (build/soong cc/config/global.go).
+PLATFORM_BRANCH=android15-qpr2-release
+CLANG_VERSION=clang-r536225
+
+# The ROM the result must run on: its framework is the Java classpath and
+# its /system/lib64 libraries are what the native code links against.
+LINEAGE_OTA_URL=https://mirrorbits.lineageos.org/full/joan/20260920/lineage-22.2-20260920-nightly-joan-signed.zip
+LINEAGE_OTA_SHA256=f8ef5e51da8cc88fd863bcdb82bb91f9f4c4adb8626b5d8a5dee29593e01b3a6
+
+NDK_VERSION=29.0.14206865
+DEX2JAR_VERSION=2.4.38
+ASM_VERSION=9.10.1

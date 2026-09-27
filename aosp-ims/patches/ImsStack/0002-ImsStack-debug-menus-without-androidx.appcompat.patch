@@ -1,0 +1,246 @@
+From ce4f141c3f157159757957a4035c7fa8c64fb738 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 06:02:09 +0000
+Subject: [PATCH 2/2] ImsStack: debug menus without androidx.appcompat
+
+The debug menus used AppCompatDelegate only for an action bar with an up
+button, and the search dialog used appcompat's SearchView. Use the
+platform ActionBar, android.widget.SearchView and the DeviceDefault
+settings theme instead, and drop the appcompat dependency.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SByt7CZfKR6U4r1VS86tHS
+---
+ java/Android.bp                               |  1 -
+ java/AndroidManifest.xml                      |  8 +-
+ .../searchable_list_preference_dialog.xml     |  8 +-
+ java/res/xml/debug_screen.xml                 |  2 +-
+ .../imsstack/test/menu/AppCompatActivity.java | 90 ++-----------------
+ .../test/menu/SearchableListPreference.java   |  2 +-
+ 6 files changed, 18 insertions(+), 93 deletions(-)
+
+diff --git a/java/Android.bp b/java/Android.bp
+index 60260fa..41a77ee 100644
+--- a/java/Android.bp
++++ b/java/Android.bp
+@@ -48,7 +48,6 @@ android_library {
+     ],
+     static_libs: [
+         "androidx.annotation_annotation",
+-        "androidx.appcompat_appcompat",
+         "ImsMediaFramework",
+         "imsstack_flags_java_lib",
+         "imsstack-prebuilt",
+diff --git a/java/AndroidManifest.xml b/java/AndroidManifest.xml
+index 3e0b6f6..009916b 100644
+--- a/java/AndroidManifest.xml
++++ b/java/AndroidManifest.xml
+@@ -73,7 +73,7 @@
+             android:resizeableActivity="true"
+             android:process="com.android.imsstack"
+             android:exported="true"
+-            android:theme="@style/Theme.AppCompat">
++            android:theme="@android:style/Theme.DeviceDefault.Settings">
+             <intent-filter>
+                 <action android:name="com.android.imsstack.action.IMS_PROVISIONING" />
+                 <action android:name="com.android.imsstack.action.IMS_CONFIG_MENU" />
+@@ -86,7 +86,7 @@
+             android:resizeableActivity="true"
+             android:process="com.android.imsstack"
+             android:exported="true"
+-            android:theme="@style/Theme.AppCompat">
++            android:theme="@android:style/Theme.DeviceDefault.Settings">
+             <intent-filter>
+                 <action android:name="com.android.imsstack.action.CARRIER_CONFIG_MENU" />
+                 <category android:name="android.intent.category.DEFAULT" />
+@@ -98,7 +98,7 @@
+             android:resizeableActivity="true"
+             android:process="com.android.imsstack"
+             android:exported="true"
+-            android:theme="@style/Theme.AppCompat">
++            android:theme="@android:style/Theme.DeviceDefault.Settings">
+             <intent-filter>
+                 <action android:name="com.android.imsstack.action.TEST_CONFIG_MENU" />
+                 <category android:name="android.intent.category.DEFAULT" />
+@@ -111,7 +111,7 @@
+             android:resizeableActivity="true"
+             android:process="com.android.imsstack"
+             android:exported="true"
+-            android:theme="@style/Theme.AppCompat">
++            android:theme="@android:style/Theme.DeviceDefault.Settings">
+             <intent-filter>
+                 <action android:name="com.android.imsstack.action.DEBUG_SCREEN" />
+                 <category android:name="android.intent.category.DEFAULT" />
+diff --git a/java/res/layout/searchable_list_preference_dialog.xml b/java/res/layout/searchable_list_preference_dialog.xml
+index 17dcbfc..fb035bb 100644
+--- a/java/res/layout/searchable_list_preference_dialog.xml
++++ b/java/res/layout/searchable_list_preference_dialog.xml
+@@ -14,14 +14,12 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+ -->
+-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+-    xmlns:app="http://schemas.android.com/apk/res-auto" android:layout_width="match_parent"
++<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent"
+     android:layout_height="match_parent" android:orientation="vertical" android:paddingTop="8dp">
+ 
+-    <androidx.appcompat.widget.SearchView android:id="@+id/search_view"
++    <SearchView android:id="@+id/search_view"
+         android:layout_width="match_parent" android:layout_height="wrap_content"
+-        android:iconifiedByDefault="false" android:queryHint="@string/search_hint"
+-        app:iconifiedByDefault="false" app:queryHint="@string/search_hint" />
++        android:iconifiedByDefault="false" android:queryHint="@string/search_hint" />
+ 
+     <ListView android:id="@android:id/list" android:layout_width="match_parent"
+         android:layout_height="match_parent" android:clipToPadding="false" android:paddingTop="8dp"
+diff --git a/java/res/xml/debug_screen.xml b/java/res/xml/debug_screen.xml
+index 717a959..a2817e7 100644
+--- a/java/res/xml/debug_screen.xml
++++ b/java/res/xml/debug_screen.xml
+@@ -19,7 +19,7 @@
+     android:orientation="vertical"
+     android:layout_width="match_parent"
+     android:layout_height="match_parent"
+-    android:layout_marginTop="?attr/actionBarSize"
++    android:layout_marginTop="?android:attr/actionBarSize"
+     android:paddingTop="20dp">
+     <Button
+         android:id="@+id/button"
+diff --git a/java/src/com/android/imsstack/test/menu/AppCompatActivity.java b/java/src/com/android/imsstack/test/menu/AppCompatActivity.java
+index 5b600c7..c6eb8fa 100644
+--- a/java/src/com/android/imsstack/test/menu/AppCompatActivity.java
++++ b/java/src/com/android/imsstack/test/menu/AppCompatActivity.java
+@@ -15,29 +15,22 @@
+  */
+ package com.android.imsstack.test.menu;
+ 
+-import android.content.res.Configuration;
++import android.app.ActionBar;
+ import android.os.Bundle;
+ import android.preference.PreferenceActivity;
+-import android.view.MenuInflater;
+-import android.view.View;
+-import android.view.ViewGroup;
+-
+-import androidx.annotation.LayoutRes;
+-import androidx.annotation.NonNull;
+-import androidx.appcompat.app.ActionBar;
+-import androidx.appcompat.app.AppCompatDelegate;
+-import androidx.appcompat.widget.Toolbar;
+ 
++/**
++ * Base class of the debug menus.
++ *
++ * Android 15 backport: upstream builds this on androidx.appcompat's AppCompatDelegate, which
++ * only supplies an action bar with an up button. The platform theme already provides one, so
++ * this keeps the class name and API the menus use without the appcompat dependency.
++ */
+ @SuppressWarnings("deprecation")
+ public class AppCompatActivity extends PreferenceActivity {
+-    private AppCompatDelegate mCompatDelegate;
+-
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+-        mCompatDelegate = AppCompatDelegate.create(this, null);
+-        mCompatDelegate.installViewFactory();
+         super.onCreate(savedInstanceState);
+-        mCompatDelegate.onCreate(savedInstanceState);
+         ActionBar actionBar = getSupportActionBar();
+         if (actionBar != null) {
+             actionBar.setDisplayHomeAsUpEnabled(true);
+@@ -45,77 +38,12 @@ public class AppCompatActivity extends PreferenceActivity {
+         }
+     }
+ 
+-    @Override
+-    protected void onPostCreate(Bundle savedInstanceState) {
+-        super.onPostCreate(savedInstanceState);
+-        mCompatDelegate.onPostCreate(savedInstanceState);
+-    }
+-
+-    public void setSupportActionBar(Toolbar toolbar) {
+-        mCompatDelegate.setSupportActionBar(toolbar);
+-    }
+-
+-    @NonNull
+-    @Override
+-    public MenuInflater getMenuInflater() {
+-        return mCompatDelegate.getMenuInflater();
+-    }
+-
+-    @Override
+-    public void setContentView(@LayoutRes int layoutRes) {
+-        mCompatDelegate.setContentView(layoutRes);
+-    }
+-
+-    @Override
+-    public void setContentView(View view) {
+-        mCompatDelegate.setContentView(view);
+-    }
+-
+-    @Override
+-    public void setContentView(View view, ViewGroup.LayoutParams params) {
+-        mCompatDelegate.setContentView(view, params);
+-    }
+-
+-    @Override
+-    public void addContentView(View view, ViewGroup.LayoutParams params) {
+-        mCompatDelegate.addContentView(view, params);
+-    }
+-
+-    @Override
+-    protected void onPostResume() {
+-        super.onPostResume();
+-        mCompatDelegate.onPostResume();
+-    }
+-
+-    @Override
+-    protected void onTitleChanged(CharSequence title, int color) {
+-        super.onTitleChanged(title, color);
+-        mCompatDelegate.setTitle(title);
+-    }
+-
+-    @Override
+-    public void onConfigurationChanged(Configuration newConfig) {
+-        super.onConfigurationChanged(newConfig);
+-        mCompatDelegate.onConfigurationChanged(newConfig);
+-    }
+-
+-    @Override
+-    protected void onDestroy() {
+-        super.onDestroy();
+-        mCompatDelegate.onDestroy();
+-    }
+-
+-    @Override
+-    public void invalidateOptionsMenu() {
+-        mCompatDelegate.invalidateOptionsMenu();
+-    }
+-
+     @Override
+     protected boolean isValidFragment(String fragmentName) {
+         return fragmentName != null;
+     }
+ 
+     protected ActionBar getSupportActionBar() {
+-        return mCompatDelegate.getSupportActionBar();
++        return getActionBar();
+     }
+ }
+diff --git a/java/src/com/android/imsstack/test/menu/SearchableListPreference.java b/java/src/com/android/imsstack/test/menu/SearchableListPreference.java
+index 8516731..a7a9c98 100644
+--- a/java/src/com/android/imsstack/test/menu/SearchableListPreference.java
++++ b/java/src/com/android/imsstack/test/menu/SearchableListPreference.java
+@@ -23,8 +23,8 @@ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.widget.ArrayAdapter;
+ import android.widget.ListView;
++import android.widget.SearchView;
+ 
+-import androidx.appcompat.widget.SearchView;
+ 
+ import com.android.imsstack.R;
+ 
+-- 
+2.43.0
+
