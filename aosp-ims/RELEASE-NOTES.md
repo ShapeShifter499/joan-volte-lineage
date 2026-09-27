@@ -1,9 +1,10 @@
-**Unofficial alpha.** First bench result (US998 on T-Mobile): the migrate
-zip installs and ImsStack registers with IPsec. No call has been made
-with it yet. It is built entirely from source by this repository's
-`aosp-ims` workflow and passes its installer, carrier-config and ROM
-checks. Keep a way back: the `-uninstall` zip, or the official LineageOS
-nightly.
+**Unofficial alpha.** Bench results so far (US998 on T-Mobile): the
+migrate zip installs and ImsStack registers with IPsec. Calls failed on
+the SIM's call control check until this build (see Known limits); a
+completed call has not been confirmed yet. It is built entirely from
+source by this repository's `aosp-ims` workflow and passes its installer,
+carrier-config and ROM checks. Keep a way back: the `-uninstall` zip, or
+the official LineageOS nightly.
 
 ## What this is
 
@@ -17,13 +18,16 @@ replaces joan's IMS stack.
 | IWLAN (`com.google.android.iwlan`) | The IPsec tunnel to the carrier's ePDG, for Wi-Fi calling |
 | QNS (`com.android.telephony.qns`) | Moves IMS between LTE and Wi-Fi |
 
-VoLTE is offered for every carrier. Wi-Fi calling is offered for the 103
-carrier profiles LG shipped VoWiFi on. These include:
+It does VoLTE, Wi-Fi calling, SMS over IMS, video calling (ViLTE), RTT,
+emergency calls over IMS, call forwarding/waiting/barring over Ut/XCAP,
+and conference calls, where the carrier offers them.
 
-- **US:** AT&T, Cricket, T-Mobile, MetroPCS, Verizon.
-- **Canada:** Bell, Rogers, TELUS, Freedom.
-- **Europe:** Deutsche Telekom, O2, Three, Orange.
-- and more.
+VoLTE and Wi-Fi calling are offered for every carrier: Wi-Fi calling
+works where the carrier's ePDG accepts the SIM, and IMS stays on LTE
+elsewhere. Each carrier's IMS settings (SIP, SMS over IMS, Ut, emergency,
+video, RTT, ePDG) come from the carrier data LineageOS ships for Pixels,
+1361 entries for 576 carriers, applied on top of whatever carrier config
+your ROM already has.
 
 ## Which file
 
@@ -62,6 +66,7 @@ The script is attached here, inside the zips, and at
 
 ```
 adb shell pm grant com.android.imsstack android.permission.RECORD_AUDIO
+adb shell pm grant com.android.imsstack android.permission.CAMERA
 adb shell pm grant com.android.imsstack android.permission.READ_PHONE_STATE
 adb shell pm grant com.android.imsstack android.permission.ACCESS_COARSE_LOCATION
 adb shell pm grant com.android.imsstack android.permission.ACCESS_FINE_LOCATION
@@ -98,7 +103,14 @@ Then turn on **VoLTE** (Settings > Network & internet > SIMs), and
   the browser, not in an in-app tab.
 - **US E911 address.** US carriers need an E911 address on the account
   for Wi-Fi calling.
-- **Video calling** is not enabled.
+- **SIM call control.** On a SIM with call control by USIM (T-Mobile's
+  have it), the phone asks the SIM about every call before placing it.
+  joan's RIL does not pass the SIM's answer back (it reports status
+  words 00 00), which failed every call until patch 0005: the call is now
+  placed as dialled. The SIM therefore can't bar or rewrite a call on
+  this phone; a SIM that does answer is still obeyed.
+- **Video calling** is offered where the carrier's config allows it, and
+  has not been tested yet.
 
 ## Building it into LineageOS
 
@@ -111,7 +123,9 @@ change.
 
 If something fails, send:
 
-- `adb logcat -b all -d > log.txt`, taken right after the failure;
+- `adb logcat -b all -d > log.txt`, taken right after the failure (for a
+  failed call, `adb logcat -b all -d | grep -iE "call-control|invokeStartFailed|SIPMSG"`
+  shows the stack's view of it);
 - the output of `adb shell dumpsys telephony.registry`;
 - the output of `adb shell dumpsys package com.android.imsstack`.
 

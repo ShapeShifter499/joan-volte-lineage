@@ -5,9 +5,12 @@ using AOSP's own IMS stack from Android 17. This replaces the joan
 `ImsService` described in `README.md`. Use one or the other, never both:
 a device has one MMTEL `ImsService`.
 
-**Status.** Nothing here has run on a phone yet.
+**Status.** Alpha.
 - The flashable zip and the repacked ROM (`aosp-ims/README.md`) are built
-  from the same patched sources as this and pass the installer tests.
+  from the same patched sources as this and pass the installer tests. On
+  a US998 with a T-Mobile SIM the zip registers with IPsec; calls failed
+  on the SIM's call control until ImsStack 0005 and have not been
+  re-tested yet.
 - The source-tree integration below has not been built in a LineageOS
   tree: a full tree does not fit in the environment this was written in.
   It was checked piece by piece against the Android 15 sources (see
@@ -40,6 +43,8 @@ are the backport, the same ones the zip is built from:
 | ImsStack 0002 | The debug menus without androidx.appcompat |
 | ImsStack 0003 | Hands call audio to Android (`AUDIO_HANDLER_ANDROID`), so Telecom uses `MODE_IN_COMMUNICATION`, the mode ImsMedia's audio path needs on this HAL |
 | ImsStack 0004 | Survives a refused outgoing-emergency-call listener (the zip lacks the signature permission) by falling back to the call state and `TelecomManager#isInEmergencyCall`. A platform-signed tree build holds the permission, registers the original listener and never uses the fallback |
+| ImsStack 0005 | USAT call control and MO SMS control with no answer from the SIM: joan's RIL completes the envelope with status words 00 00 and no data, which ImsStack took as a refusal, failing every call on a SIM with call control by USIM. With no answer the call is set up as dialled; a real answer from the SIM still counts. Needed in a tree build too: it is the RIL, not the signing, that drops the answer |
+| ImsStack 0006 | Codes a three-digit MNC in those envelopes' location information as 3GPP TS 24.008 says |
 | ImsMedia 0001 | Lets ImsMedia run inside the caller's own package (the zip's single APK). A separate `ImsMediaService`, as here, is bound as before |
 
 ## Steps
@@ -53,39 +58,47 @@ From the top of a LineageOS 22.2 tree that already builds joan:
    repo sync packages/modules/ImsMedia packages/modules/ImsStack
    ```
 
-2. **Apply the backport patches.** Each one becomes a commit in its
-   project. Run it again after any `repo sync` that resets them.
+2. **Apply the patches and the device change.** One script does all of
+   it; each patch becomes a commit in its project, so `repo status` shows
+   them. Run it again after any `repo sync` that resets them: patches
+   already applied are skipped.
 
    ```
    <this repo>/upstream/aosp-ims/apply-patches.sh .
    ```
 
-3. **Apply the device change** to `device/lge/joan-common`:
+   It applies, in order:
+   - the backport patches (above) to `packages/modules/ImsStack` and
+     `packages/modules/ImsMedia`;
+   - `upstream/aosp-ims/device/0001-joan-common-Add-the-AOSP-IMS-stack.patch`
+     to `device/lge/joan-common` (made against `lineage-22.2` at 47c4939,
+     2025-02-11);
+   - the per-carrier IMS config (below), spliced into joan-common's
+     CarrierConfig `vendor.xml` as a commit of its own. It is 7 MB of
+     generated XML, so it is not in the device patch; `--no-carrier-data`
+     leaves it out.
 
-   ```
-   git -C device/lge/joan-common am <this repo>/upstream/aosp-ims/device/0001-joan-common-Add-the-AOSP-IMS-stack.patch
-   ```
-
-   Made against `lineage-22.2` at 47c4939 (2025-02-11). It:
+   The device patch:
    - adds `ImsStack`, `ImsMediaService`, `Iwlan` and
      `QualifiedNetworksService` to `PRODUCT_PACKAGES`, and the
      `android.hardware.telephony.ims` feature;
-   - sets the framework overlay: `config_device_volte_available` and
-     `config_device_wfc_ims_available` true, and the WLAN data, WLAN
-     network and qualified networks services to AOSP's IWLAN and QNS in
-     place of `vendor.qti.iwlan` (Qualcomm's needs modem IMS, which this
-     modem does not have);
-   - adds a Telephony overlay: `config_ims_mmtel_package` =
-     `com.android.imsstack`;
+   - sets the framework overlay: `config_device_volte_available`,
+     `config_device_wfc_ims_available` and `config_device_vt_available`
+     true, and the WLAN data, WLAN network and qualified networks services
+     to AOSP's IWLAN and QNS in place of `vendor.qti.iwlan` (Qualcomm's
+     needs modem IMS, which this modem does not have);
+   - adds a Telephony overlay: `config_ims_mmtel_package` and
+     `config_ims_rcs_package` = `com.android.imsstack`, and
+     `config_support_rtt` true;
    - adds the carrier blocks to CarrierConfig's `vendor.xml` (below);
    - adds `system_ext/etc/default-permissions/default-permissions-ims.xml`
      (below).
 
-4. **Build and flash** as usual (`breakfast joan`, `brunch joan`). On a
+3. **Build and flash** as usual (`breakfast joan`, `brunch joan`). On a
    phone that had the flashable zip, flash the zip's `-uninstall` first
    (or wipe), so the zip's copies in `/system` do not shadow the build's.
 
-5. **Check** after boot:
+4. **Check** after boot:
 
    ```
    adb shell dumpsys telephony.registry | grep -i ims
@@ -109,37 +122,45 @@ the zip's adb steps.
 
 ## Carrier configuration
 
-LineageOS ships no IMS carrier config for most carriers joan users are
-on, so the device patch adds it to
-`overlay/packages/apps/CarrierConfig/res/xml/vendor.xml`, which
-CarrierConfig applies after each carrier's own config:
+LineageOS ships IMS carrier config for Pixels, not for joan. The build
+gets it in `overlay/packages/apps/CarrierConfig/res/xml/vendor.xml`,
+which CarrierConfig applies after each carrier's own config, in one
+region between `aosp-ims-begin`/`aosp-ims-end` markers:
 
-- VoLTE offered for every SIM, with the VoLTE toggle visible and
-  editable. It is on by default (`enhanced_4g_lte_on_by_default_bool`);
-  the toggle is the opt-out.
-- Wi-Fi calling offered for the carriers LG's own firmware shipped it on
-  (103 of LG's 164 profiles), matched by Android carrier id and by PLMN.
-- The ePDG address for T-Mobile (and MetroPCS), AT&T and Verizon, whose
-  ePDGs are not at the 3GPP default name.
+1. ePDG addresses for T-Mobile (and its MVNOs such as MetroPCS), AT&T
+   and Verizon, whose ePDGs are not at the 3GPP default name (from the
+   device patch).
+2. The per-carrier IMS config LineageOS ships for Pixels: the Pixel
+   CarrierSettings converted with LineageOS's own
+   `carriersettings-extractor`, IMS keys only, 1361 blocks for 576
+   carriers (`aosp-ims/carrier/lineage-pixel-ims.xml`, added by
+   `apply-patches.sh`). It comes after the ePDG blocks, so a carrier's
+   own address wins. Keys that would pick another ImsService, require
+   provisioning, lock the VoLTE toggle or turn Wi-Fi calling on by
+   default are left out (`aosp-ims/tools/import-carrier-settings.py`).
+3. Last, for every SIM: VoLTE and Wi-Fi calling offered, and the VoLTE
+   toggle visible, editable and able to turn IMS off (from the device
+   patch).
 
 These are the same rules the flashable zip applies at run time
-(`CarrierImsGate`), generated from the same data:
+(`CarrierImsGate`), generated from the same data. To regenerate the
+region by hand:
 
 ```
 python3 aosp-ims/tools/make-carrier-config.py \
     ims-service/assets/carrier-id-map.json \
     ims-service/assets/carrier-plmn-map.json \
-    aosp-ims/zip/assets/wfc-profiles.json \
     aosp-ims/zip/java/com/android/imsstack/joan/CarrierImsGate.java \
     <tree>/packages/providers/TelephonyProvider/assets/latest_carrier_id/carrier_list.textpb \
+    --imported aosp-ims/carrier/lineage-pixel-ims.xml \
     --splice <tree>/device/lge/joan-common/overlay/packages/apps/CarrierConfig/res/xml/vendor.xml
 ```
 
-`--splice` replaces the block between the `aosp-ims-begin`/`aosp-ims-end`
-markers, so it can be re-run when the data changes.
-`aosp-ims/tests/check-carrier-config.py` (same five inputs) checks the
-result against the gate's rules for every carrier id and PLMN Android
-knows: 2866 SIM identities, 822 of them with Wi-Fi calling, no
+`--splice` replaces the region, so it can be re-run when the data
+changes; without `--imported` it writes only the device patch's blocks.
+`aosp-ims/tests/check-carrier-config.py` (the same inputs) checks the
+merged result for every carrier id and PLMN Android knows: 2866 SIM
+identities, 477 of them with an ePDG address from the imported data, no
 differences. Given `--patch` and the device patch, it also checks that
 the patch carries exactly the generated blocks; CI runs both.
 

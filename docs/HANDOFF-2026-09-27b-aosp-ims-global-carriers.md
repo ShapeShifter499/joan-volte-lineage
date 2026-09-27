@@ -1,5 +1,9 @@
 # Handoff — 2026-09-27 (b) — AOSP IMS: open the carriers up, then release alpha1
 
+> **Superseded** by `HANDOFF-2026-09-27c-aosp-ims-usat-and-bench.md`:
+> items 1 and 2 below are done (run-time assets rather than the RRO
+> proposed here).
+
 Branch `claude/aosp-ims-a15-backport`. Read `docs/HANDOFF-2026-09-27-aosp-ims-backport.md`
 first (what exists and why). This file is what the user asked for after
 it, and exactly where the work stopped.

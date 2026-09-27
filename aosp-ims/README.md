@@ -16,10 +16,22 @@ Qualcomm's IMS core (`docs/v30-modem-and-qualcomm-ims-2026-09-27.md`).
 AOSP's stack runs on the application processor and needs the modem only
 for the LTE bearer and SIM authentication, which the V30 has.
 
-> **Alpha.** First bench result (US998, T-Mobile): the migrate zip installs
-> and ImsStack registers with IPsec, once patch 0004 stopped a startup
-> crash. No call has been made with it yet. Keep a way back: the
-> `-uninstall` zip, or the official nightly.
+> **Alpha.** Bench results so far (US998, T-Mobile): the migrate zip
+> installs and ImsStack registers with IPsec, once patch 0004 stopped a
+> startup crash. The first calls then failed before any INVITE left the
+> phone: the SIM's call control answer never reached ImsStack (joan's RIL
+> returns status words 00 00), and 0005 now sets such a call up as
+> dialled. No call has completed yet. Keep a way back: the `-uninstall`
+> zip, or the official nightly.
+
+What the stack does, all of it upstream AOSP code: VoLTE (voice over
+LTE, HD voice codecs), Wi-Fi calling (VoWiFi over IWLAN, with QNS moving
+calls between LTE and Wi-Fi), SMS over IMS, video calling (ViLTE, with
+the camera), RTT (real-time text), emergency calls over IMS, supplementary
+services over Ut/XCAP (call forwarding, waiting, barring), conference
+calls, USAT call control and MO SMS control by the SIM, and RCS presence
+(UCE). Each works where the carrier offers it; see below for how the
+carrier's settings are chosen.
 
 ## Three ways to get it
 
@@ -63,45 +75,58 @@ carries the stack. With USB debugging on, once, after the first boot:
 sh grant-permissions.sh        # in the zip, and at aosp-ims/zip/grant-permissions.sh
 ```
 
-It runs `pm grant` for ImsStack's microphone, phone and location
-permissions, IWLAN's phone and location, and QNS's phone state; and
-`appops set com.google.android.iwlan MANAGE_IPSEC_TUNNELS allow`, which
-Wi-Fi calling needs to build its tunnel. A source build needs none of
-this.
+It runs `pm grant` for ImsStack's microphone, camera (video calls),
+phone and location permissions, IWLAN's phone and location, and QNS's
+phone state; and `appops set com.google.android.iwlan MANAGE_IPSEC_TUNNELS
+allow`, which Wi-Fi calling needs to build its tunnel. Reboot afterwards.
+A source build needs none of this.
 
 ## What it does per carrier
 
-LineageOS ships no IMS carrier config for most carriers. The zip and the
-ROM apply it at run time (`zip/java/com/android/imsstack/joan/CarrierImsGate.java`,
-ported from joan's gate); a source build ships the same rules as
-CarrierConfig `vendor.xml` blocks (`tools/make-carrier-config.py`).
-`tests/check-carrier-config.py` checks the two agree for all 2866 SIM
-identities Android's carrier database knows.
+LineageOS ships IMS carrier config for Pixels, not for joan. This stack
+brings it along, for every SIM:
 
-- **VoLTE**: offered for every carrier, with the toggle visible and
-  editable (Settings > Network & internet > SIMs > VoLTE).
-- **Wi-Fi calling**: offered for the carriers LG shipped VoWiFi on, 103 of
-  its 164 profiles (`zip/assets/wfc-profiles.json`, from LG's Ims6
-  configs; `tools/make-wfc-profiles.py`). A SIM is matched to an LG
-  profile by Android carrier id, then PLMN (joan's maps). Among them:
-  AT&T, Cricket, T-Mobile, MetroPCS, Verizon, Bell, Rogers, TELUS,
-  Freedom, Deutsche Telekom, O2, Three, Orange.
-- **ePDG**: set for T-Mobile and MetroPCS, AT&T and Verizon, whose ePDGs
-  are not at the 3GPP default name. Everyone else uses the default name
-  derived from the SIM.
+- **VoLTE**: offered for every carrier, with the toggle visible, editable
+  and able to turn IMS off (Settings > Network & internet > SIMs > VoLTE).
+- **Wi-Fi calling**: offered for every carrier too. It works where the
+  carrier's ePDG accepts the SIM; elsewhere the tunnel is not built and
+  IMS stays on LTE.
+- **Per-carrier IMS settings** from LineageOS itself: the IMS part of the
+  Pixel carrier settings LineageOS converts for its Pixel builds
+  (`lineage/scripts/carriersettings-extractor`), 1361 blocks for 576
+  carriers: SIP and registration timers, SMS over IMS, Ut/XCAP, emergency,
+  video and RTT, ePDG and QNS settings. Imported by
+  `tools/import-carrier-settings.py` into `carrier/lineage-pixel-ims.xml`
+  (sources pinned in `upstream.lock`), filtered to the keys the AOSP stack
+  reads; never the keys that would pick another ImsService, require
+  provisioning, lock the VoLTE toggle or turn Wi-Fi calling on by default.
+- **ePDG**: the carrier's own address from that data where it has one;
+  for T-Mobile, MetroPCS, AT&T and Verizon otherwise, whose ePDGs are not
+  at the 3GPP default name, joan's table. Everyone else uses the default
+  name derived from the SIM.
+
+Where it lives: the zip and the ROM apply it at run time, on top of
+whatever carrier config the ROM ships
+(`zip/java/com/android/imsstack/joan/CarrierImsGate.java`, ported from
+joan's gate, with the imported data as one asset per PLMN), so a
+LineageOS-based ROM keeps its own. A source build carries the same as
+CarrierConfig `vendor.xml` blocks (`tools/make-carrier-config.py`,
+spliced in by `upstream/aosp-ims/apply-patches.sh`).
+`tests/check-carrier-config.py` checks the result for all 2866 SIM
+identities Android's carrier database knows.
 
 ## Status (2026-09-27)
 
 | Step | State |
 |---|---|
-| ImsStack + ImsMedia Java, against LineageOS 22.2's own framework | done: 4 ImsStack patches, 1 ImsMedia |
+| ImsStack + ImsMedia Java, against LineageOS 22.2's own framework | done: 6 ImsStack patches, 1 ImsMedia |
 | `libimsstack.so`, `libimsmedia.so`, linked against the ROM's libraries | done |
 | IWLAN + QNS (Android 17) for the zip | done: 1 patch each |
 | Single-APK packaging, overlays, permission files | done |
 | Flashable zips (fresh, migrate, uninstall) | done; 164 end-to-end installer checks pass |
 | Repacked LineageOS 22.2 ROM | done; `tests/check-rom.sh` passes |
 | Source-tree integration (`upstream/AOSP-IMS.md`) | written and checked piece by piece; not yet built in a tree |
-| **Tested on a phone** | US998 on T-Mobile: the migrate zip installs and ImsStack registers (IPsec sec-agree, reg-event) once 0004 stops the startup crash. Calls not yet tested |
+| **Tested on a phone** | US998 on T-Mobile: the migrate zip installs and ImsStack registers (IPsec sec-agree, reg-event) once 0004 stops the startup crash. Calls failed on USAT call control until 0005; not yet re-tested |
 
 ## What the backport changes
 
@@ -114,6 +139,8 @@ pinned in `upstream.lock`.
 | ImsStack 0002 | Debug menus without androidx.appcompat |
 | ImsStack 0003 | Hands call audio to Android (`AUDIO_HANDLER_ANDROID`), so Telecom puts the call in `MODE_IN_COMMUNICATION`, the mode ImsMedia's audio path needs on this HAL |
 | ImsStack 0004 | Emergency call tracking without `READ_ACTIVE_EMERGENCY_SESSION` (signature-only). Without the platform key the listener is refused, which crash-looped the stack on a US998; ImsStack now falls back to the call state plus `TelecomManager#isInEmergencyCall` (a privileged permission the zip holds). Platform-signed builds keep the original listener |
+| ImsStack 0005 | USAT call control with no answer from the SIM. joan's RIL completes the CALL CONTROL envelope with status words 00 00 and no data, which no UICC sends; ImsStack took it as a refusal and failed every MO call on a SIM with call control by USIM (T-Mobile's). With no answer there is no verdict: the call is set up as dialled, and an SMS under MO SMS control sent as is. A real answer from the SIM (busy, an error, or result 01 "not allowed") still blocks |
+| ImsStack 0006 | The location information in those envelopes coded a three-digit MNC in dialling order (310-260 as `13 20 06`); it is now coded as 3GPP TS 24.008 says (`13 00 62`) |
 | ImsMedia 0001 | `ImsMediaManager` binds the ImsMedia service in its own package when that package has one (the zip's single APK) |
 | Iwlan 0001 | No physical-network reporting in `DataCallResponse` (Android 16 API) |
 | QNS 0001 | Wi-Fi calling activation without androidx: the activity is a plain `Activity`, and carrier portals open in the browser |
