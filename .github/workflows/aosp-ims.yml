@@ -2,9 +2,10 @@
 # the APKs, the three flashable zips and their end-to-end installer tests,
 # and the repacked LineageOS 22.2 ROM with its checks.
 #
-# When aosp-ims/RELEASE names a tag with no release yet, a green build is
-# published as a GitHub prerelease under that tag. To release, change
-# RELEASE; any other push is a build check. RELEASE holds four lines: the
+# Publishing is explicit: a push that changes aosp-ims/RELEASE (or a manual
+# run with "publish" ticked) publishes a green build as a GitHub
+# prerelease under the tag RELEASE names, unless that release exists
+# already. Every other run is a build check. RELEASE holds four lines: the
 # tag, the package version, the ROM's version suffix, the release title.
 # Every input is pinned in aosp-ims/upstream.lock.
 name: aosp-ims
@@ -22,6 +23,11 @@ on:
       - 'META-INF/**'
       - '.github/workflows/aosp-ims.yml'
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the release named in aosp-ims/RELEASE if it does not exist yet
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -39,7 +45,21 @@ jobs:
 
       - name: Release metadata
         id: meta
+        env:
+          BEFORE: ${{ github.event.before }}
+          PUBLISH_INPUT: ${{ inputs.publish }}
         run: |
+          publish=false
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            publish=${PUBLISH_INPUT:-false}
+          elif [ -z "$BEFORE" ] || [ -z "${BEFORE//0/}" ]; then
+            publish=true   # the first push of a branch
+          elif git fetch -q --depth=1 origin "$BEFORE" \
+              && ! git diff --quiet "$BEFORE" HEAD -- aosp-ims/RELEASE; then
+            publish=true
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "publish: $publish"
           for i in 1 2 3 4; do
             v=$(sed -n "${i}p" aosp-ims/RELEASE)
             [ -n "$v" ] || { echo "aosp-ims/RELEASE line $i is empty"; exit 1; }
@@ -120,6 +140,7 @@ jobs:
           sha256sum zip/*.zip rom/*.zip grant-permissions.sh | sed 's#  [a-z]*/#  #' | tee SHA256SUMS
 
       - name: Publish the prerelease named in aosp-ims/RELEASE
+        if: steps.meta.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
