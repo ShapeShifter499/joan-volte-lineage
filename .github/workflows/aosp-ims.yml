@@ -1,0 +1,136 @@
+# The AOSP IMS backport (aosp-ims/), built from source on a clean machine:
+# the APKs, the three flashable zips and their end-to-end installer tests,
+# and the repacked LineageOS 22.2 ROM with its checks.
+#
+# When aosp-ims/RELEASE names a tag with no release yet, a green build is
+# published as a GitHub prerelease under that tag. To release, change
+# RELEASE; any other push is a build check. RELEASE holds four lines: the
+# tag, the package version, the ROM's version suffix, the release title.
+# Every input is pinned in aosp-ims/upstream.lock.
+name: aosp-ims
+
+on:
+  push:
+    paths:
+      - 'aosp-ims/**'
+      - '!aosp-ims/**/*.md'
+      - 'ims-service/assets/**'
+      - 'scripts/**'
+      - 'permissions/**'
+      - 'apn/**'
+      - 'upstream/aosp-ims/**'
+      - 'META-INF/**'
+      - '.github/workflows/aosp-ims.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: aosp-ims-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Release metadata
+        id: meta
+        run: |
+          for i in 1 2 3 4; do
+            v=$(sed -n "${i}p" aosp-ims/RELEASE)
+            [ -n "$v" ] || { echo "aosp-ims/RELEASE line $i is empty"; exit 1; }
+          done
+          {
+            echo "tag=$(sed -n 1p aosp-ims/RELEASE)"
+            echo "version=$(sed -n 2p aosp-ims/RELEASE)"
+            echo "romtag=$(sed -n 3p aosp-ims/RELEASE)"
+            echo "title=$(sed -n 4p aosp-ims/RELEASE)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+              /usr/local/share/boost /usr/local/lib/node_modules
+          W=$HOME/aosp-work
+          if [ -d /mnt ] && [ "$(df --output=avail -BG /mnt | tail -1 | tr -dc 0-9)" -gt 30 ]; then
+            W=/mnt/aosp-work
+          fi
+          sudo mkdir -p "$W" && sudo chown "$USER" "$W"
+          echo "WORK=$W" >> "$GITHUB_ENV"
+          df -h / /mnt || true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Host tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q brotli e2fsprogs ninja-build mksh busybox-static toybox zip unzip
+
+      - name: Android SDK and NDK
+        run: |
+          SM=$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager
+          yes | "$SM" --licenses >/dev/null || true
+          "$SM" --install "ndk;$(. aosp-ims/upstream.lock && echo "$NDK_VERSION")" \
+              "build-tools;36.1.0" "platforms;android-35" >/dev/null
+          ls "$ANDROID_HOME/ndk" "$ANDROID_HOME/build-tools"
+
+      - name: Build (sources, Java, native, APKs, zips)
+        env:
+          VERSION_NAME: ${{ steps.meta.outputs.version }}
+        run: aosp-ims/tools/build-all.sh
+
+      - name: Carrier config matches the gate
+        run: |
+          TP=$RUNNER_TEMP/TelephonyProvider
+          git clone -q --filter=blob:none --no-checkout --depth 1 -b android15-qpr2-release \
+              https://android.googlesource.com/platform/packages/providers/TelephonyProvider "$TP"
+          git -C "$TP" sparse-checkout set --no-cone /assets/latest_carrier_id/carrier_list.textpb
+          git -C "$TP" checkout -q
+          python3 aosp-ims/tests/check-carrier-config.py \
+              ims-service/assets/carrier-id-map.json ims-service/assets/carrier-plmn-map.json \
+              aosp-ims/zip/assets/wfc-profiles.json \
+              aosp-ims/zip/java/com/android/imsstack/joan/CarrierImsGate.java \
+              "$TP/assets/latest_carrier_id/carrier_list.textpb" \
+              --patch upstream/aosp-ims/device/0001-joan-common-Add-the-AOSP-IMS-stack.patch
+
+      - name: Installer end-to-end tests
+        run: |
+          sudo env "PATH=$PATH" aosp-ims/tests/run-e2e-install.sh | tee "$RUNNER_TEMP/e2e.log"
+          grep -q 'all passed' "$RUNNER_TEMP/e2e.log"
+
+      - name: Repack the LineageOS ROM
+        env:
+          ROM_TAG: ${{ steps.meta.outputs.romtag }}
+        run: |
+          sudo env "PATH=$PATH" "WORK=$WORK" "ROM_TAG=$ROM_TAG" aosp-ims/tools/repack-rom.sh
+          sudo chown -R "$USER" "$WORK/out"
+          TMPDIR=$WORK aosp-ims/tests/check-rom.sh "$WORK"/out/rom/*.zip "$WORK/out/apk"
+
+      - name: Checksums
+        run: |
+          cd "$WORK/out"
+          cp "$GITHUB_WORKSPACE/aosp-ims/zip/grant-permissions.sh" .
+          sha256sum zip/*.zip rom/*.zip grant-permissions.sh | sed 's#  [a-z]*/#  #' | tee SHA256SUMS
+
+      - name: Publish the prerelease named in aosp-ims/RELEASE
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          TITLE: ${{ steps.meta.outputs.title }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; this run was a build check."
+            exit 0
+          fi
+          cd "$WORK/out"
+          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "$TITLE" \
+              --notes-file "$GITHUB_WORKSPACE/aosp-ims/RELEASE-NOTES.md" \
+              rom/*.zip zip/*.zip grant-permissions.sh SHA256SUMS
