@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- ImsStack is the device's ImsService for calls, SMS and video (MMTEL). -->
     <string name="config_ims_mmtel_package" translatable="false">com.android.imsstack</string>
+    <!-- ... and for RCS capability exchange (presence, SIP OPTIONS), which
+         ImsStack's RcsFeature provides. -->
+    <string name="config_ims_rcs_package" translatable="false">com.android.imsstack</string>
 </resources>

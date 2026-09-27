@@ -17,6 +17,16 @@ QNS_COMMIT=f1500926b882a189c7c5772368835d5de700b34f
 # Libraries QNS and IWLAN link statically (sparse checkouts at the same tag).
 LIBS_REF=android-17.0.0_r1
 
+# Where carrier/lineage-pixel-ims.xml comes from (tools/import-carrier-settings.py):
+# the Pixel CarrierSettings LineageOS ships for Pixels, converted with its own
+# carriersettings-extractor. Only needed to regenerate that file.
+CARRIERSETTINGS_URL=https://github.com/TheMuppets/proprietary_vendor_google_husky
+CARRIERSETTINGS_REF=lineage-24.0
+CARRIERSETTINGS_COMMIT=7085ddc01630fdfed802c5900db1b1b6a42cd90c
+CARRIERSETTINGS_PATH=proprietary/product/etc/CarrierSettings
+LINEAGE_SCRIPTS_URL=https://github.com/LineageOS/scripts
+LINEAGE_SCRIPTS_COMMIT=e81615b64084478eae6af876908e77371bd08660
+
 # Android 15 QPR2, what LineageOS 22.2 is built on (BP1A.250505.005):
 # platform headers come from this branch, libc++ headers from the clang
 # release Soong used for it (build/soong cc/config/global.go).

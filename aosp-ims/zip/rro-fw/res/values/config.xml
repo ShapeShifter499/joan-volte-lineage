@@ -4,19 +4,22 @@
     <bool name="config_device_volte_available">true</bool>
 
     <!-- Wi-Fi calling: the device can carry IMS over an ePDG tunnel. The
-         carrier still has to allow it (carrier_wfc_ims_available_bool),
-         which CarrierImsGate does only for carriers LG shipped VoWiFi on. -->
+         carrier config offers it for every SIM (CarrierImsGate, at run
+         time). -->
     <bool name="config_device_wfc_ims_available">true</bool>
+
+    <!-- Video calling (ViLTE): ImsMedia's video path uses the public camera,
+         codec and window NDK APIs. Offered where the carrier's config has
+         carrier_vt_available_bool. -->
+    <bool name="config_device_vt_available">true</bool>
 
     <!-- AOSP IWLAN provides the WLAN data and network services: the IKEv2
          tunnel to the carrier's ePDG. -->
     <string name="config_wlan_data_service_package" translatable="false">com.google.android.iwlan</string>
     <string name="config_wlan_network_service_package" translatable="false">com.google.android.iwlan</string>
 
-    <!-- AOSP QNS decides when IMS moves between LTE and Wi-Fi. Empty (the
-         ROM's value) leaves the data stack in legacy mode, where IMS never
-         leaves cellular. -->
+    <!-- AOSP QNS decides when IMS moves between LTE and Wi-Fi, in place of
+         the device tree's vendor.qti.iwlan, which needs a Qualcomm IMS core
+         this modem does not have. -->
     <string name="config_qualified_networks_service_package" translatable="false">com.android.telephony.qns</string>
-
-    <!-- Video calling stays off: not wired or tested on joan. -->
 </resources>

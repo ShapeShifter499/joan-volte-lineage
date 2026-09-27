@@ -98,6 +98,10 @@ if [ -n "$APK" ]; then
         debugfs -R "dump /system/priv-app/$a/$a.apk $T/$a.apk" "$T/system.img" >/dev/null 2>&1
         cmp -s "$T/$a.apk" "$APK/$a.apk" && ok "$a.apk is the one built" || bad "$a.apk differs from $APK"
     done
+    for o in ImsStackPhoneOverlay ImsStackFrameworkOverlay; do
+        debugfs -R "dump /overlay/$o.apk $T/$o.apk" "$T/product.img" >/dev/null 2>&1
+        cmp -s "$T/$o.apk" "$APK/$o.apk" && ok "$o.apk is the one built" || bad "$o.apk differs from $APK"
+    done
 fi
 [ -s "$T/META-INF/com/google/android/update-binary" ] && ok "updater present" || bad "no update-binary"
 if unzip -Z1 "$ZIP" | grep -qE '^META-INF/(MANIFEST\.MF|CERT\.)'; then

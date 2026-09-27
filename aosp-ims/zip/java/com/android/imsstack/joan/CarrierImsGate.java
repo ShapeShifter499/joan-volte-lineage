@@ -19,33 +19,45 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.PersistableBundle;
 import android.telephony.CarrierConfigManager;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.util.Log;
+import android.util.Xml;
+import java.io.FileNotFoundException;
 import java.io.InputStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
-import org.json.JSONArray;
+import java.util.regex.Pattern;
 import org.json.JSONObject;
+import org.xmlpull.v1.XmlPullParser;
 
 /*
  * Ported from joan's org.joan.ims.JoanVolteCarrierGate for the AOSP stack,
  * which has no equivalent: upstream expects the ROM to ship carrier config
  * for its carriers, and LineageOS on joan ships none for most of them.
  *
- * Wi-Fi calling is added on top, more narrowly than VoLTE: it is admitted
- * only for carriers whose LG profile shipped VoWiFi (assets/joan/
- * wfc-profiles.json, from LG's Ims6 configs), because a toggle for a carrier
- * without an ePDG would only fail. A SIM is resolved to an LG profile the
- * way joan does, by Android carrier id and then PLMN (joan's maps). For the
- * three US carriers whose ePDG is not the 3GPP default name, the address
- * is supplied too. Nothing is overridden that the ROM already sets.
+ * Wi-Fi calling is offered for every SIM too, as VoLTE is. Where the
+ * carrier runs an ePDG under the 3GPP default name, or one this build knows
+ * (below, and the imported per-carrier data), it works; elsewhere the
+ * tunnel is simply not built and IMS stays on LTE. The
+ * VoLTE toggle is always left visible, editable and able to turn IMS off.
+ *
+ * It also applies the per-carrier IMS config LineageOS converts from Pixel
+ * carrier settings (SIP, SMS over IMS, Ut, emergency, video, RTT, ePDG,
+ * QNS), from assets/joan/carrier/<mcc><mnc>.xml: the blocks matching this
+ * SIM, in order, with CarrierConfig's own filter rules. At run time and on
+ * top of whatever the ROM ships, so a LineageOS-based ROM keeps its own
+ * carrier config; a source build puts the same blocks in its vendor.xml.
+ *
+ * A SIM is resolved to an LG profile the way joan does, by Android carrier
+ * id and then PLMN (joan's maps), for the ePDG table. Nothing is
+ * overridden that the config already sets, except by the imported data.
  */
 public final class CarrierImsGate {
     private static final String TAG = "ImsStackGate";
@@ -62,25 +74,30 @@ public final class CarrierImsGate {
     private static final int EPDG_ADDRESS_STATIC = 0;
     private static final int EPDG_ADDRESS_PLMN = 1;
     /**
-     * ePDGs that are not epdg.epc.mncXXX.mccYYY.pub.3gppnetwork.org, by LG
-     * operator. MetroPCS has its own LG profile but is T-Mobile's network
-     * (every PLMN in its carrier id is T-Mobile's), so it uses T-Mobile's
-     * ePDG. aosp-ims/tools/make-carrier-config.py reads this table.
+     * ePDG addresses by LG operator, for SIMs whose own PLMN would not name
+     * the operator's ePDG: AT&T and Verizon use their own names, and an MVNO
+     * on T-Mobile (MetroPCS is T-Mobile's network under its own LG profile)
+     * would derive one from its own PLMN. The values are the ones Google's
+     * carrier data gives these carriers. aosp-ims/tools/make-carrier-config.py
+     * reads this table.
      */
     private static final Map<String, String> EPDG_BY_OPERATOR = Map.of(
-            "TMO.US", "ss.epdg.epc.mnc260.mcc310.pub.3gppnetwork.org",
-            "MPCS.US", "ss.epdg.epc.mnc260.mcc310.pub.3gppnetwork.org",
+            "TMO.US", "epdg.epc.mnc260.mcc310.pub.3gppnetwork.org",
+            "MPCS.US", "epdg.epc.mnc260.mcc310.pub.3gppnetwork.org",
             "ATT.US", "epdg.epc.att.net",
             "VZW.US", "wo.vzwwo.com");
 
     private static volatile Map<String, String> sProfileByCarrierId;
     private static volatile Map<String, String> sProfileByPlmn;
-    private static volatile Set<String> sWfcProfiles;
+
+    /** Our marker in the override: the PLMN whose imported config it carries. */
+    static final String KEY_IMPORTED = "aosp_ims_imported_plmn_string";
 
     // Not exposed in the public SDK jar - string literals by design.
     private static final String KEY_APPLIED = "carrier_config_applied_bool";
     private static final String KEY_HIDE_4G = "hide_enhanced_4g_lte_bool";
     private static final String KEY_EDITABLE_4G = "editable_enhanced_4g_lte_bool";
+    private static final String KEY_ALLOW_TURNOFF_IMS = "carrier_allow_turnoff_ims_bool";
 
     /** Decision of the pure gate, host-testable. */
     static final int WAIT_CONFIG = 0;
@@ -97,7 +114,19 @@ public final class CarrierImsGate {
     /** Set once the CARRIER_CONFIG_CHANGED watch is live. */
     private static volatile boolean sWatching = false;
 
+    /** The gate's own thread: reading a carrier asset must not hold up the main one. */
+    private static Handler sHandler;
+
     private CarrierImsGate() {}
+
+    private static synchronized Handler handler() {
+        if (sHandler == null) {
+            HandlerThread t = new HandlerThread("ImsStackGate");
+            t.start();
+            sHandler = new Handler(t.getLooper());
+        }
+        return sHandler;
+    }
 
     /**
      * Re-apply the admit whenever Telephony reloads carrier config.
@@ -133,17 +162,19 @@ public final class CarrierImsGate {
                     if (!SubscriptionManager.isValidSubscriptionId(sub)) {
                         return;
                     }
-                    try {
-                        TelephonyManager tm0 = app.getSystemService(
-                                TelephonyManager.class);
-                        if (tm0 == null) {
-                            return;
+                    handler().post(() -> {
+                        try {
+                            TelephonyManager tm0 = app.getSystemService(
+                                    TelephonyManager.class);
+                            if (tm0 == null) {
+                                return;
+                            }
+                            applyIfNeeded(app, sub,
+                                    tm0.createForSubscriptionId(sub));
+                        } catch (Throwable t) {
+                            Log.w(TAG, "volte_gate watch: " + t);
                         }
-                        applyIfNeeded(app, sub,
-                                tm0.createForSubscriptionId(sub));
-                    } catch (Throwable t) {
-                        Log.w(TAG, "volte_gate watch: " + t);
-                    }
+                    });
                 }
             };
             // A protected broadcast, sent only by Telephony.
@@ -165,6 +196,10 @@ public final class CarrierImsGate {
      */
     public static void start(Context app) {
         watch(app);
+        handler().post(() -> applyAll(app));
+    }
+
+    private static void applyAll(Context app) {
         try {
             SubscriptionManager sm = app.getSystemService(SubscriptionManager.class);
             TelephonyManager tm = app.getSystemService(TelephonyManager.class);
@@ -251,8 +286,10 @@ public final class CarrierImsGate {
          * driver pass (60s+) is a few binder calls, and decide() settles
          * to SKIP_ALREADY by itself for as long as the override holds. */
         int cid = -1;
+        int specificCid = -1;
         try {
             cid = tm.getSimCarrierId();
+            specificCid = tm.getSimSpecificCarrierId();
         } catch (Throwable t) {
             cid = -1;
         }
@@ -271,16 +308,19 @@ public final class CarrierImsGate {
         boolean toggleUsable = true;
         boolean wfcAvailable = false;
         boolean epdgSet = false;
+        String importedPlmn = "";
         if (cfg != null) {
             try {
                 volteAvailable = cfg.getBoolean(KEY_VOLTE, false);
                 configApplied = cfg.getBoolean(KEY_APPLIED, true);
                 boolean hidden = cfg.getBoolean(KEY_HIDE_4G, false);
                 boolean editable = cfg.getBoolean(KEY_EDITABLE_4G, true);
-                toggleUsable = !hidden && editable;
+                boolean canTurnOff = cfg.getBoolean(KEY_ALLOW_TURNOFF_IMS, true);
+                toggleUsable = !hidden && editable && canTurnOff;
                 wfcAvailable = cfg.getBoolean(KEY_WFC, false);
                 String epdg = cfg.getString(KEY_EPDG_STATIC, "");
                 epdgSet = epdg != null && !epdg.isEmpty();
+                importedPlmn = cfg.getString(KEY_IMPORTED, "");
             } catch (Throwable t) {
                 // keep defaults
             }
@@ -303,11 +343,26 @@ public final class CarrierImsGate {
         boolean weForcedIt = sForcedSub == subId;
 
         String profile = profileFor(ctx, tm, cid);
-        boolean wfcWanted = !wfcAvailable && isWfcProfile(ctx, profile);
+        boolean wfcWanted = !wfcAvailable;
+        /* The imported config, once per PLMN: the marker says the override
+         * already carries it. It can bring its own ePDG address. */
+        String plmn = "";
+        try {
+            plmn = tm.getSimOperator();
+        } catch (Throwable t) {
+            plmn = "";
+        }
+        PersistableBundle imported = null;
+        if (plmn != null && plmn.length() >= 5 && !plmn.equals(importedPlmn)) {
+            imported = importedFor(ctx, tm, plmn, cid, specificCid);
+        }
+        boolean importedWanted = imported != null;
+        String importedEpdg = importedWanted ? imported.getString(KEY_EPDG_STATIC, "") : "";
         String epdg = epdgFor(profile);
-        boolean epdgWanted = !epdgSet && epdg != null;
+        boolean epdgWanted = !epdgSet && epdg != null
+                && (importedEpdg == null || importedEpdg.isEmpty());
 
-        if (decision == SKIP_ALREADY && !wfcWanted && !epdgWanted) {
+        if (decision == SKIP_ALREADY && !wfcWanted && !epdgWanted && !importedWanted) {
             sLast = stateLabel(kindFor(SKIP_ALREADY, weForcedIt), cid,
                     weForcedIt ? sReapplies : 0) + wfcLabel(profile, wfcAvailable);
             return sLast;
@@ -320,13 +375,20 @@ public final class CarrierImsGate {
         boolean reapplying = weForcedIt;
 
         PersistableBundle over = new PersistableBundle();
-        if (decision == APPLY_FULL) {
+        if (importedWanted) {
+            over.putAll(imported);
+            over.putString(KEY_IMPORTED, plmn);
+        }
+        /* Our rules last, over the imported data too: VoLTE and Wi-Fi
+         * calling offered, and the opt-out -- a visible, editable toggle
+         * that can really turn IMS off -- always there. */
+        if (decision == APPLY_FULL || importedWanted) {
             over.putBoolean(KEY_VOLTE, true);
         }
-        // Always guarantee the opt-out exists: visible + editable toggle.
         over.putBoolean(KEY_HIDE_4G, false);
         over.putBoolean(KEY_EDITABLE_4G, true);
-        if (wfcWanted) {
+        over.putBoolean(KEY_ALLOW_TURNOFF_IMS, true);
+        if (wfcWanted || importedWanted) {
             over.putBoolean(KEY_WFC, true);
         }
         if (epdgWanted) {
@@ -334,7 +396,8 @@ public final class CarrierImsGate {
             over.putIntArray(KEY_EPDG_PRIORITY, new int[] {EPDG_ADDRESS_STATIC, EPDG_ADDRESS_PLMN});
         }
         String kind = kindFor(decision == SKIP_ALREADY ? APPLY_VISIBILITY : decision, true)
-                + (wfcWanted ? "+wfc" : "") + (epdgWanted ? "+epdg" : "");
+                + (wfcWanted ? "+wfc" : "") + (epdgWanted ? "+epdg" : "")
+                + (importedWanted ? "+carrier(" + imported.size() + ")" : "");
         Throwable firstErr;
         try {
             Method m = CarrierConfigManager.class.getMethod(
@@ -381,13 +444,82 @@ public final class CarrierImsGate {
         return parts.length >= 2 ? parts[0] + "." + parts[1] : profile;
     }
 
-    static boolean isWfcProfile(Context ctx, String profile) {
-        if (profile == null) {
-            return false;
+    /**
+     * The imported blocks for this SIM from assets/joan/carrier/<plmn>.xml,
+     * merged in order, or null when none match. Filters as CarrierConfig's
+     * DefaultCarrierConfigService applies them to vendor.xml.
+     */
+    static PersistableBundle importedFor(Context ctx, TelephonyManager tm, String plmn,
+            int cid, int specificCid) {
+        PersistableBundle out = null;
+        try (InputStream in = ctx.getAssets().open("joan/carrier/" + plmn + ".xml")) {
+            XmlPullParser p = Xml.newPullParser();
+            p.setInput(in, "UTF-8");
+            for (int ev = p.next(); ev != XmlPullParser.END_DOCUMENT; ev = p.next()) {
+                if (ev != XmlPullParser.START_TAG || !"carrier_config".equals(p.getName())
+                        || !matches(p, tm, plmn, cid, specificCid)) {
+                    continue;
+                }
+                PersistableBundle b = PersistableBundle.restoreFromXml(p);
+                if (out == null) {
+                    out = new PersistableBundle();
+                }
+                out.putAll(b);
+            }
+        } catch (FileNotFoundException e) {
+            return null;  // no imported config for this PLMN
+        } catch (Throwable t) {
+            Log.w(TAG, "carrier config " + plmn + ": " + t);
+            return null;
         }
-        loadMaps(ctx);
-        Set<String> wfc = sWfcProfiles;
-        return wfc != null && (wfc.contains(profile) || wfc.contains(operatorOf(profile)));
+        return out;
+    }
+
+    private static boolean matches(XmlPullParser p, TelephonyManager tm, String plmn,
+            int cid, int specificCid) {
+        for (int i = 0; i < p.getAttributeCount(); i++) {
+            String name = p.getAttributeName(i);
+            String value = p.getAttributeValue(i);
+            boolean ok;
+            switch (name) {
+                case "mcc":
+                    ok = plmn.startsWith(value);
+                    break;
+                case "mnc":
+                    ok = plmn.substring(3).equals(value);
+                    break;
+                case "gid1":
+                    ok = value.equalsIgnoreCase(tm.getGroupIdLevel1());
+                    break;
+                case "spn": {
+                    String spn = tm.getSimOperatorName();
+                    ok = "null".equalsIgnoreCase(value)
+                            ? (spn == null || spn.isEmpty())
+                            : spn != null && Pattern.compile(value, Pattern.CASE_INSENSITIVE)
+                                    .matcher(spn).matches();
+                    break;
+                }
+                case "imsi": {
+                    String imsi = tm.getSubscriberId();
+                    ok = imsi != null && Pattern.compile(value, Pattern.CASE_INSENSITIVE)
+                            .matcher(imsi).matches();
+                    break;
+                }
+                case "cid":
+                    ok = Integer.parseInt(value) == cid || Integer.parseInt(value) == specificCid;
+                    break;
+                case "name":
+                    ok = true;
+                    break;
+                default:
+                    ok = false;
+                    break;
+            }
+            if (!ok) {
+                return false;
+            }
+        }
+        return true;
     }
 
     static String epdgFor(String profile) {
@@ -399,22 +531,16 @@ public final class CarrierImsGate {
     }
 
     private static synchronized void loadMaps(Context ctx) {
-        if (sWfcProfiles != null) {
+        if (sProfileByPlmn != null) {
             return;
         }
         try {
             sProfileByCarrierId = readMap(ctx, "joan/carrier-id-map.json");
             sProfileByPlmn = readMap(ctx, "joan/carrier-plmn-map.json");
-            JSONArray arr = new JSONObject(readAsset(ctx, "joan/wfc-profiles.json"))
-                    .getJSONArray("profiles");
-            Set<String> wfc = new HashSet<>();
-            for (int i = 0; i < arr.length(); i++) {
-                wfc.add(arr.getString(i));
-            }
-            sWfcProfiles = wfc;
         } catch (Throwable t) {
             Log.w(TAG, "carrier maps: " + t);
-            sWfcProfiles = new HashSet<>();
+            sProfileByCarrierId = new HashMap<>();
+            sProfileByPlmn = new HashMap<>();
         }
     }
 

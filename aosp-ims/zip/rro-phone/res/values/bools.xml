@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Real-time text: ImsStack negotiates it and ImsMedia carries the text
+         stream. Offered where the carrier's config has rtt_supported_bool. -->
+    <bool name="config_support_rtt">true</bool>
+</resources>

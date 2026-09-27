@@ -74,6 +74,9 @@ sparse platform/prebuilts/clang/host/linux-x86 $P/clang "$PLATFORM_BRANCH" \
     "/$CLANG_VERSION/android_libc++/platform/aarch64/include/"
 sparse platform/prebuilts/sdk sdk "$PLATFORM_BRANCH" \
     /35/module-lib/ /35/public/android.jar
+# Android's carrier id database, for the carrier config generator.
+sparse platform/packages/providers/TelephonyProvider $P/telephonyprovider "$PLATFORM_BRANCH" \
+    /assets/latest_carrier_id/carrier_list.textpb
 # ImsMediaFramework links android.hardware.radio.ims.media-V2-java.
 sparse platform/hardware/interfaces hwif "$IMSMEDIA_REF" \
     /radio/aidl/aidl_api/android.hardware.radio.ims.media/2/ \

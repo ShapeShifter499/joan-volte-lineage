@@ -1,14 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Runtime permissions granted by default on the first boot after a ROM
-  install or update. Microphone for call audio (ImsMedia runs in this
-  package), phone state for the telephony APIs, location for emergency
-  calls (P-A-N-I). Flashed onto a ROM that has already booted, grant them
-  with aosp-ims/zip/grant-permissions.sh instead.
+  install or update. Microphone and camera for call audio and video calls
+  (ImsMedia runs in this package), phone state for the telephony APIs,
+  location for emergency calls (P-A-N-I). Flashed onto a ROM that has
+  already booted, grant them with aosp-ims/zip/grant-permissions.sh instead.
 -->
 <exceptions>
     <exception package="com.android.imsstack">
         <permission name="android.permission.RECORD_AUDIO" fixed="false"/>
+        <permission name="android.permission.CAMERA" fixed="false"/>
         <permission name="android.permission.READ_PHONE_STATE" fixed="false"/>
         <permission name="android.permission.ACCESS_COARSE_LOCATION" fixed="false"/>
         <permission name="android.permission.ACCESS_FINE_LOCATION" fixed="false"/>

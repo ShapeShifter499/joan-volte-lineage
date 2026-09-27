@@ -9,15 +9,18 @@ into a CarrierConfig vendor.xml with lineage/scripts/
 carriersettings-extractor. That file is how a LineageOS Pixel gets IMS
 settings for some 1300 carriers.
 
-This runs the same converter code on the same inputs and keeps only what
-IMS needs, one <carrier_config> block per carrier entry, with the
+This runs the same converter code on the same inputs and keeps what the
+IMS stack uses, one <carrier_config> block per carrier entry, with the
 converter's own filters (mcc/mnc, and gid1, spn or imsi for MVNOs):
 
 - the IMS namespaces AOSP's ImsStack, IWLAN and QNS read: ims.,
-  imsvoice., imssms., imsss., imswfc., imsemergency., iwlan., qns., bsf.
-  (SIP timers, codecs, Ut/XCAP, ePDG addresses and IKE proposals,
-  LTE/Wi-Fi handover policy);
-- the top-level VoLTE and Wi-Fi calling keys in KEEP_TOP.
+  imsvoice., imssms., imsss., imswfc., imsemergency., imsvt., imsrtt.,
+  iwlan., qns., bsf. (SIP timers, codecs, SMS over IMS, Ut/XCAP,
+  emergency, video, RTT, ePDG addresses and IKE proposals, LTE/Wi-Fi
+  handover policy);
+- the top-level keys in KEEP_TOP for VoLTE, Wi-Fi calling, video (ViLTE),
+  RTT and TTY, emergency calls, conference calls, supplementary services,
+  cross-SIM calling and RCS capability exchange.
 
 Left out, deliberately:
 - the generic pn_xx entries (1100 PLMNs sharing Google's defaults for
@@ -25,10 +28,12 @@ Left out, deliberately:
   carrier-specific config AOSP's CarrierConfig ships for those PLMNs;
 - anything naming a package (ImsService overrides would move IMS away
   from ImsStack), provisioning requirements (they would block VoLTE until
-  a carrier app provisions it, and there is none), GBA-required (it gates
-  VoLTE on the SIM), RCS, the VoLTE opt-out lock, and Wi-Fi calling on by
-  default (it stays the user's choice);
-- video and RTT, which are not enabled on joan.
+  a carrier app provisions it, and there is none), the RCS
+  autoconfiguration server (RCS messaging needs a provisioned client this
+  stack is not), GBA-required (it gates VoLTE on the SIM), the VoLTE
+  opt-out lock, and Wi-Fi calling on by default (it stays the user's
+  choice);
+- 5G (VoNR), which joan's modem does not have.
 
 The converter's own exclusions (package names, APN editing locks, the
 Enhanced 4G toggle keys) apply first.
@@ -44,7 +49,8 @@ from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
 KEEP_PREFIXES = ('ims.', 'imsvoice.', 'imssms.', 'imsss.', 'imswfc.', 'imsemergency.',
-                 'iwlan.', 'qns.', 'bsf.')
+                 'imsvt.', 'imsrtt.', 'iwlan.', 'qns.', 'bsf.', 'carrier_cross_sim_',
+                 'cross_sim_')
 KEEP_TOP = {
     # VoLTE and Wi-Fi calling availability and modes
     'carrier_volte_available_bool', 'carrier_wfc_ims_available_bool',
@@ -72,13 +78,38 @@ KEEP_TOP = {
     'support_emergency_sms_over_ims_bool',
     # Supplementary services over Ut/XCAP, and GBA for its authentication
     'carrier_supports_ss_over_ut_bool', 'gba_mode_int', 'gba_ua_security_organization_int',
-    'gba_ua_security_protocol_int', 'gba_ua_tls_cipher_suite_int',
+    'gba_ua_security_protocol_int', 'gba_ua_tls_cipher_suite_int', 'xcap_apn_name_string',
+    'call_forwarding_over_ut_warning_bool', 'call_barring_over_ut_warning_bool',
+    'caller_id_over_ut_warning_bool', 'call_waiting_over_ut_warning_bool',
+    # Video calling (ViLTE)
+    'carrier_vt_available_bool', 'support_video_conference_call_bool',
+    'support_pause_ims_video_calls_bool', 'ignore_data_enabled_changed_for_video_calls',
+    'vilte_data_is_metered_bool', 'allow_add_call_during_video_call',
+    'drop_video_call_when_answering_audio_call_bool',
+    'treat_downgraded_video_calls_as_video_calls_bool', 'video_calls_can_be_hd_audio',
+    'notify_handover_video_from_wifi_to_lte_bool', 'notify_handover_video_from_lte_to_wifi_bool',
+    'notify_vt_handover_to_wifi_failure_bool', 'support_downgrade_vt_to_audio_bool',
+    'allow_hold_video_call_bool',
+    # RTT and TTY
+    'rtt_supported_bool', 'rtt_supported_while_roaming_bool', 'rtt_downgrade_supported_bool',
+    'rtt_upgrade_supported_bool', 'rtt_auto_upgrade_bool', 'rtt_supported_for_vt_bool',
+    'ignore_rtt_mode_setting_bool', 'hide_tty_hco_vco_with_rtt', 'allow_merging_rtt_calls_bool',
+    'allow_hold_in_rtt_call_bool', 'rtt_upgrade_supported_for_downgraded_vt_call',
+    'vt_upgrade_supported_for_downgraded_rtt_call', 'carrier_volte_tty_supported_bool',
+    'carrier_vowifi_tty_supported_bool', 'tty_supported_bool',
+    # Emergency calls and SMS over IMS
+    'carrier_use_ims_first_for_emergency_bool', 'auto_retry_failed_wifi_emergency_call',
+    'allow_non_emergency_calls_in_ecm_bool', 'emergency_sms_mode_timer_ms_int',
+    'allow_hold_call_during_emergency_bool',
+    # RCS capability exchange (UCE), which ImsStack's RcsFeature provides
+    'use_rcs_presence_bool', 'use_rcs_sip_options_bool',
 }
 DROP_TOP = {
     'carrier_ims_gba_required_bool', 'carrier_allow_turnoff_ims_bool',
     'carrier_default_wfc_ims_enabled_bool', 'carrier_default_wfc_ims_roaming_enabled_bool',
+    'rcs_config_server_url_string',
 }
-DROP_SUBSTRINGS = ('package_override', 'provisioning', 'rcs')
+DROP_SUBSTRINGS = ('package_override', 'provisioning', 'vonr', 'nr_advanced')
 GENERIC = {'pn_xx'}
 
 

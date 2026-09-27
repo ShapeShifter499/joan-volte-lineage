@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Makes AOSP ImsStack the device-default MMTEL ImsService: ImsResolver
-     reads config_ims_mmtel_package from com.android.phone. A ROM build sets
-     this in the device overlay instead (aosp-ims/upstream/). -->
+<!-- Makes AOSP ImsStack the device's ImsService (MMTEL and RCS): ImsResolver
+     reads config_ims_mmtel_package and config_ims_rcs_package from
+     com.android.phone. Also admits RTT on the device (config_support_rtt).
+     A ROM build sets these in its device overlay (upstream/AOSP-IMS.md). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.android.imsstack.rro.phone"
     android:versionCode="1"

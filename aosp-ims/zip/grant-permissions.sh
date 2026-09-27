@@ -22,7 +22,7 @@ if ! $ADB shell pm path "$PKG" 2>/dev/null | grep -q '^package:'; then
 fi
 rc=0
 # Foreground location before background: Android refuses the reverse.
-for p in RECORD_AUDIO READ_PHONE_STATE ACCESS_COARSE_LOCATION ACCESS_FINE_LOCATION \
+for p in RECORD_AUDIO CAMERA READ_PHONE_STATE ACCESS_COARSE_LOCATION ACCESS_FINE_LOCATION \
          ACCESS_BACKGROUND_LOCATION; do
   if out=$($ADB shell pm grant "$PKG" "android.permission.$p" 2>&1) && [ -z "$out" ]; then
     echo "granted  $p"
@@ -63,12 +63,13 @@ fi
 echo
 echo "As the package manager now reports them:"
 $ADB shell dumpsys package "$PKG" 2>/dev/null \
-  | grep -E 'android\.permission\.(RECORD_AUDIO|READ_PHONE_STATE|ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION): granted=' \
+  | grep -E 'android\.permission\.(RECORD_AUDIO|CAMERA|READ_PHONE_STATE|ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION): granted=' \
   | sed 's/^ */  /' | sort -u
 echo
 echo "IWLAN app-op (VoWiFi): $($ADB shell appops get "$IWLAN" MANAGE_IPSEC_TUNNELS 2>/dev/null | tr -d '\r')"
 echo
 echo "RECORD_AUDIO matters for calls: ImsMedia records in this package, and"
-echo "without it the other side hears silence. Location adds the serving"
-echo "cell to P-Access-Network-Info and is needed for emergency calls."
+echo "without it the other side hears silence. CAMERA is for video calls."
+echo "Location adds the serving cell to P-Access-Network-Info and is needed"
+echo "for emergency calls. Reboot now, so the stack starts with all of them."
 exit "$rc"
