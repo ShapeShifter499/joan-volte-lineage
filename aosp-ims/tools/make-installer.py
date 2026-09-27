@@ -8,7 +8,7 @@ anything, orders the privapp allowlist before the apk, and stamps the
 package cache so PackageManager rereads what changed (the fix for the
 post-alpha67 bootloop). Rather than fork that logic, this rewrites the
 names of what it installs and adds what the AOSP stack needs: the
-sysconfig file, adb grant hints in place of joan's launcher entry, and one
+sysconfig file, hints naming this stack's own launcher entry, and one
 of two joan policies. update-binary (fresh flash) refuses a phone that has
 joan, before writing anything; update-binary-migrate removes joan's stack,
 which this one replaces, keeping the files both share.
@@ -39,12 +39,17 @@ INSTALL = [
     ('joan-ims.apk', 'ImsStack.apk', 3),
     ('JoanIms', 'ImsStack', 11),
     ('org.joan.ims.xml', 'com.android.imsstack.xml', 10),
+    # CallPermissionsActivity: in the app drawer while the microphone is
+    # missing. Wi-Fi calling's IPsec app-op has no dialog, so adb stays.
     ('    ui_print "    otherwise open \\"joan IMS\\" once from the launcher"\n',
-     '    ui_print "    otherwise grant them over adb (aosp-ims/zip/grant-permissions.sh)"\n', 1),
+     '    ui_print "    otherwise open \\"Calling permissions\\" in the app drawer"\n', 1),
     ('    warn "  skipped the default grants; open \\"joan IMS\\" once from the launcher"\n',
-     '    warn "  skipped the default grants; grant them over adb (aosp-ims/zip/grant-permissions.sh)"\n', 1),
+     '    warn "  skipped the default grants; open \\"Calling permissions\\" in the app drawer"\n', 1),
+    ('ui_print "If a call\'s far end hears nothing, grant the microphone:"\n',
+     'ui_print "If \\"Calling permissions\\" appears in the app drawer, open it:"\n', 1),
     ('ui_print "  open \\"joan IMS\\" once, or: adb shell pm grant org.joan.ims android.permission.RECORD_AUDIO"\n',
-     'ui_print "  adb shell pm grant com.android.imsstack android.permission.RECORD_AUDIO"\n', 1),
+     'ui_print "  calls need the microphone. Wi-Fi calling: run grant-permissions.sh"\n'
+     'ui_print "  (in this zip) once over adb"\n', 1),
     # Free space as a write can use it. toybox df (recovery's) counts ext4's
     # reserved clusters as free -- up to 16 MB -- so on a nearly full
     # partition the check passed and the write failed part way, after

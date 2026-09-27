@@ -1,7 +1,7 @@
 **Unofficial alpha.** Bench results so far (US998 on T-Mobile): the
-migrate zip installs and ImsStack registers with IPsec. Calls failed on
-the SIM's call control check until this build (see Known limits); a
-completed call has not been confirmed yet. It is built entirely from
+migrate zip installs, ImsStack registers with IPsec, and calls ring and
+are answered (after a fix for the SIM's call control check, see Known
+limits); a completed call has not been confirmed yet. It is built entirely from
 source by this repository's `aosp-ims` workflow and passes its installer,
 carrier-config and ROM checks. Keep a way back: the `-uninstall` zip, or
 the official LineageOS nightly.
@@ -50,19 +50,30 @@ TWRP on this device generally does not.
   it was. It also works on the ROM above.
 - **`SHA256SUMS`**: check a download with `sha256sum -c SHA256SUMS --ignore-missing`.
 
-## After flashing: one adb step
+## After flashing: permissions
 
-Until a LineageOS build signs these apps with its platform key, some
-permissions can only be granted over adb. Once, after the first boot,
-with USB debugging on:
+These apps are not signed with the ROM's platform key (only LineageOS
+has it), so Android does not hand them every permission by itself.
+
+**Calls: the microphone.** Flashed together with a ROM install or update,
+or as the ROM above, the microphone, camera, location and phone
+permissions are granted at first boot. Flashed onto a ROM that has
+already booted, **Calling permissions** appears in the app drawer: open
+it and allow them. It goes away once the microphone is allowed; no
+reboot needed. (Or Settings > Apps > ImsStack > Permissions, with system
+apps shown.)
+
+**Wi-Fi calling: one adb step**, whichever file you flashed. IWLAN needs
+an app-op for its IPsec tunnel that has no setting on the phone. Once,
+after the first boot, with USB debugging on:
 
 ```
 sh grant-permissions.sh
 ```
 
 The script is attached here, inside the zips, and at
-`aosp-ims/zip/grant-permissions.sh` in the repository. Without `sh`
-(Windows), run its commands directly:
+`aosp-ims/zip/grant-permissions.sh` in the repository. It also grants
+everything above. Without `sh` (Windows), run its commands directly:
 
 ```
 adb shell pm grant com.android.imsstack android.permission.RECORD_AUDIO
@@ -78,11 +89,11 @@ adb shell pm grant com.google.android.iwlan android.permission.ACCESS_FINE_LOCAT
 adb shell pm grant com.android.telephony.qns android.permission.READ_PHONE_STATE
 ```
 
-- Without `RECORD_AUDIO`, the other side of a call hears silence.
+- Without `RECORD_AUDIO`, calls can't open the microphone.
 - Without the IWLAN app-op, Wi-Fi calling can't build its tunnel.
 - Location is used for emergency calls and the network location header.
 
-Reboot afterwards, so the IMS stack starts with the permissions in place.
+Reboot afterwards, so IWLAN starts with the app-op in place.
 
 Then turn on **VoLTE** (Settings > Network & internet > SIMs), and
 **Wi-Fi calling** where it is offered.
@@ -127,7 +138,7 @@ change.
 If something fails, send:
 
 - `adb logcat -b all -d > log.txt`, taken right after the failure (for a
-  failed call, `adb logcat -b all -d | grep -iE "call-control|invokeStartFailed|SIPMSG"`
+  failed call, `adb logcat -b all -d | grep -iE "call-control|invokeStartFailed|SIPMSG|OnMediaFailed|- Terminate :|libimsmedia|AAudio|ImsStackPermissions"`
   shows the stack's view of it);
 - the output of `adb shell dumpsys telephony.registry`;
 - the output of `adb shell dumpsys package com.android.imsstack`.

@@ -109,8 +109,9 @@ From the top of a LineageOS 22.2 tree that already builds joan:
 
 ## Permissions
 
-A tree build signs everything with the platform key, so it needs none of
-the zip's adb steps.
+A tree build signs everything with the platform key and grants the
+runtime permissions at first boot, so it needs none of the zip's
+permission steps.
 
 | Kind | Handled by |
 |---|---|

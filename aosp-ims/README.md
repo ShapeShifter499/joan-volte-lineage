@@ -20,9 +20,12 @@ for the LTE bearer and SIM authentication, which the V30 has.
 > installs and ImsStack registers with IPsec, once patch 0004 stopped a
 > startup crash. The first calls then failed before any INVITE left the
 > phone: the SIM's call control answer never reached ImsStack (joan's RIL
-> returns status words 00 00), and 0005 now sets such a call up as
-> dialled. No call has completed yet. Keep a way back: the `-uninstall`
-> zip, or the official nightly.
+> returns status words 00 00), and 0005 sets such a call up as dialled.
+> With it, a call rings and is answered, then the phone hangs up a fifth
+> of a second later; first suspect, the microphone permission, which a
+> zip flashed onto a booted ROM never got (see Permissions). No call has
+> completed yet. Keep a way back: the `-uninstall` zip, or the official
+> nightly.
 
 What the stack does, all of it upstream AOSP code: VoLTE (voice over
 LTE, HD voice codecs), Wi-Fi calling (VoWiFi over IWLAN, with QNS moving
@@ -45,7 +48,7 @@ The ROM and zips are on the
 [`aosp-ims-17.0.0_r1-a15-alpha1`](https://github.com/ShapeShifter499/joan-volte-lineage/releases/tag/aosp-ims-17.0.0_r1-a15-alpha1)
 prerelease, built from this directory by `.github/workflows/aosp-ims.yml`.
 `aosp-ims/RELEASE-NOTES.md` is its description: which file to flash,
-the adb step, known limits, and what logs to send.
+permissions, known limits, and what logs to send.
 
 ### Which zip
 
@@ -65,20 +68,35 @@ LineageOS-based ROMs (alpha67): it checks free space before writing,
 copies atomically, writes the permission allowlists before the APKs, and
 invalidates the package manager's cache so the next boot rescans.
 
-### The adb step (zips and repacked ROM)
+### Permissions (zips and repacked ROM)
 
 The apps are not signed with the ROM's platform key (only LineageOS has
-it), so some permissions can only be granted over adb until a build
-carries the stack. With USB debugging on, once, after the first boot:
+it), so:
 
-```
-sh grant-permissions.sh        # in the zip, and at aosp-ims/zip/grant-permissions.sh
-```
+- **Calls** need ImsStack's runtime permissions, the microphone above
+  all: ImsMedia, in ImsStack's package, records the call. The
+  default-permissions file grants them on the first boot after a ROM
+  install or update, so the repacked ROM, and a zip flashed in the same
+  recovery session as a ROM update, need nothing more. A zip flashed
+  onto a ROM that has already booted gets them from **Calling
+  permissions** in the app drawer. ImsStack puts it there while the
+  microphone is missing (`zip/java/.../CallPermissionsActivity.java`); it
+  asks with Android's own dialogs for the microphone, camera (video
+  calls), location (emergency calls) and phone, and leaves the drawer
+  once the microphone is allowed. No reboot needed. The same permissions
+  are under Settings > Apps > ImsStack > Permissions (show system apps).
+- **Wi-Fi calling** needs one step over adb, however it was installed:
+  IWLAN's tunnel needs the `MANAGE_IPSEC_TUNNELS` app-op, which has no
+  setting on the phone. With USB debugging on, once:
 
-It runs `pm grant` for ImsStack's microphone, camera (video calls),
-phone and location permissions, IWLAN's phone and location, and QNS's
-phone state; and `appops set com.google.android.iwlan MANAGE_IPSEC_TUNNELS
-allow`, which Wi-Fi calling needs to build its tunnel. Reboot afterwards.
+  ```
+  sh grant-permissions.sh        # in the zip, and at aosp-ims/zip/grant-permissions.sh
+  ```
+
+  It runs `appops set com.google.android.iwlan MANAGE_IPSEC_TUNNELS
+  allow`, and `pm grant` for everything above plus IWLAN's phone and
+  location and QNS's phone state. Reboot afterwards.
+
 A source build needs none of this.
 
 ## What it does per carrier

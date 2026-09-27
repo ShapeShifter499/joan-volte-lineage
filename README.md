@@ -1,6 +1,6 @@
 # joan-volte-lineage
 
-> ### This branch: AOSP's IMS stack, backported (alpha, untested)
+> ### This branch: AOSP's IMS stack, backported (alpha, on the bench)
 >
 > Branch `claude/aosp-ims-a15-backport` replaces joan's own IMS with
 > AOSP's: ImsStack and ImsMedia from Android 17, plus IWLAN and QNS for
@@ -13,10 +13,10 @@
 >
 > Downloads are on the
 > [`aosp-ims-17.0.0_r1-a15-alpha1`](https://github.com/ShapeShifter499/joan-volte-lineage/releases/tag/aosp-ims-17.0.0_r1-a15-alpha1)
-> prerelease. Details, and the one adb step the zips and ROM need, are in
-> [`aosp-ims/README.md`](aosp-ims/README.md). **Nothing in it has run on a
-> phone yet**; joan's stack, described below, stays the fallback until it
-> has.
+> prerelease. Details, and the permissions the zips and ROM need, are in
+> [`aosp-ims/README.md`](aosp-ims/README.md). On a US998 it registers and
+> calls connect, but **no call has completed yet**; joan's stack, described
+> below, stays the fallback until one has.
 
 VoLTE for the LG V30 (`joan`: US998 / H930 / H932) on **LineageOS 22**.
 Flashable recovery zip. No Magisk, no stock `Ims6` blobs, no CAF

@@ -3,8 +3,10 @@
 # tunnel app-op VoWiFi needs.
 #
 # Flashed in the same recovery session as a ROM install or update, the
-# zip's default-permissions file does this at first boot. Flashed onto a
-# ROM that has already booted, run this once with USB debugging on:
+# zip's default-permissions file grants the runtime permissions at first
+# boot; flashed onto a ROM that has already booted, "Calling permissions"
+# in the app drawer asks for them. The IWLAN app-op Wi-Fi calling needs
+# has no setting on the phone: run this once with USB debugging on:
 #   sh aosp-ims/zip/grant-permissions.sh [device-serial]
 set -u
 ADB=${ADB:-adb}
@@ -69,7 +71,7 @@ echo
 echo "IWLAN app-op (VoWiFi): $($ADB shell appops get "$IWLAN" MANAGE_IPSEC_TUNNELS 2>/dev/null | tr -d '\r')"
 echo
 echo "RECORD_AUDIO matters for calls: ImsMedia records in this package, and"
-echo "without it the other side hears silence. CAMERA is for video calls."
+echo "without it a call can't open the microphone. CAMERA is for video calls."
 echo "Location adds the serving cell to P-Access-Network-Info and is needed"
 echo "for emergency calls. Reboot now, so the stack starts with all of them."
 exit "$rc"
