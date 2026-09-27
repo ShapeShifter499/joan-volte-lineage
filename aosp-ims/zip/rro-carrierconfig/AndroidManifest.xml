@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Replaces the CarrierConfig app's res/xml/vendor.xml wholesale: the ROM's
+     own vendor.xml content (joan-common's, CAF-derived) plus the converted
+     Pixel IMS carrier data and our rules, assembled at build time by
+     aosp-ims/tools/make-carrier-config.py into res/xml/vendor.xml (which is
+     generated, not committed). Priority outranks the nightly's
+     CarrierConfig auto-generated RRO in vendor/overlay; product also
+     outranks vendor at equal priority. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.android.imsstack.rro.carrierconfig"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <uses-sdk android:minSdkVersion="35" android:targetSdkVersion="35" />
+    <application android:hasCode="false" />
+    <overlay android:targetPackage="com.android.carrierconfig"
+        android:priority="10"
+        android:isStatic="true" />
+</manifest>

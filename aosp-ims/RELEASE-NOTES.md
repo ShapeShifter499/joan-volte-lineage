@@ -5,23 +5,34 @@ its installer, carrier-config and ROM checks. Keep a way back: the
 
 ## What this is
 
-VoLTE and Wi-Fi calling for the LG V30 (joan) on LineageOS 22.2, using
-AOSP's own IMS stack from Android 17, backported to Android 15. It
-replaces joan's IMS stack.
+VoLTE, SMS over IMS and Wi-Fi calling for the LG V30 (joan) on
+LineageOS 22.2, using AOSP's own IMS stack from Android 17, backported
+to Android 15. It replaces joan's IMS stack.
 
 | Part | What it does |
 |---|---|
-| ImsStack + ImsMedia (`com.android.imsstack`) | IMS registration, calls and SMS; call audio on Android |
+| ImsStack + ImsMedia (`com.android.imsstack`) | IMS registration, calls, SMS over IMS; call audio on Android |
 | IWLAN (`com.google.android.iwlan`) | The IPsec tunnel to the carrier's ePDG, for Wi-Fi calling |
 | QNS (`com.android.telephony.qns`) | Moves IMS between LTE and Wi-Fi |
 
-VoLTE is offered for every carrier. Wi-Fi calling is offered for the 103
-carrier profiles LG shipped VoWiFi on. These include:
+- **VoLTE** is offered for every carrier; the Settings toggle is visible
+  and editable everywhere.
+- **Wi-Fi calling** is offered for every carrier. The per-carrier IMS
+  data (SIP timers, codecs, ePDG addresses, LTE/Wi-Fi handover policy)
+  comes from Google's Pixel carrier settings, the same data LineageOS
+  converts for Pixel devices, plus our own rules. Among the carriers
+  with dedicated data: AT&T, T-Mobile, Verizon, FirstNet, Jio, Truphone,
+  Bell, Rogers, Deutsche Telekom, Orange, Three, O2.
+- **SMS over IMS** rides the same registration as voice, including over
+  Wi-Fi calling.
 
-- **US:** AT&T, Cricket, T-Mobile, MetroPCS, Verizon.
-- **Canada:** Bell, Rogers, TELUS, Freedom.
-- **Europe:** Deutsche Telekom, O2, Three, Orange.
-- and more.
+**Not in this alpha:** video calling (the capability exists in the
+stack; the media path was never wired or tested on joan — a follow-up),
+RCS (a client thing: Google Messages/Jibe; AOSP ships no RCS client and
+this stack deliberately declares no RCS feature), RTT. Emergency
+calling: IMS emergency registration is in the stack, with one backport
+seam — the domain-selection emergency-mode callback is an Android 16
+API and is not reported on Android 15.
 
 ## Which file
 
@@ -30,6 +41,8 @@ TWRP on this device generally does not.
 
 - **`lineage-22.2-20260920-UNOFFICIAL-AOSPIMS-alpha1-joan.zip`**: the whole
   ROM. It is the official 2026-09-20 nightly with the IMS stack built in.
+  It installs on every model the official nightly installs on (H930,
+  H930DS, US998, H932, H931, H933, LS998, V300L, V300K, V300S, VS996).
   - Recovery warns that the signature can't be verified (only LineageOS
     can sign with its key); choose to install anyway.
   - It reports itself as `UNOFFICIAL`, so the updater won't replace it
@@ -76,7 +89,7 @@ adb shell pm grant com.android.telephony.qns android.permission.READ_PHONE_STATE
 - Location is used for emergency calls and the network location header.
 
 Then turn on **VoLTE** (Settings > Network & internet > SIMs), and
-**Wi-Fi calling** where it is offered.
+**Wi-Fi calling** where you want it — every carrier gets the toggle.
 
 ## Known limits
 
@@ -91,7 +104,7 @@ Then turn on **VoLTE** (Settings > Network & internet > SIMs), and
   the browser, not in an in-app tab.
 - **US E911 address.** US carriers need an E911 address on the account
   for Wi-Fi calling.
-- **Video calling** is not enabled.
+- **Video calling** is not enabled (see above).
 
 ## Building it into LineageOS
 

@@ -10,7 +10,6 @@ other SIM for cross-SIM calling), so it is not reported. Everything else
 Iwlan uses is already in the Android 15 QPR2 framework and IKE module.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01SByt7CZfKR6U4r1VS86tHS
 ---
  .../android/iwlan/IwlanDataService.java       | 26 +++----------------
  1 file changed, 4 insertions(+), 22 deletions(-)

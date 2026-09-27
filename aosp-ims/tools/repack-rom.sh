@@ -104,6 +104,7 @@ unpack product
 mount -o loop,rw "$R/product.img" "$R/mnt"
 put "$APK/ImsStackPhoneOverlay.apk" "$R/mnt/overlay/ImsStackPhoneOverlay.apk" 644
 put "$APK/ImsStackFrameworkOverlay.apk" "$R/mnt/overlay/ImsStackFrameworkOverlay.apk" 644
+put "$APK/ImsStackCarrierConfigOverlay.apk" "$R/mnt/overlay/ImsStackCarrierConfigOverlay.apk" 644
 # Viettel 45204's IMS/XCAP APNs, merged into the world list as the zip
 # does, with the zip's bookkeeping: the ROM's list kept as .joan-orig and
 # the merged list's checksum as .joan-merged. The uninstall zip then puts

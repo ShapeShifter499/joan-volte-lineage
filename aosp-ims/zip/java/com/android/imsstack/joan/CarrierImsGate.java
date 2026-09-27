@@ -28,10 +28,7 @@ import java.io.InputStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 /*
@@ -39,13 +36,14 @@ import org.json.JSONObject;
  * which has no equivalent: upstream expects the ROM to ship carrier config
  * for its carriers, and LineageOS on joan ships none for most of them.
  *
- * Wi-Fi calling is added on top, more narrowly than VoLTE: it is admitted
- * only for carriers whose LG profile shipped VoWiFi (assets/joan/
- * wfc-profiles.json, from LG's Ims6 configs), because a toggle for a carrier
- * without an ePDG would only fail. A SIM is resolved to an LG profile the
- * way joan does, by Android carrier id and then PLMN (joan's maps). For the
- * three US carriers whose ePDG is not the 3GPP default name, the address
- * is supplied too. Nothing is overridden that the ROM already sets.
+ * VoLTE and Wi-Fi calling are admitted for every SIM (user-visible toggles
+ * included); the carrier data that makes them work per carrier comes from
+ * the ImsStackCarrierConfigOverlay (aosp-ims/carrier/), so this gate only
+ * fills what is missing: it overrides nothing the config already sets. For
+ * the two US carriers whose ePDG is not the 3GPP default name and which
+ * Google's carrier data does not cover through the overlay, the address is
+ * supplied as well. A SIM is resolved to an LG profile the way joan does,
+ * by Android carrier id and then PLMN (joan's maps).
  */
 public final class CarrierImsGate {
     private static final String TAG = "ImsStackGate";
@@ -63,19 +61,19 @@ public final class CarrierImsGate {
     private static final int EPDG_ADDRESS_PLMN = 1;
     /**
      * ePDGs that are not epdg.epc.mncXXX.mccYYY.pub.3gppnetwork.org, by LG
-     * operator. MetroPCS has its own LG profile but is T-Mobile's network
-     * (every PLMN in its carrier id is T-Mobile's), so it uses T-Mobile's
-     * ePDG. aosp-ims/tools/make-carrier-config.py reads this table.
+     * operator. The ImsStackCarrierConfigOverlay carries these same
+     * addresses from Google's carrier data, so this table only matters when
+     * the overlay did not match the SIM (and T-Mobile and MetroPCS are not
+     * here at all: their ePDG is the 3GPP default name, which IWLAN derives
+     * from the SIM). aosp-ims/tools/make-carrier-config.py reads this
+     * table; tests/check-carrier-config.py requires the overlay to agree.
      */
     private static final Map<String, String> EPDG_BY_OPERATOR = Map.of(
-            "TMO.US", "ss.epdg.epc.mnc260.mcc310.pub.3gppnetwork.org",
-            "MPCS.US", "ss.epdg.epc.mnc260.mcc310.pub.3gppnetwork.org",
             "ATT.US", "epdg.epc.att.net",
             "VZW.US", "wo.vzwwo.com");
 
     private static volatile Map<String, String> sProfileByCarrierId;
     private static volatile Map<String, String> sProfileByPlmn;
-    private static volatile Set<String> sWfcProfiles;
 
     // Not exposed in the public SDK jar - string literals by design.
     private static final String KEY_APPLIED = "carrier_config_applied_bool";
@@ -303,7 +301,7 @@ public final class CarrierImsGate {
         boolean weForcedIt = sForcedSub == subId;
 
         String profile = profileFor(ctx, tm, cid);
-        boolean wfcWanted = !wfcAvailable && isWfcProfile(ctx, profile);
+        boolean wfcWanted = !wfcAvailable;
         String epdg = epdgFor(profile);
         boolean epdgWanted = !epdgSet && epdg != null;
 
@@ -381,15 +379,6 @@ public final class CarrierImsGate {
         return parts.length >= 2 ? parts[0] + "." + parts[1] : profile;
     }
 
-    static boolean isWfcProfile(Context ctx, String profile) {
-        if (profile == null) {
-            return false;
-        }
-        loadMaps(ctx);
-        Set<String> wfc = sWfcProfiles;
-        return wfc != null && (wfc.contains(profile) || wfc.contains(operatorOf(profile)));
-    }
-
     static String epdgFor(String profile) {
         return profile == null ? null : EPDG_BY_OPERATOR.get(operatorOf(profile));
     }
@@ -399,22 +388,16 @@ public final class CarrierImsGate {
     }
 
     private static synchronized void loadMaps(Context ctx) {
-        if (sWfcProfiles != null) {
+        if (sProfileByCarrierId != null) {
             return;
         }
         try {
             sProfileByCarrierId = readMap(ctx, "joan/carrier-id-map.json");
             sProfileByPlmn = readMap(ctx, "joan/carrier-plmn-map.json");
-            JSONArray arr = new JSONObject(readAsset(ctx, "joan/wfc-profiles.json"))
-                    .getJSONArray("profiles");
-            Set<String> wfc = new HashSet<>();
-            for (int i = 0; i < arr.length(); i++) {
-                wfc.add(arr.getString(i));
-            }
-            sWfcProfiles = wfc;
         } catch (Throwable t) {
             Log.w(TAG, "carrier maps: " + t);
-            sWfcProfiles = new HashSet<>();
+            sProfileByCarrierId = new HashMap<>();
+            sProfileByPlmn = new HashMap<>();
         }
     }
 

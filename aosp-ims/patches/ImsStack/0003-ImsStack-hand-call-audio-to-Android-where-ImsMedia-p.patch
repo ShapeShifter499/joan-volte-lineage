@@ -14,7 +14,6 @@ MODE_IN_COMMUNICATION. The framework applies the handler to the call it is
 tracking at that moment, which is why this follows callSessionInitiated.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01SByt7CZfKR6U4r1VS86tHS
 ---
  .../imsservice/mmtel/ImsCallSessionImpl.java  | 26 +++++++++++++++++++
  1 file changed, 26 insertions(+)

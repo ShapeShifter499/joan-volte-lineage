@@ -102,9 +102,10 @@ if [ "${1:-}" = "--inner" ]; then
     check 'future "$S/system/priv-app/Iwlan" && future "$S/system/priv-app/QualifiedNetworksService"' "VoWiFi: priv-app directories re-dated"
     check 'cmp -s "$P/overlay/ImsStackPhoneOverlay.apk" "$WORK/zip/app/ImsStackPhoneOverlay.apk"' "phone overlay installed"
     check 'cmp -s "$P/overlay/ImsStackFrameworkOverlay.apk" "$WORK/zip/app/ImsStackFrameworkOverlay.apk"' "framework overlay installed"
+    check 'cmp -s "$P/overlay/ImsStackCarrierConfigOverlay.apk" "$WORK/zip/app/ImsStackCarrierConfigOverlay.apk"' "CarrierConfig overlay installed"
     check 'future "$S/system/priv-app/ImsStack"' "priv-app directory re-dated so PackageManager re-parses it"
     check 'future "$S/system/priv-app/ImsStack/ImsStack.apk"' "apk re-dated"
-    check 'future "$P/overlay/ImsStackPhoneOverlay.apk" && future "$P/overlay/ImsStackFrameworkOverlay.apk"' "overlays re-dated"
+    check 'future "$P/overlay/ImsStackPhoneOverlay.apk" && future "$P/overlay/ImsStackFrameworkOverlay.apk" && future "$P/overlay/ImsStackCarrierConfigOverlay.apk"' "overlays re-dated"
     check 'grep -q "<permission name=\"android.permission.MODIFY_PHONE_STATE\"" "$S/system/etc/permissions/com.android.imsstack.xml"' "allowlist covers MODIFY_PHONE_STATE"
     check 'no_temps' "no .joan-new temp files left behind"
     check '[ ! -e "$S/system/etc/init/joan-grant.rc" ] && [ ! -e "$S/system/bin/joan-grant.sh" ]' "no boot-time grant on disk"
@@ -167,7 +168,7 @@ if [ "${1:-}" = "--inner" ]; then
       check 'out_has "WARNING"' "warns about the skipped merge"
       mount_chk
       check 'cmp -s "$P/etc/apns-conf.xml" "$WORK/apns-orig.xml"' "APN list byte-identical to the ROM's"
-      check 'cmp -s "$P/overlay/ImsStackPhoneOverlay.apk" "$WORK/zip/app/ImsStackPhoneOverlay.apk"' "overlays installed anyway"
+      check 'cmp -s "$P/overlay/ImsStackPhoneOverlay.apk" "$WORK/zip/app/ImsStackPhoneOverlay.apk" && cmp -s "$P/overlay/ImsStackCarrierConfigOverlay.apk" "$WORK/zip/app/ImsStackCarrierConfigOverlay.apk"' "overlays installed anyway"
       check 'cmp -s "$S/system/priv-app/ImsStack/ImsStack.apk" "$WORK/zip/app/ImsStack.apk"' "apk installed anyway"
       check 'no_temps' "no .joan-new temp files left behind"
       umount_chk
@@ -220,7 +221,7 @@ if [ "${1:-}" = "--inner" ]; then
       check '[ ! -e "$S/system/priv-app/Iwlan" ] && [ ! -e "$S/system/priv-app/QualifiedNetworksService" ]' "VoWiFi apps removed"
       check '[ ! -e "$S/system/etc/permissions/com.google.android.iwlan.xml" ] && [ ! -e "$S/system/etc/permissions/com.android.telephony.qns.xml" ] && [ ! -e "$S/system/etc/sysconfig/com.google.android.iwlan.xml" ]' "VoWiFi allowlists and sysconfig removed"
       check '[ ! -e "$S/system/etc/permissions/android.hardware.telephony.ims.xml" ]' "IMS feature xml removed (it was ours)"
-      check '[ ! -e "$P/overlay/ImsStackPhoneOverlay.apk" ] && [ ! -e "$P/overlay/ImsStackFrameworkOverlay.apk" ]' "overlays removed"
+      check '[ ! -e "$P/overlay/ImsStackPhoneOverlay.apk" ] && [ ! -e "$P/overlay/ImsStackFrameworkOverlay.apk" ] && [ ! -e "$P/overlay/ImsStackCarrierConfigOverlay.apk" ]' "overlays removed"
       check 'cmp -s "$P/etc/apns-conf.xml" "$WORK/apns-orig.xml"' "APN list restored byte-for-byte"
       check '! find "$S" "$P" -name "*joan*" | grep -q .' "nothing named joan left on either partition"
       umount_chk
@@ -266,6 +267,7 @@ python3 aosp-ims/tools/make-installer.py scripts "$GEN" >/dev/null
 head -c 190000 /dev/urandom > "$WORK/zip/app/ImsStack.apk"
 head -c 8530 /dev/urandom > "$WORK/zip/app/ImsStackPhoneOverlay.apk"
 head -c 8530 /dev/urandom > "$WORK/zip/app/ImsStackFrameworkOverlay.apk"
+head -c 8530 /dev/urandom > "$WORK/zip/app/ImsStackCarrierConfigOverlay.apk"
 head -c 60000 /dev/urandom > "$WORK/zip/app/Iwlan.apk"
 head -c 60000 /dev/urandom > "$WORK/zip/app/QualifiedNetworksService.apk"
 cp aosp-ims/permissions/privapp-permissions-com.google.android.iwlan.xml "$WORK/zip/etc/permissions/com.google.android.iwlan.xml"
@@ -294,7 +296,7 @@ PYZ
 
 # A world APN list of realistic size (LineageOS ships several hundred KB),
 # with the fixture's Viettel rows in it so the merge has work to do.
-python3 - "$ROOT/tests/apn/fixtures/orig-apns-conf.xml" "$WORK" <<'PYA'
+python3 - "$ROOT/aosp-ims/tests/fixtures/orig-apns-conf.xml" "$WORK" <<'PYA'
 import sys, os
 fix, work = sys.argv[1], sys.argv[2]
 body = open(fix).read()

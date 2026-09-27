@@ -18,7 +18,6 @@ LineageOS 22.2's framework:
   registered; domain-selection emergency mode is not reported.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01SByt7CZfKR6U4r1VS86tHS
 ---
  .../base/TelephonyManagerProxyImpl.java       | 27 +++----------------
  .../imsstack/core/StkSetupEventReceiver.java  |  7 ++++-

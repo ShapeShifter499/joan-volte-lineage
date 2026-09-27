@@ -1,9 +1,10 @@
 # AOSP IMS in a LineageOS 22.2 build (joan)
 
-How to build VoLTE and Wi-Fi calling into LineageOS 22.2 for the LG V30,
-using AOSP's own IMS stack from Android 17. This replaces the joan
-`ImsService` described in `README.md`. Use one or the other, never both:
-a device has one MMTEL `ImsService`.
+How to build VoLTE, SMS over IMS and Wi-Fi calling into LineageOS 22.2
+for the LG V30, using AOSP's own IMS stack from Android 17. This is the
+only IMS stack on this branch: the from-scratch joan `ImsService` it
+replaces is retired here (its sources and history live on the joan
+branches). A device has one MMTEL `ImsService`; never install two.
 
 **Status.** Nothing here has run on a phone yet.
 - The flashable zip and the repacked ROM (`aosp-ims/README.md`) are built
@@ -108,39 +109,64 @@ the zip's adb steps.
 
 ## Carrier configuration
 
-LineageOS ships no IMS carrier config for most carriers joan users are
-on, so the device patch adds it to
-`overlay/packages/apps/CarrierConfig/res/xml/vendor.xml`, which
-CarrierConfig applies after each carrier's own config:
+LineageOS ships no IMS carrier config for most carriers, so the device
+patch fills `overlay/packages/apps/CarrierConfig/res/xml/vendor.xml` —
+the file CarrierConfig reads for device-supplied config — with three
+layers, which CarrierConfig merges in document order (later wins):
 
-- VoLTE offered for every SIM, with the VoLTE toggle visible and
-  editable. It is on by default (`enhanced_4g_lte_on_by_default_bool`);
-  the toggle is the opt-out.
-- Wi-Fi calling offered for the carriers LG's own firmware shipped it on
-  (103 of LG's 164 profiles), matched by Android carrier id and by PLMN.
-- The ePDG address for T-Mobile (and MetroPCS), AT&T and Verizon, whose
-  ePDGs are not at the 3GPP default name.
+1. the CAF-derived content already in that file (MMS/voicemail config),
+   untouched;
+2. the IMS keys converted from **Google's Pixel CarrierSettings**
+   (`aosp-ims/carrier/lineage-pixel-ims.xml`): the same conversion
+   LineageOS runs for Pixel devices with
+   `lineage/scripts/carriersettings-extractor`, pre-run and filtered to
+   the IMS namespaces — 1353 carrier entries over 573 named carriers,
+   VoLTE for 1201, Wi-Fi calling for 936, a static ePDG for 587, with
+   SIP timers, codecs, Ut/XCAP and LTE/Wi-Fi handover policy per
+   carrier. Its ePDG addresses are authoritative;
+3. our rules last (`carrier_volte_available_bool`,
+   `carrier_wfc_ims_available_bool`, both toggles usable,
+   `carrier_allow_turnoff_ims_bool=true`), plus ePDG overrides for AT&T
+   and Verizon from `CarrierImsGate.java`'s table, which the zip's
+   run-time gate applies when the overlay did not match the SIM.
 
-These are the same rules the flashable zip applies at run time
-(`CarrierImsGate`), generated from the same data:
+The flashable zip and the repacked ROM carry the same three layers as a
+runtime resource overlay (`ImsStackCarrierConfigOverlay`,
+`zip/rro-carrierconfig/`), which outranks the auto-generated
+CarrierConfig overlay LineageOS builds from the device tree
+(`PRODUCT_ENFORCE_RRO_TARGETS`): ours ships in `product/overlay` with
+`android:priority="10"`. Both paths come from one generator, so they
+cannot drift.
+
+To regenerate the region (the same command the build runs for the
+overlay's `res/xml/vendor.xml`):
 
 ```
 python3 aosp-ims/tools/make-carrier-config.py \
-    ims-service/assets/carrier-id-map.json \
-    ims-service/assets/carrier-plmn-map.json \
-    aosp-ims/zip/assets/wfc-profiles.json \
+    aosp-ims/assets/carrier-id-map.json \
+    aosp-ims/assets/carrier-plmn-map.json \
     aosp-ims/zip/java/com/android/imsstack/joan/CarrierImsGate.java \
     <tree>/packages/providers/TelephonyProvider/assets/latest_carrier_id/carrier_list.textpb \
+    --import aosp-ims/carrier/lineage-pixel-ims.xml \
     --splice <tree>/device/lge/joan-common/overlay/packages/apps/CarrierConfig/res/xml/vendor.xml
 ```
 
-`--splice` replaces the block between the `aosp-ims-begin`/`aosp-ims-end`
-markers, so it can be re-run when the data changes.
-`aosp-ims/tests/check-carrier-config.py` (same five inputs) checks the
-result against the gate's rules for every carrier id and PLMN Android
-knows: 2866 SIM identities, 822 of them with Wi-Fi calling, no
-differences. Given `--patch` and the device patch, it also checks that
-the patch carries exactly the generated blocks; CI runs both.
+`--splice` replaces the region between the `aosp-ims-begin`/`aosp-ims-end`
+markers, so it can be re-run when the data changes. To re-run the Pixel
+conversion itself (same inputs the handoff pins:
+`lineage/scripts` at e81615b6, TheMuppets' Pixel 8 Pro vendor at
+7085ddc0):
+
+```
+aosp-ims/tools/import-carrier-settings.py <carriersettings-extractor dir> \
+    <CarrierSettings dir> <source note> aosp-ims/carrier/lineage-pixel-ims.xml
+```
+
+`aosp-ims/tests/check-carrier-config.py` (same four inputs, plus
+`--import` and `--patch`) checks the result against the gate's rules
+for every carrier id, specific carrier id and PLMN Android knows — 2866
+SIM identities — and that the device patch carries exactly the
+generated region. CI runs both.
 
 ## What was checked, and against what
 
@@ -168,6 +194,33 @@ Checked against the `android15-qpr2-release` sources and the LineageOS
   `CONFIG_IPV6_VTI`, `CONFIG_INET(6)_ESP`), and joan-common already
   declares `android.software.ipsec_tunnels`.
 
+## Taking this to LineageOS officially
+
+The pieces map onto how LineageOS already works:
+
+- **The device change is one patch** to `device/lge/joan-common` —
+  `PRODUCT_PACKAGES`, the framework/Telephony overlays, the CarrierConfig
+  `vendor.xml` region, the default permissions. Submit it to LineageOS
+  Gerrit against `lineage-22.2` (it applies there; see the pin in the
+  patch header). Reviewers may reasonably prefer the carrier data
+  smaller or split out; the `aosp-ims-begin`/`aosp-ims-end` markers
+  exist so the generated region can be reviewed as one block.
+- **The carrier data is the awkward part.** It is Google's Pixel
+  CarrierSettings converted by LineageOS's own converter — but
+  LineageOS runs that conversion per-Pixel at build time from the
+  vendor blobs, and joan has no such blobs. The options, in the order
+  to propose them: (a) LineageOS centralizes the converted data in one
+  repo every device can consume — `aosp-ims/tools/import-carrier-settings.py`
+  is the tool, and the Pixels-only-ness of the current flow is the
+  thing it removes; (b) joan-common carries the preconverted filtered
+  file, as this patch does; (c) a reviewer-suggested middle ground.
+- **The backport patches** (ImsStack, ImsMedia on Android 15) are
+  upstream's to want or refuse: on LineageOS 24 (Android 17) they
+  disappear entirely — only the device change is needed there.
+- **What a maintainer should know:** the stack is AP-side only (the
+  V30's modem has no IMS core), SELinux uses stock domains only, no
+  signing keys are published, and nothing here has run on a phone yet.
+
 ## Other LineageOS versions
 
 - **23.x (Android 16):** the same steps should mostly apply; the
@@ -178,8 +231,7 @@ Checked against the `android15-qpr2-release` sources and the LineageOS
 
 ## Do not
 
-- Do not also inherit `joan-ims.mk` (the joan `ImsService`): two MMTEL
-  services cannot both be the device's.
+- Do not install a second MMTEL service alongside this (including the
+  retired joan stack from the joan branches): two MMTEL services cannot
+  both be the device's.
 - Do not flash the AOSP IMS flashable zip on a build made this way.
-- Do not build this repository's root `Android.bp` into the same tree
-  unless you want the joan stack instead.

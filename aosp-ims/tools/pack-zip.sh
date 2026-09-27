@@ -27,6 +27,7 @@ install = {
     'app/ImsStack.apk': f'{apk}/ImsStack.apk',
     'app/ImsStackPhoneOverlay.apk': f'{apk}/ImsStackPhoneOverlay.apk',
     'app/ImsStackFrameworkOverlay.apk': f'{apk}/ImsStackFrameworkOverlay.apk',
+    'app/ImsStackCarrierConfigOverlay.apk': f'{apk}/ImsStackCarrierConfigOverlay.apk',
     'etc/permissions/com.android.imsstack.xml': f'{here}/permissions/privapp-permissions-com.android.imsstack.xml',
     'etc/permissions/android.hardware.telephony.ims.xml': f'{root}/permissions/android.hardware.telephony.ims.xml',
     'etc/default-permissions/com.android.imsstack.xml': f'{here}/permissions/default-permissions-com.android.imsstack.xml',
