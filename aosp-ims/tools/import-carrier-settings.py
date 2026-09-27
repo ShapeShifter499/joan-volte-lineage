@@ -33,7 +33,11 @@ Left out, deliberately:
   stack is not), GBA-required (it gates VoLTE on the SIM), the VoLTE
   opt-out lock, and Wi-Fi calling on by default (it stays the user's
   choice);
-- 5G (VoNR), which joan's modem does not have.
+- 5G (VoNR), which joan's modem does not have;
+- EVS. AOSP ImsMedia has no EVS codec: its EVS encoder and decoder are
+  stubs, so a call that negotiated EVS would carry no audio. The EVS
+  payload types come out of the codec capability bundle (every one of
+  them also lists AMR-WB and AMR), and the EVS payload descriptions go.
 
 The converter's own exclusions (package names, APN editing locks, the
 Enhanced 4G toggle keys) apply first.
@@ -107,16 +111,27 @@ KEEP_TOP = {
 DROP_TOP = {
     'carrier_ims_gba_required_bool', 'carrier_allow_turnoff_ims_bool',
     'carrier_default_wfc_ims_enabled_bool', 'carrier_default_wfc_ims_roaming_enabled_bool',
-    'rcs_config_server_url_string',
+    'rcs_config_server_url_string', 'imsvoice.evs_payload_description_bundle',
 }
 DROP_SUBSTRINGS = ('package_override', 'provisioning', 'vonr', 'nr_advanced')
 GENERIC = {'pn_xx'}
+# Inside bundles: EVS payload types (see above).
+DROP_NESTED = {'imsvoice.evs_payload_type_int_array'}
 
 
 def keep(key):
     if key in DROP_TOP or any(s in key for s in DROP_SUBSTRINGS):
         return False
     return key.startswith(KEEP_PREFIXES) or key in KEEP_TOP
+
+
+def drop_nested(el):
+    """Removes DROP_NESTED entries from the bundles under el."""
+    for child in list(el):
+        if child.get('name') in DROP_NESTED:
+            el.remove(child)
+        else:
+            drop_nested(child)
 
 
 def load_extractor(path):
@@ -169,6 +184,7 @@ def main(extractor_dir, pb_dir, source, out):
             cse.extract_elements(full, config)
         for child in full:
             if keep(child.get('name')):
+                drop_nested(child)
                 el.append(child)
                 kept_keys.add(child.get('name'))
         if len(el):

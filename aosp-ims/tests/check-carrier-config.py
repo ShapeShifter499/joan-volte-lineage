@@ -6,7 +6,8 @@ CarrierConfig would read it, and checked:
 
 - every imported block carries only keys import-carrier-settings.py keeps
   (no ImsService package overrides, provisioning, GBA-required, opt-out
-  lock or Wi-Fi-calling-on-by-default);
+  lock or Wi-Fi-calling-on-by-default), and no EVS anywhere, not even
+  inside a codec bundle: ImsMedia has no EVS codec;
 - the last block is the filterless every-SIM block;
 - for every SIM Android can tell apart -- each carrier id and specific
   carrier id in carrier_list.textpb on each of its PLMNs, plus every PLMN
@@ -120,10 +121,15 @@ def main(argv):
     ids, plmns, epdg, carriers = mcc.load(*argv)
     fails = []
 
-    imported = parse_blocks(open(opts['--imported'], encoding='utf-8').read())
+    imported_text = open(opts['--imported'], encoding='utf-8').read()
+    imported = parse_blocks(imported_text)
     bad_keys = sorted({k for _, vals in imported for k in vals if not imp.keep(k)})
     if bad_keys:
         fails.append(f'imported data carries keys the importer excludes: {bad_keys[:8]}')
+    nested = sorted({e.get('name') for e in ET.fromstring('<l>' + imported_text + '</l>').iter()
+                     if e.get('name') in imp.DROP_NESTED})
+    if nested:
+        fails.append(f'imported data carries nested keys the importer drops: {nested}')
 
     text = mcc.render(ids, plmns, epdg, carriers, opts['--imported'])
     blocks = parse_blocks(text)

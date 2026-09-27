@@ -45,6 +45,7 @@ are the backport, the same ones the zip is built from:
 | ImsStack 0004 | Survives a refused outgoing-emergency-call listener (the zip lacks the signature permission) by falling back to the call state and `TelecomManager#isInEmergencyCall`. A platform-signed tree build holds the permission, registers the original listener and never uses the fallback |
 | ImsStack 0005 | USAT call control and MO SMS control with no answer from the SIM: joan's RIL completes the envelope with status words 00 00 and no data, which ImsStack took as a refusal, failing every call on a SIM with call control by USIM. With no answer the call is set up as dialled; a real answer from the SIM still counts. Needed in a tree build too: it is the RIL, not the signing, that drops the answer |
 | ImsStack 0006 | Codes a three-digit MNC in those envelopes' location information as 3GPP TS 24.008 says |
+| ImsStack 0007 | Drops EVS from the codec offer: ImsMedia has no EVS codec yet (its encoder and decoder are TODOs), so an EVS call would be silent. Remove this patch once ImsMedia gains one |
 | ImsMedia 0001 | Lets ImsMedia run inside the caller's own package (the zip's single APK). A separate `ImsMediaService`, as here, is bound as before |
 
 ## Steps

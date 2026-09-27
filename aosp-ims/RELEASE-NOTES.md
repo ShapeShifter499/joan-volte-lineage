@@ -111,6 +111,9 @@ Then turn on **VoLTE** (Settings > Network & internet > SIMs), and
   this phone; a SIM that does answer is still obeyed.
 - **Video calling** is offered where the carrier's config allows it, and
   has not been tested yet.
+- **No EVS.** AOSP's media stack has no EVS codec yet, so calls use HD
+  voice (AMR-WB) or AMR, never EVS, even where the carrier offers it
+  (patch 0007).
 
 ## Building it into LineageOS
 

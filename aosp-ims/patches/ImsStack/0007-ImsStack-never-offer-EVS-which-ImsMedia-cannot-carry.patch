@@ -1,0 +1,77 @@
+From 2efad0fb0ede169a880438053cd0191e04568cf8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 20:42:07 +0000
+Subject: [PATCH] ImsStack: never offer EVS, which ImsMedia cannot carry
+
+ImsMedia's EVS paths are still TODOs: the audio source and player
+create no codec for EVS, so a call the network put on EVS sends and
+plays nothing. ImsStack offered EVS whenever the carrier config listed
+EVS payload types, as Pixel-derived carrier configs do for hundreds of
+carriers.
+
+Drop the EVS payload types from the codec capability bundle when the
+carrier config is set, so the offer carries the codecs ImsMedia has
+(AMR-WB and AMR) whatever the config says.
+---
+ .../imsstack/core/config/CarrierConfig.java   | 14 ++++++++++++++
+ .../core/config/CarrierConfigTest.java        | 19 +++++++++++++++++++
+ 2 files changed, 33 insertions(+)
+
+diff --git a/java/src/com/android/imsstack/core/config/CarrierConfig.java b/java/src/com/android/imsstack/core/config/CarrierConfig.java
+index 3c537e2..434a15f 100644
+--- a/java/src/com/android/imsstack/core/config/CarrierConfig.java
++++ b/java/src/com/android/imsstack/core/config/CarrierConfig.java
+@@ -1837,6 +1837,20 @@ public class CarrierConfig {
+ 
+             mConfig.putString(CarrierConfigManager.Ims.KEY_IMS_USER_AGENT_STRING, sb.toString());
+         }
++
++        // ImsMedia has no EVS codec yet (its EVS encoder and decoder are TODOs), so a call
++        // the network put on EVS would carry no audio. Offer the other codecs only.
++        PersistableBundle codecs = mConfig.getPersistableBundle(
++                CarrierConfigManager.ImsVoice.KEY_AUDIO_CODEC_CAPABILITY_PAYLOAD_TYPES_BUNDLE);
++
++        if (codecs != null
++                && codecs.containsKey(CarrierConfigManager.ImsVoice.KEY_EVS_PAYLOAD_TYPE_INT_ARRAY)) {
++            PersistableBundle withoutEvs = new PersistableBundle(codecs);
++            withoutEvs.remove(CarrierConfigManager.ImsVoice.KEY_EVS_PAYLOAD_TYPE_INT_ARRAY);
++            mConfig.putPersistableBundle(
++                    CarrierConfigManager.ImsVoice.KEY_AUDIO_CODEC_CAPABILITY_PAYLOAD_TYPES_BUNDLE,
++                    withoutEvs);
++        }
+     }
+ 
+     private static String getMccMnc(int slotId) {
+diff --git a/tests/java/src/com/android/imsstack/core/config/CarrierConfigTest.java b/tests/java/src/com/android/imsstack/core/config/CarrierConfigTest.java
+index 5f4b879..bf0a053 100644
+--- a/tests/java/src/com/android/imsstack/core/config/CarrierConfigTest.java
++++ b/tests/java/src/com/android/imsstack/core/config/CarrierConfigTest.java
+@@ -128,6 +128,25 @@ public class CarrierConfigTest {
+                 CarrierConfigManager.ImsVoice.KEY_AUDIO_CODEC_CAPABILITY_PAYLOAD_TYPES_BUNDLE));
+     }
+ 
++    @Test
++    @SmallTest
++    public void testSetConfigWithoutEvs() {
++        PersistableBundle b = createBundle();
++        PersistableBundle codecs = b.getPersistableBundle(
++                CarrierConfigManager.ImsVoice.KEY_AUDIO_CODEC_CAPABILITY_PAYLOAD_TYPES_BUNDLE);
++        codecs.putIntArray(CarrierConfigManager.ImsVoice.KEY_EVS_PAYLOAD_TYPE_INT_ARRAY,
++                new int[] {127});
++
++        mCarrierConfig.setConfig(b, TestAppContext.SLOT0);
++
++        PersistableBundle offered = mCarrierConfig.getBundle(
++                CarrierConfigManager.ImsVoice.KEY_AUDIO_CODEC_CAPABILITY_PAYLOAD_TYPES_BUNDLE);
++        assertFalse(offered.containsKey(
++                CarrierConfigManager.ImsVoice.KEY_EVS_PAYLOAD_TYPE_INT_ARRAY));
++        assertNotNull(offered.getIntArray(
++                CarrierConfigManager.ImsVoice.KEY_AMRWB_PAYLOAD_TYPE_INT_ARRAY));
++    }
++
+     @Test
+     @SmallTest
+     public void testSetConfigForUserAgent() {
+-- 
+2.43.0
+

@@ -99,7 +99,9 @@ brings it along, for every SIM:
   `tools/import-carrier-settings.py` into `carrier/lineage-pixel-ims.xml`
   (sources pinned in `upstream.lock`), filtered to the keys the AOSP stack
   reads; never the keys that would pick another ImsService, require
-  provisioning, lock the VoLTE toggle or turn Wi-Fi calling on by default.
+  provisioning, lock the VoLTE toggle or turn Wi-Fi calling on by default,
+  and never EVS (ImsMedia has no EVS codec; ImsStack 0007 also drops it
+  from any other config).
 - **ePDG**: the carrier's own address from that data where it has one;
   for T-Mobile, MetroPCS, AT&T and Verizon otherwise, whose ePDGs are not
   at the 3GPP default name, joan's table. Everyone else uses the default
@@ -119,7 +121,7 @@ identities Android's carrier database knows.
 
 | Step | State |
 |---|---|
-| ImsStack + ImsMedia Java, against LineageOS 22.2's own framework | done: 6 ImsStack patches, 1 ImsMedia |
+| ImsStack + ImsMedia Java, against LineageOS 22.2's own framework | done: 7 ImsStack patches, 1 ImsMedia |
 | `libimsstack.so`, `libimsmedia.so`, linked against the ROM's libraries | done |
 | IWLAN + QNS (Android 17) for the zip | done: 1 patch each |
 | Single-APK packaging, overlays, permission files | done |
@@ -141,6 +143,7 @@ pinned in `upstream.lock`.
 | ImsStack 0004 | Emergency call tracking without `READ_ACTIVE_EMERGENCY_SESSION` (signature-only). Without the platform key the listener is refused, which crash-looped the stack on a US998; ImsStack now falls back to the call state plus `TelecomManager#isInEmergencyCall` (a privileged permission the zip holds). Platform-signed builds keep the original listener |
 | ImsStack 0005 | USAT call control with no answer from the SIM. joan's RIL completes the CALL CONTROL envelope with status words 00 00 and no data, which no UICC sends; ImsStack took it as a refusal and failed every MO call on a SIM with call control by USIM (T-Mobile's). With no answer there is no verdict: the call is set up as dialled, and an SMS under MO SMS control sent as is. A real answer from the SIM (busy, an error, or result 01 "not allowed") still blocks |
 | ImsStack 0006 | The location information in those envelopes coded a three-digit MNC in dialling order (310-260 as `13 20 06`); it is now coded as 3GPP TS 24.008 says (`13 00 62`) |
+| ImsStack 0007 | Never offers EVS. ImsMedia's EVS encoder and decoder are still TODOs, so an EVS call would carry no audio; the Pixel-derived config offers EVS for hundreds of carriers. The codec offer keeps AMR-WB and AMR whatever the config says |
 | ImsMedia 0001 | `ImsMediaManager` binds the ImsMedia service in its own package when that package has one (the zip's single APK) |
 | Iwlan 0001 | No physical-network reporting in `DataCallResponse` (Android 16 API) |
 | QNS 0001 | Wi-Fi calling activation without androidx: the activity is a plain `Activity`, and carrier portals open in the browser |
