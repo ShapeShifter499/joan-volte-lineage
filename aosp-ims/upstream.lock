@@ -7,6 +7,15 @@ IMSSTACK_COMMIT=1e3981c23117d75d5ad304b32bb030327ad33eaa
 IMSMEDIA_URL=https://android.googlesource.com/platform/packages/modules/ImsMedia
 IMSMEDIA_REF=android-17.0.0_r1
 IMSMEDIA_COMMIT=0101cb4caf48dbcc3b8fbc6ab3e41137b90b8e67
+# VoWiFi: the ePDG tunnel (IWLAN) and the LTE/Wi-Fi transport choice (QNS).
+IWLAN_URL=https://android.googlesource.com/platform/packages/services/Iwlan
+IWLAN_REF=android-17.0.0_r1
+IWLAN_COMMIT=ddf0eb7f277ea6a5a62c63678d17218714f38071
+QNS_URL=https://android.googlesource.com/platform/packages/services/QualifiedNetworksService
+QNS_REF=android-17.0.0_r1
+QNS_COMMIT=f1500926b882a189c7c5772368835d5de700b34f
+# Libraries QNS and IWLAN link statically (sparse checkouts at the same tag).
+LIBS_REF=android-17.0.0_r1
 
 # Android 15 QPR2, what LineageOS 22.2 is built on (BP1A.250505.005):
 # platform headers come from this branch, libc++ headers from the clang
@@ -22,3 +31,4 @@ LINEAGE_OTA_SHA256=f8ef5e51da8cc88fd863bcdb82bb91f9f4c4adb8626b5d8a5dee29593e01b
 NDK_VERSION=29.0.14206865
 DEX2JAR_VERSION=2.4.38
 ASM_VERSION=9.10.1
+AUTOVALUE_VERSION=1.11.0

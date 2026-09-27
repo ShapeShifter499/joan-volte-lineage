@@ -26,6 +26,12 @@ python3 "$HERE/tools/merge-manifest.py" "$S/ImsStack/java/AndroidManifest.xml" \
     "$S/ImsMedia/service/AndroidManifest.xml" "$OUT/AndroidManifest.xml" \
     "$VERSION_CODE" "$VERSION_NAME"
 cp -r "$S/ImsStack/java/assets/." "$S/ImsMedia/service/assets/." "$OUT/assets/"
+# CarrierImsGate's data: joan's SIM -> LG profile maps, and the profiles LG
+# shipped VoWiFi on.
+mkdir -p "$OUT/assets/joan"
+cp "$HERE/../ims-service/assets/carrier-id-map.json" \
+   "$HERE/../ims-service/assets/carrier-plmn-map.json" \
+   "$HERE/zip/assets/wfc-profiles.json" "$OUT/assets/joan/"
 "$BT/aapt2" compile --dir "$S/ImsStack/java/res" -o "$OUT/res/stack.zip"
 "$BT/aapt2" compile --dir "$S/ImsMedia/service/res" -o "$OUT/res/media.zip"
 "$BT/aapt2" link --manifest "$OUT/AndroidManifest.xml" -I "$PUB" -A "$OUT/assets" \

@@ -33,6 +33,8 @@ upstream() { # upstream <name> <url> <ref> <commit>
 }
 upstream ImsStack "$IMSSTACK_URL" "$IMSSTACK_REF" "$IMSSTACK_COMMIT"
 upstream ImsMedia "$IMSMEDIA_URL" "$IMSMEDIA_REF" "$IMSMEDIA_COMMIT"
+upstream Iwlan "$IWLAN_URL" "$IWLAN_REF" "$IWLAN_COMMIT"
+upstream Qns "$QNS_URL" "$QNS_REF" "$QNS_COMMIT"
 
 # --- 2. Android 15 QPR2 headers (blobless sparse checkouts) ----------------
 sparse() { # sparse <project> <dir> <branch> <paths...>
@@ -72,7 +74,12 @@ sparse platform/prebuilts/sdk sdk "$PLATFORM_BRANCH" \
 sparse platform/hardware/interfaces hwif "$IMSMEDIA_REF" \
     /radio/aidl/aidl_api/android.hardware.radio.ims.media/2/ \
     /radio/aidl/aidl_api/android.hardware.radio/4/android/hardware/radio/AccessNetwork.aidl
-echo "aosp15 headers, clang $CLANG_VERSION libc++, sdk 35 stubs, radio AIDL: ok"
+# QNS's stats library and IWLAN's HandlerExecutor, from the same release.
+sparse platform/packages/modules/Telephony src/modules-telephony "$LIBS_REF" \
+    /libs/TelephonyStatsLib/src/
+sparse platform/frameworks/libs/modules-utils src/modules-utils "$LIBS_REF" \
+    /java/com/android/modules/utils/HandlerExecutor.java
+echo "aosp15 headers, clang $CLANG_VERSION libc++, sdk 35 stubs, radio AIDL, VoWiFi libs: ok"
 
 # --- 3. Java libraries --------------------------------------------------------
 mkdir -p deps tools/d2j
@@ -80,6 +87,12 @@ mkdir -p deps tools/d2j
     "$GOOGLE_MAVEN/androidx/annotation/annotation-jvm/1.8.0/annotation-jvm-1.8.0.jar"
 [ -s deps/libphonenumber.jar ] || retry curl -sSfL -o deps/libphonenumber.jar \
     "$MAVEN/com/googlecode/libphonenumber/libphonenumber/8.13.40/libphonenumber-8.13.40.jar"
+[ -s deps/support-annotations.jar ] || retry curl -sSfL -o deps/support-annotations.jar \
+    "$GOOGLE_MAVEN/com/android/support/support-annotations/28.0.0/support-annotations-28.0.0.jar"
+for a in auto-value auto-value-annotations; do
+    [ -s "deps/$a.jar" ] || retry curl -sSfL -o "deps/$a.jar" \
+        "$MAVEN/com/google/auto/value/$a/$AUTOVALUE_VERSION/$a-$AUTOVALUE_VERSION.jar"
+done
 for a in dex-tools dex-translator dex-reader-api d2j-external dex-reader dex-ir d2j-base-cmd; do
     f=tools/d2j/$a-$DEX2JAR_VERSION.jar
     [ -s "$f" ] || retry curl -sSfL -o "$f" \
@@ -114,7 +127,7 @@ EOF
     done
 fi
 dump() { debugfs -R "dump $1 $2" rom/system.img >/dev/null 2>&1; [ -s "$2" ] || { echo "cannot read $1"; exit 1; }; }
-for j in framework telephony-common ims-common framework-location; do
+for j in framework telephony-common ims-common framework-location framework-connectivity-b; do
     [ -s "fwcls/$j.jar" ] && continue
     dump "/system/framework/$j.jar" "rom/$j.jar"
     java -Xmx4g -cp "$(ls tools/d2j/*.jar | tr '\n' ':')" \

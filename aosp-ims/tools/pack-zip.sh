@@ -31,6 +31,12 @@ install = {
     'etc/permissions/android.hardware.telephony.ims.xml': f'{root}/permissions/android.hardware.telephony.ims.xml',
     'etc/default-permissions/com.android.imsstack.xml': f'{here}/permissions/default-permissions-com.android.imsstack.xml',
     'etc/sysconfig/com.android.imsstack.xml': f'{here}/permissions/sysconfig-com.android.imsstack.xml',
+    # VoWiFi: AOSP IWLAN (ePDG tunnel) and QNS (LTE <-> Wi-Fi choice).
+    'app/Iwlan.apk': f'{apk}/Iwlan.apk',
+    'app/QualifiedNetworksService.apk': f'{apk}/QualifiedNetworksService.apk',
+    'etc/permissions/com.google.android.iwlan.xml': f'{here}/permissions/privapp-permissions-com.google.android.iwlan.xml',
+    'etc/permissions/com.android.telephony.qns.xml': f'{here}/permissions/privapp-permissions-com.android.telephony.qns.xml',
+    'etc/sysconfig/com.google.android.iwlan.xml': f'{here}/permissions/sysconfig-com.google.android.iwlan.xml',
     'apn/viettel-45204.xml': f'{root}/apn/viettel-45204.xml',
     'scripts/merge-viettel-apns.sh': f'{root}/scripts/merge-viettel-apns.sh',
     'grant-permissions.sh': f'{here}/zip/grant-permissions.sh',

@@ -1,0 +1,279 @@
+From e2fdd7401bed467a3a119a7a60d807ac3ee34dec Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 10:38:05 +0000
+Subject: [PATCH] QNS: Wi-Fi calling activation without androidx
+
+The activation screen was the only androidx user in QNS (FragmentActivity,
+an activity-result launcher, a fragment dialog and Custom Tabs). Move it
+to platform classes: Activity with startActivityForResult, a plain
+AlertDialog, and the carrier's portal opened in the default browser
+instead of a Custom Tab. The flow and its results are unchanged. Drop the
+appcompat and browser dependencies. Everything else in QNS already builds
+against Android 15 QPR2.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SByt7CZfKR6U4r1VS86tHS
+---
+ Android.bp                                    |   4 -
+ .../qns/wfc/WfcActivationActivity.java        | 130 +++++-------------
+ .../android/telephony/qns/wfc/WfcUtils.java   |   7 +-
+ 3 files changed, 38 insertions(+), 103 deletions(-)
+
+diff --git a/Android.bp b/Android.bp
+index 1a2d6e0..dd0f461 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -36,8 +36,6 @@ android_app {
+     ],
+ 
+     static_libs: [
+-        "androidx.appcompat_appcompat",
+-        "androidx.browser_browser",
+         "TelephonyStatsLib",
+     ],
+ 
+@@ -90,8 +88,6 @@ android_test {
+         "android.test.base.stubs.system",
+     ],
+     static_libs: [
+-        "androidx.appcompat_appcompat",
+-        "androidx.browser_browser",
+         "androidx.test.ext.truth",
+         "androidx.test.ext.junit",
+         "androidx.test.rules",
+diff --git a/src/com/android/telephony/qns/wfc/WfcActivationActivity.java b/src/com/android/telephony/qns/wfc/WfcActivationActivity.java
+index b53fed0..1441bf4 100644
+--- a/src/com/android/telephony/qns/wfc/WfcActivationActivity.java
++++ b/src/com/android/telephony/qns/wfc/WfcActivationActivity.java
+@@ -33,20 +33,19 @@ import android.util.Log;
+ import android.view.ContextThemeWrapper;
+ import android.view.WindowManager;
+ 
+-import androidx.activity.result.ActivityResultLauncher;
+-import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult;
+-import androidx.browser.customtabs.CustomTabsClient;
+-import androidx.browser.customtabs.CustomTabsIntent;
+-import androidx.browser.customtabs.CustomTabsServiceConnection;
+-import androidx.browser.customtabs.CustomTabsSession;
+-import androidx.fragment.app.DialogFragment;
+-import androidx.fragment.app.FragmentActivity;
+ 
+ import com.android.internal.annotations.VisibleForTesting;
+ import com.android.telephony.qns.R;
+ 
+-/** Main activity to handle VoWiFi activation */
+-public class WfcActivationActivity extends FragmentActivity {
++/**
++ * Main activity to handle VoWiFi activation.
++ *
++ * <p>Android 15 backport: upstream builds this on androidx (FragmentActivity, an
++ * activity-result launcher, Custom Tabs). This keeps the flow on platform classes:
++ * the web portal opens in the default browser instead of a Custom Tab, and the
++ * Wi-Fi dialog is a plain AlertDialog.
++ */
++public class WfcActivationActivity extends Activity {
+ 
+     public static final String TAG = "QNS-WfcActivationActivity";
+ 
+@@ -64,20 +63,21 @@ public class WfcActivationActivity extends FragmentActivity {
+     private Handler mUiHandler;
+     @VisibleForTesting ProgressDialog mProgressDialog;
+ 
+-    private CustomTabsSession mCustomTabsSession;
+-    @VisibleForTesting CustomTabsServiceConnection mServiceConnection;
+-    private ActivityResultLauncher<Intent> mWebviewResultsLauncher =
+-        registerForActivityResult(
+-            new StartActivityForResult(),
+-            activityResult -> {
+-              if (activityResult.getResultCode() == Activity.RESULT_CANCELED) {
+-                Log.d(TAG, "Webview Activity Result CANCEL");
+-                finish();
+-              } else {
+-                Log.d(TAG, "Webview Activity Result OK");
+-                finish();
+-              }
+-            });
++    private static final int REQUEST_WEBVIEW = 1;
++
++    @Override
++    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
++        super.onActivityResult(requestCode, resultCode, data);
++        if (requestCode != REQUEST_WEBVIEW) {
++            return;
++        }
++        if (resultCode == Activity.RESULT_CANCELED) {
++            Log.d(TAG, "Webview Activity Result CANCEL");
++        } else {
++            Log.d(TAG, "Webview Activity Result OK");
++        }
++        finish();
++    }
+ 
+     // Whether it's safe now to update UI, based on activity visibility.
+     // It should be true between onResume() and onPause().
+@@ -160,13 +160,6 @@ public class WfcActivationActivity extends FragmentActivity {
+         mUiHandler = new Handler(handlerCallback);
+     }
+ 
+-    @Override
+-    public void onDestroy() {
+-        if (mServiceConnection != null) {
+-          unbindService(mServiceConnection);
+-        }
+-        super.onDestroy();
+-    }
+ 
+     private void startWebPortal() {
+       Log.d(TAG, "starting web portal ..");
+@@ -192,26 +185,9 @@ public class WfcActivationActivity extends FragmentActivity {
+     }
+ 
+     private void startCustomTab(String url) {
+-        mServiceConnection =
+-            new CustomTabsServiceConnection() {
+-              @Override
+-              public void onCustomTabsServiceConnected(
+-                      ComponentName name, CustomTabsClient client) {
+-                client.warmup(0L);
+-                mCustomTabsSession = client.newSession(null);
+-                mCustomTabsSession.mayLaunchUrl(Uri.parse(url), null, null);
+-              }
+-
+-              @Override
+-              public void onServiceDisconnected(ComponentName name) {
+-                mCustomTabsSession = null;
+-              }
+-            };
+-
+-        String ServicePackageName =
+-                getResources().getString(R.string.custom_tabs_service_package_name);
+-        CustomTabsClient.bindCustomTabsService(this, ServicePackageName, mServiceConnection);
+-        new CustomTabsIntent.Builder(mCustomTabsSession).build().launchUrl(this, Uri.parse(url));
++        Intent browser = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
++        browser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++        startActivity(browser);
+ 
+         if (WfcUtils.isActivationFlow(getIntent())) {
+           setResultAndFinish(RESULT_CANCELED);
+@@ -228,7 +204,7 @@ public class WfcActivationActivity extends FragmentActivity {
+         Intent intent = new Intent();
+         intent.setComponent(componentName);
+         intent.putExtra(EXTRA_URL, url);
+-        mWebviewResultsLauncher.launch(intent);
++        startActivityForResult(intent, REQUEST_WEBVIEW);
+     }
+ 
+     private void showProgressDialog() {
+@@ -266,45 +242,13 @@ public class WfcActivationActivity extends FragmentActivity {
+         if (!mSafeToUpdateUi) {
+             return;
+         }
+-        DialogFragment dialog =
+-                AlertDialogFragment.newInstance(
+-                        R.string.connect_to_wifi_or_web_portal_title,
+-                        R.string.connect_to_wifi_or_web_portal_message);
+-        dialog.show(getSupportFragmentManager(), "Wifi_unavailable_dialog");
+-    }
+-
+-    /** Dialog fragment to show error messages */
+-    public static class AlertDialogFragment extends DialogFragment {
+-
+-        private static final String TITLE_KEY = "TITLE_KEY";
+-        private static final String MESSAGE_KEY = "MESSAGE_KEY";
+-
+-        /** Static constructor */
+-        public static AlertDialogFragment newInstance(int titleId, int messageId) {
+-            AlertDialogFragment frag = new AlertDialogFragment();
+-            frag.setCancelable(false);
+-
+-            Bundle args = new Bundle();
+-            args.putInt(TITLE_KEY, titleId);
+-            args.putInt(MESSAGE_KEY, messageId);
+-            frag.setArguments(args);
+-
+-            return frag;
+-        }
+-
+-        @Override
+-        public Dialog onCreateDialog(Bundle savedInstanceState) {
+-            Bundle args = getArguments();
+-            int titleId = args.getInt(TITLE_KEY);
+-            int messageId = args.getInt(MESSAGE_KEY);
+-            final WfcActivationActivity activity =
+-                    (WfcActivationActivity) getActivity();
+-            return new AlertDialog.Builder(
++        final WfcActivationActivity activity = this;
++        Dialog wifiDialog = new AlertDialog.Builder(
+                             new ContextThemeWrapper(
+-                                    getActivity(),
+-                                    android.R.style.Theme_DeviceDefault_Light_Dialog))
+-                    .setTitle(titleId)
+-                    .setMessage(messageId)
++                                    this, android.R.style.Theme_DeviceDefault_Light_Dialog))
++                    .setTitle(R.string.connect_to_wifi_or_web_portal_title)
++                    .setMessage(R.string.connect_to_wifi_or_web_portal_message)
++                    .setCancelable(false)
+                     .setPositiveButton(
+                             R.string.button_setup_web_portal,
+                             (OnClickListener)
+@@ -322,7 +266,7 @@ public class WfcActivationActivity extends FragmentActivity {
+                                         activity.setResultAndFinish(RESULT_CANCELED);
+                                     })
+                     .create();
+-        }
++        wifiDialog.show();
+     }
+ 
+     private void setResultAndFinish(int resultCode) {
+@@ -341,9 +285,5 @@ public class WfcActivationActivity extends FragmentActivity {
+             mWfcActivationHelper = new WfcActivationHelper(this, subId);
+         }
+ 
+-        if (WfcUtils.getWebviewResultLauncher() != null) {
+-            mWebviewResultsLauncher = WfcUtils.getWebviewResultLauncher();
+-            Log.v(TAG, "getWebviewResultLauncher injected: " + mWebviewResultsLauncher);
+-        }
+     }
+ }
+diff --git a/src/com/android/telephony/qns/wfc/WfcUtils.java b/src/com/android/telephony/qns/wfc/WfcUtils.java
+index 16f4a61..79b383a 100644
+--- a/src/com/android/telephony/qns/wfc/WfcUtils.java
++++ b/src/com/android/telephony/qns/wfc/WfcUtils.java
+@@ -22,7 +22,6 @@ import android.telephony.SubscriptionManager;
+ import android.telephony.ims.ImsMmTelManager;
+ import android.util.Log;
+ 
+-import androidx.activity.result.ActivityResultLauncher;
+ import androidx.annotation.VisibleForTesting;
+ 
+ public final class WfcUtils {
+@@ -36,7 +35,7 @@ public final class WfcUtils {
+     // OK to suppress warnings here because it's used only for unit tests
+     @SuppressLint("StaticFieldLeak")
+     private static WfcActivationHelper mWfcActivationHelper;
+-    private static ActivityResultLauncher mWebViewResultsLauncher;
++    private static Object mWebViewResultsLauncher;
+ 
+     private WfcUtils() {}
+ 
+@@ -101,7 +100,7 @@ public final class WfcUtils {
+     }
+ 
+     @VisibleForTesting
+-    public static void setWebviewResultLauncher(ActivityResultLauncher obj) {
++    public static void setWebviewResultLauncher(Object obj) {
+         mWebViewResultsLauncher = obj;
+     }
+ 
+@@ -111,7 +110,7 @@ public final class WfcUtils {
+     }
+ 
+     @Nullable
+-    public static ActivityResultLauncher getWebviewResultLauncher() {
++    public static Object getWebviewResultLauncher() {
+         return mWebViewResultsLauncher;
+     }
+ }
+-- 
+2.43.0
+

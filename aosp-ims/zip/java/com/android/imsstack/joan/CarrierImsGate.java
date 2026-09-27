@@ -24,12 +24,28 @@ import android.telephony.CarrierConfigManager;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.util.Log;
+import java.io.InputStream;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 /*
  * Ported from joan's org.joan.ims.JoanVolteCarrierGate for the AOSP stack,
  * which has no equivalent: upstream expects the ROM to ship carrier config
  * for its carriers, and LineageOS on joan ships none for most of them.
+ *
+ * Wi-Fi calling is added on top, more narrowly than VoLTE: it is admitted
+ * only for carriers whose LG profile shipped VoWiFi (assets/joan/
+ * wfc-profiles.json, from LG's Ims6 configs), because a toggle for a carrier
+ * without an ePDG would only fail. A SIM is resolved to an LG profile the
+ * way joan does, by Android carrier id and then PLMN (joan's maps). For the
+ * three US carriers whose ePDG is not the 3GPP default name, the address
+ * is supplied too. Nothing is overridden that the ROM already sets.
  */
 public final class CarrierImsGate {
     private static final String TAG = "ImsStackGate";
@@ -37,6 +53,23 @@ public final class CarrierImsGate {
     /** Public constant; compiles against the SDK jar. */
     private static final String KEY_VOLTE =
             CarrierConfigManager.KEY_CARRIER_VOLTE_AVAILABLE_BOOL;
+
+    private static final String KEY_WFC =
+            CarrierConfigManager.KEY_CARRIER_WFC_IMS_AVAILABLE_BOOL;
+    // CarrierConfigManager.Iwlan keys and values (Android 15 API).
+    private static final String KEY_EPDG_STATIC = "iwlan.epdg_static_address_string";
+    private static final String KEY_EPDG_PRIORITY = "iwlan.epdg_address_priority_int_array";
+    private static final int EPDG_ADDRESS_STATIC = 0;
+    private static final int EPDG_ADDRESS_PLMN = 1;
+    /** ePDGs that are not epdg.epc.mncXXX.mccYYY.pub.3gppnetwork.org, by LG operator. */
+    private static final Map<String, String> EPDG_BY_OPERATOR = Map.of(
+            "TMO.US", "ss.epdg.epc.mnc260.mcc310.pub.3gppnetwork.org",
+            "ATT.US", "epdg.epc.att.net",
+            "VZW.US", "wo.vzwwo.com");
+
+    private static volatile Map<String, String> sProfileByCarrierId;
+    private static volatile Map<String, String> sProfileByPlmn;
+    private static volatile Set<String> sWfcProfiles;
 
     // Not exposed in the public SDK jar - string literals by design.
     private static final String KEY_APPLIED = "carrier_config_applied_bool";
@@ -230,6 +263,8 @@ public final class CarrierImsGate {
         boolean volteAvailable = false;
         boolean configApplied = false;
         boolean toggleUsable = true;
+        boolean wfcAvailable = false;
+        boolean epdgSet = false;
         if (cfg != null) {
             try {
                 volteAvailable = cfg.getBoolean(KEY_VOLTE, false);
@@ -237,6 +272,9 @@ public final class CarrierImsGate {
                 boolean hidden = cfg.getBoolean(KEY_HIDE_4G, false);
                 boolean editable = cfg.getBoolean(KEY_EDITABLE_4G, true);
                 toggleUsable = !hidden && editable;
+                wfcAvailable = cfg.getBoolean(KEY_WFC, false);
+                String epdg = cfg.getString(KEY_EPDG_STATIC, "");
+                epdgSet = epdg != null && !epdg.isEmpty();
             } catch (Throwable t) {
                 // keep defaults
             }
@@ -258,9 +296,14 @@ public final class CarrierImsGate {
          * which look identical in the merged config. */
         boolean weForcedIt = sForcedSub == subId;
 
-        if (decision == SKIP_ALREADY) {
+        String profile = profileFor(ctx, tm, cid);
+        boolean wfcWanted = !wfcAvailable && isWfcProfile(ctx, profile);
+        String epdg = epdgFor(profile);
+        boolean epdgWanted = !epdgSet && epdg != null;
+
+        if (decision == SKIP_ALREADY && !wfcWanted && !epdgWanted) {
             sLast = stateLabel(kindFor(SKIP_ALREADY, weForcedIt), cid,
-                    weForcedIt ? sReapplies : 0);
+                    weForcedIt ? sReapplies : 0) + wfcLabel(profile, wfcAvailable);
             return sLast;
         }
         /* Reaching an apply for a sub we already forced means the override
@@ -277,7 +320,15 @@ public final class CarrierImsGate {
         // Always guarantee the opt-out exists: visible + editable toggle.
         over.putBoolean(KEY_HIDE_4G, false);
         over.putBoolean(KEY_EDITABLE_4G, true);
-        String kind = kindFor(decision, true);
+        if (wfcWanted) {
+            over.putBoolean(KEY_WFC, true);
+        }
+        if (epdgWanted) {
+            over.putString(KEY_EPDG_STATIC, epdg);
+            over.putIntArray(KEY_EPDG_PRIORITY, new int[] {EPDG_ADDRESS_STATIC, EPDG_ADDRESS_PLMN});
+        }
+        String kind = kindFor(decision == SKIP_ALREADY ? APPLY_VISIBILITY : decision, true)
+                + (wfcWanted ? "+wfc" : "") + (epdgWanted ? "+epdg" : "");
         Throwable firstErr;
         try {
             Method m = CarrierConfigManager.class.getMethod(
@@ -300,6 +351,80 @@ public final class CarrierImsGate {
             sLast = "fail:" + unwrap(firstErr) + "/" + unwrap(second);
             Log.w(TAG, "volte_gate " + sLast);
             return sLast;
+        }
+    }
+
+    /** LG profile for this SIM: Android carrier id first, then PLMN, as joan resolves it. */
+    static String profileFor(Context ctx, TelephonyManager tm, int cid) {
+        loadMaps(ctx);
+        String p = (cid >= 0 && sProfileByCarrierId != null)
+                ? sProfileByCarrierId.get(Integer.toString(cid)) : null;
+        if (p == null && sProfileByPlmn != null) {
+            try {
+                p = sProfileByPlmn.get(tm.getSimOperator());
+            } catch (Throwable t) {
+                p = null;
+            }
+        }
+        return p;
+    }
+
+    /** "OP.CC" of an LG profile key such as TMO.US.NAO. */
+    static String operatorOf(String profile) {
+        String[] parts = profile.split("\\.");
+        return parts.length >= 2 ? parts[0] + "." + parts[1] : profile;
+    }
+
+    static boolean isWfcProfile(Context ctx, String profile) {
+        if (profile == null) {
+            return false;
+        }
+        loadMaps(ctx);
+        Set<String> wfc = sWfcProfiles;
+        return wfc != null && (wfc.contains(profile) || wfc.contains(operatorOf(profile)));
+    }
+
+    static String epdgFor(String profile) {
+        return profile == null ? null : EPDG_BY_OPERATOR.get(operatorOf(profile));
+    }
+
+    private static String wfcLabel(String profile, boolean wfcAvailable) {
+        return " wfc=" + (wfcAvailable ? "on" : "off") + " lg=" + profile;
+    }
+
+    private static synchronized void loadMaps(Context ctx) {
+        if (sWfcProfiles != null) {
+            return;
+        }
+        try {
+            sProfileByCarrierId = readMap(ctx, "joan/carrier-id-map.json");
+            sProfileByPlmn = readMap(ctx, "joan/carrier-plmn-map.json");
+            JSONArray arr = new JSONObject(readAsset(ctx, "joan/wfc-profiles.json"))
+                    .getJSONArray("profiles");
+            Set<String> wfc = new HashSet<>();
+            for (int i = 0; i < arr.length(); i++) {
+                wfc.add(arr.getString(i));
+            }
+            sWfcProfiles = wfc;
+        } catch (Throwable t) {
+            Log.w(TAG, "carrier maps: " + t);
+            sWfcProfiles = new HashSet<>();
+        }
+    }
+
+    private static Map<String, String> readMap(Context ctx, String asset) throws Exception {
+        JSONObject o = new JSONObject(readAsset(ctx, asset));
+        Map<String, String> m = new HashMap<>();
+        for (java.util.Iterator<String> it = o.keys(); it.hasNext(); ) {
+            String k = it.next();
+            m.put(k, o.getString(k));
+        }
+        return m;
+    }
+
+    private static String readAsset(Context ctx, String name) throws Exception {
+        try (InputStream in = ctx.getAssets().open(name)) {
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
     }
 

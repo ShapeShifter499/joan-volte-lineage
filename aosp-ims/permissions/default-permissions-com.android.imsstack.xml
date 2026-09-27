@@ -14,4 +14,14 @@
         <permission name="android.permission.ACCESS_FINE_LOCATION" fixed="false"/>
         <permission name="android.permission.ACCESS_BACKGROUND_LOCATION" fixed="false"/>
     </exception>
+    <!-- VoWiFi: IWLAN reads the SIM and the country for ePDG selection;
+         QNS reads the phone state to choose between LTE and Wi-Fi. -->
+    <exception package="com.google.android.iwlan">
+        <permission name="android.permission.READ_PHONE_STATE" fixed="false"/>
+        <permission name="android.permission.ACCESS_COARSE_LOCATION" fixed="false"/>
+        <permission name="android.permission.ACCESS_FINE_LOCATION" fixed="false"/>
+    </exception>
+    <exception package="com.android.telephony.qns">
+        <permission name="android.permission.READ_PHONE_STATE" fixed="false"/>
+    </exception>
 </exceptions>

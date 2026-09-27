@@ -2,7 +2,8 @@
 <!-- Device-level VoLTE admit: ImsManager.isVolteEnabledByPlatform() ANDs
      this framework bool with carrier_volte_available_bool; LineageOS ships
      it false on joan, which hides the VoLTE toggle and sends every dial to
-     CS. Same overlay joan's zip installs, under this package's name. -->
+     CS. Also admits Wi-Fi calling and names the AOSP IWLAN and QNS
+     services; the values file says why each is set. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.android.imsstack.rro.framework"
     android:versionCode="1"

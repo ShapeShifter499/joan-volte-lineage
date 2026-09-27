@@ -48,7 +48,11 @@ INSTALL = [
     # Space: the sysconfig file is installed too.
     ('  "$TMP/etc/default-permissions/com.android.imsstack.xml")\n',
      '  "$TMP/etc/default-permissions/com.android.imsstack.xml" \\\n'
-     '  "$TMP/etc/sysconfig/com.android.imsstack.xml")\n', 1),
+     '  "$TMP/etc/sysconfig/com.android.imsstack.xml" \\\n'
+     '  "$TMP/app/Iwlan.apk" "$TMP/app/QualifiedNetworksService.apk" \\\n'
+     '  "$TMP/etc/permissions/com.google.android.iwlan.xml" \\\n'
+     '  "$TMP/etc/permissions/com.android.telephony.qns.xml" \\\n'
+     '  "$TMP/etc/sysconfig/com.google.android.iwlan.xml")\n', 1),
     # After the allowlist: power-save and data-saver exemptions, so an
     # incoming call reaches the stack while the phone sleeps.
     ('ui_print "Installing ImsService priv-app"\n',
@@ -57,8 +61,41 @@ INSTALL = [
   copy_file "$TMP/etc/sysconfig/com.android.imsstack.xml" \\
     "$SYS/etc/sysconfig/com.android.imsstack.xml" 644 u:object_r:system_file:s0
 fi
+# VoWiFi: allowlists (and IWLAN's power-save exemption) before their apks.
+for f in com.google.android.iwlan com.android.telephony.qns; do
+  if [ -f "$TMP/etc/permissions/$f.xml" ]; then
+    copy_file "$TMP/etc/permissions/$f.xml" "$SYS/etc/permissions/$f.xml" 644 u:object_r:system_file:s0
+  fi
+done
+if [ -f "$TMP/etc/sysconfig/com.google.android.iwlan.xml" ]; then
+  copy_file "$TMP/etc/sysconfig/com.google.android.iwlan.xml" \\
+    "$SYS/etc/sysconfig/com.google.android.iwlan.xml" 644 u:object_r:system_file:s0
+fi
 ui_print "Installing ImsService priv-app (AOSP ImsStack + ImsMedia)"
 ''', 1),
+    # After ImsStack: the VoWiFi apps, IWLAN (ePDG tunnel) and QNS
+    # (LTE <-> Wi-Fi transport choice).
+    ('copy_file "$TMP/app/ImsStack.apk" "$SYS/priv-app/ImsStack/ImsStack.apk" 644 u:object_r:system_file:s0\n',
+     '''copy_file "$TMP/app/ImsStack.apk" "$SYS/priv-app/ImsStack/ImsStack.apk" 644 u:object_r:system_file:s0
+for wa in Iwlan QualifiedNetworksService; do
+  [ -f "$TMP/app/$wa.apk" ] || continue
+  ui_print "Installing VoWiFi priv-app $wa"
+  mkdir -p "$SYS/priv-app/$wa"
+  chmod 755 "$SYS/priv-app/$wa" 2>/dev/null || true
+  chcon u:object_r:system_file:s0 "$SYS/priv-app/$wa" 2>/dev/null || true
+  copy_file "$TMP/app/$wa.apk" "$SYS/priv-app/$wa/$wa.apk" 644 u:object_r:system_file:s0
+done
+''', 1),
+    # Temp files and package-cache stamps cover the VoWiFi apps too.
+    ('rm -f "$SYS/priv-app/ImsStack/"*.joan-new \\\n',
+     'rm -f "$SYS/priv-app/ImsStack/"*.joan-new \\\n'
+     '      "$SYS/priv-app/Iwlan/"*.joan-new "$SYS/priv-app/QualifiedNetworksService/"*.joan-new \\\n'
+     '      "$SYS/etc/sysconfig/"*.joan-new \\\n', 1),
+    ('  "$PRODMNT/overlay/ImsStackPhoneOverlay.apk" "$PRODMNT/overlay/ImsStackFrameworkOverlay.apk"\n',
+     '  "$PRODMNT/overlay/ImsStackPhoneOverlay.apk" "$PRODMNT/overlay/ImsStackFrameworkOverlay.apk" \\\n'
+     '  "$SYS/priv-app/Iwlan/Iwlan.apk" "$SYS/priv-app/Iwlan" \\\n'
+     '  "$SYS/priv-app/QualifiedNetworksService/QualifiedNetworksService.apk" \\\n'
+     '  "$SYS/priv-app/QualifiedNetworksService"\n', 1),
 ]
 
 MIGRATE = [
@@ -107,7 +144,11 @@ UNINSTALL = [
      'rm -f "$SYS/etc/permissions/com.android.imsstack.xml" "$SYS/etc/permissions/"*.joan-new\n'
      'rm -f "$SYS/etc/sysconfig/com.android.imsstack.xml"\n', 1),
     ('rm -f "$SYS/etc/default-permissions/org.joan.ims.xml"\n',
-     'rm -f "$SYS/etc/default-permissions/com.android.imsstack.xml"\n', 1),
+     'rm -f "$SYS/etc/default-permissions/com.android.imsstack.xml"\n'
+     'rm -rf "$SYS/priv-app/Iwlan" "$SYS/priv-app/QualifiedNetworksService"\n'
+     'rm -f "$SYS/etc/permissions/com.google.android.iwlan.xml" \\\n'
+     '      "$SYS/etc/permissions/com.android.telephony.qns.xml" \\\n'
+     '      "$SYS/etc/sysconfig/com.google.android.iwlan.xml" "$SYS/etc/sysconfig/"*.joan-new\n', 1),
     ('JoanIms + leftovers removed', 'ImsStack + leftovers removed', 1),
     ('rm -f "$PRODMNT/overlay/JoanImsPhoneDefault.apk"\n',
      'rm -f "$PRODMNT/overlay/ImsStackPhoneOverlay.apk"\n', 1),

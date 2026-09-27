@@ -1,0 +1,57 @@
+From 580edeffe56aa492c81dfd31a2fcca475362c108 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 10:36:39 +0000
+Subject: [PATCH] Iwlan: build against Android 15 (LineageOS 22.2)
+
+DataCallResponse.Builder#setPhysicalNetworkTransportType and
+#setPhysicalNetworkSlotIndex arrived in Android 16. Android 15's data stack
+has no field for the physical network under an IWLAN tunnel (Wi-Fi, or the
+other SIM for cross-SIM calling), so it is not reported. Everything else
+Iwlan uses is already in the Android 15 QPR2 framework and IKE module.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SByt7CZfKR6U4r1VS86tHS
+---
+ .../android/iwlan/IwlanDataService.java       | 26 +++----------------
+ 1 file changed, 4 insertions(+), 22 deletions(-)
+
+diff --git a/src/com/google/android/iwlan/IwlanDataService.java b/src/com/google/android/iwlan/IwlanDataService.java
+index 5783337..e9b6183 100644
+--- a/src/com/google/android/iwlan/IwlanDataService.java
++++ b/src/com/google/android/iwlan/IwlanDataService.java
+@@ -714,28 +714,10 @@ public class IwlanDataService extends DataService {
+                                     ? DataCallResponse.LINK_STATUS_ACTIVE
+                                     : DataCallResponse.LINK_STATUS_INACTIVE);
+ 
+-            SubscriptionManager subscriptionManager =
+-                    mContext.getSystemService(SubscriptionManager.class);
+-
+-            NetworkCapabilities networkCapabilities =
+-                    mConnectivityManager.getNetworkCapabilities(
+-                            tunnelLinkProperties.underlyingNetwork());
+-
+-            if (networkCapabilities == null) {
+-                Log.w(TAG, "Network capabilities are null for underlying network.");
+-            } else if (networkCapabilities.hasTransport(TRANSPORT_WIFI)) {
+-                responseBuilder.setPhysicalNetworkTransportType(
+-                        AccessNetworkConstants.TRANSPORT_TYPE_WLAN);
+-            } else if (networkCapabilities.hasTransport(TRANSPORT_CELLULAR)) {
+-                responseBuilder.setPhysicalNetworkTransportType(
+-                        AccessNetworkConstants.TRANSPORT_TYPE_WWAN);
+-                networkCapabilities.getSubscriptionIds().stream()
+-                        .findFirst()
+-                        .ifPresent(
+-                                subId ->
+-                                        responseBuilder.setPhysicalNetworkSlotIndex(
+-                                                subscriptionManager.getSlotIndex(subId)));
+-            }
++            // Android 15 backport: DataCallResponse.Builder#setPhysicalNetworkTransportType
++            // and #setPhysicalNetworkSlotIndex arrived in Android 16, so which physical
++            // network carries the tunnel (Wi-Fi, or the other SIM's cellular) is not
++            // reported. Android 15's data stack has no field to receive it.
+ 
+             // fill wildcard address for gatewayList (used by DataConnection to add routes)
+             List<InetAddress> gatewayList = new ArrayList<>();
+-- 
+2.43.0
+
