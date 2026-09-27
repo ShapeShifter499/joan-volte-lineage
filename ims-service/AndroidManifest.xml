@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.joan.ims"
+    android:versionCode="87"
+    android:versionName="0.4.0-alpha77">
+    <!-- pm install rejects an APK with no uses-sdk ("found 0");
+         the zip sideloads into priv-app, which does not check. -->
+    <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="34" />
+    <!-- BIND_IMS_SERVICE is deliberately NOT requested.
+         It belongs on the <service> below as android:permission, which
+         says who may BIND to us; the framework holds it, we do not need
+         to. Neither reference declares it: AOSP's ImsStack guards its
+         service with it and requests nothing, and LG's com.lge.ims does
+         not list it at all. ImsResolver checks serviceInfo.permission,
+         not what this package holds.
+         Requesting it cost something real. It is signature|privileged,
+         so it forced an entry in org.joan.ims.xml, and under
+         ro.control_privapp_permissions=enforce a privileged permission
+         requested without an allowlist entry is a FATAL BOOT ERROR. That
+         was a bootloop dependency carried for a permission we never
+         needed to hold. -->
+    <uses-permission android:name="android.permission.MODIFY_PHONE_STATE" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.READ_PRIVILEGED_PHONE_STATE" />
+    <!-- P-Access-Network-Info must carry utran-cell-id-3gpp (TS 24.229
+         7.2A.4), and getAllCellInfo has needed ACCESS_FINE_LOCATION since
+         API 29. It is a runtime permission: unless it is granted the
+         header falls back to the bare access type and the state row says
+         pani_cell=no-permission. Nothing here uses location for anything
+         else. Grant with:
+           adb shell pm grant org.joan.ims android.permission.ACCESS_FINE_LOCATION -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- An ImsService has no UI and is always in the background, and since
+         Android 10 a background process needs this as well or the cell
+         cache reads back empty. AOSP's ImsStack declares all three of
+         COARSE, FINE and BACKGROUND, so joan does too: the platform
+         expects FINE to be accompanied by COARSE, and the runtime dialog
+         is built around the pair.
+
+         LOCATION_BYPASS is below, matching AOSP's ImsStack, which lists
+         it in its own privapp-permissions_com.android.imsstack.xml. It is
+         signature|privileged rather than signature-only, so the allowlist
+         entry in org.joan.ims.xml is what makes it grantable ; that entry
+         is also mandatory rather than optional, because with
+         ro.control_privapp_permissions=enforce a requested privileged
+         permission that is not allowlisted is a fatal boot error.
+
+         Lance's call, on the reasoning that the reference stack holds it.
+         Note what it means: it lets location be read with the system
+         location toggle off. joan's only use of location is the cell id
+         in P-Access-Network-Info, and whether holding this actually
+         changes getAllCellInfo with the toggle off is NOT verified on a
+         handset. Stock LG could not have had it ; that app targets
+         API 28 and this arrived at 34. -->
+    <uses-permission android:name="android.permission.LOCATION_BYPASS" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CONNECTIVITY_USE_RESTRICTED_NETWORKS" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <application
+        android:name=".JoanApp"
+        android:label="Joan IMS"
+        android:directBootAware="true"
+        android:persistent="true">
+        <!-- The only screen. RECORD_AUDIO and location are dangerous
+             runtime permissions: privapp-permissions does not cover them,
+             and etc/default-permissions is applied only on first boot or a
+             platform upgrade, so a package added to /system afterwards is
+             never revisited. Proven, not assumed: alpha63 shipped that
+             file and the tester still read pani_cell=no-permission. An
+             ImsService has no UI of its own, so this is a launcher entry
+             opened once, with no root and no adb. -->
+        <activity
+            android:name=".JoanPermissionActivity"
+            android:label="joan IMS"
+            android:exported="true"
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <provider
+            android:name=".JoanStateProvider"
+            android:authorities="org.joan.ims.state"
+            android:directBootAware="true"
+            android:exported="true" />
+        <receiver
+            android:name=".JoanBootReceiver"
+            android:directBootAware="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.AIRPLANE_MODE" />
+            </intent-filter>
+        </receiver>
+        <service
+            android:name=".JoanImsService"
+            android:exported="true"
+            android:permission="android.permission.BIND_IMS_SERVICE">
+            <intent-filter>
+                <action android:name="android.telephony.ims.ImsService" />
+            </intent-filter>
+            <meta-data android:name="android.telephony.ims.MMTEL_FEATURE" android:value="true" />
+        </service>
+    </application>
+    <!-- READ_PRECISE_PHONE_STATE (signature|privileged) powers the event
+         data-call diagnostics line; granted via permissions/org.joan.ims.xml. -->
+    <uses-permission android:name="android.permission.READ_PRECISE_PHONE_STATE" />
+</manifest>

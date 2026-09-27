@@ -12,6 +12,7 @@ appcompat and browser dependencies. Everything else in QNS already builds
 against Android 15 QPR2.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SByt7CZfKR6U4r1VS86tHS
 ---
  Android.bp                                    |   4 -
  .../qns/wfc/WfcActivationActivity.java        | 130 +++++-------------

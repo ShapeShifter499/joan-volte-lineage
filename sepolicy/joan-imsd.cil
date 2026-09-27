@@ -1,0 +1,4 @@
+;; MARKER: joan-imsd-cil-v3
+;; Copy netmgrd's xfrm allow onto existing vendor type `ims`.
+;; No plat types (node/port/kmsg). No extra capabilities.
+(allow ims self (netlink_xfrm_socket (read write create getattr setattr lock append bind connect getopt setopt shutdown nlmsg_read nlmsg_write)))

@@ -1,0 +1,1641 @@
+/* ua.c — two-stage REGISTER sequencer over UDP/TCP on the IMS PDN. */
+#define _GNU_SOURCE
+
+#include "ua.h"
+
+#include "ctl.h"
+
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include "rtp.h"
+#include "sip.h"
+#include "util.h"
+#include "xfrm.h"
+
+static ua_config_t *g_cfg;
+static int g_port_s_fd = -1;
+static int g_port_s_bound = -1;
+static int g_port_c_fd = -1;
+static int g_port_c_bound = -1;
+static int g_tcp_s_fd = -1;
+static int g_tcp_c_fd = -1;
+static int g_tcp_s_bound = -1;
+static int g_tcp_c_bound = -1;
+
+#define TCP_MAX 4
+#define TCP_BUFSZ 8192
+static struct {
+    int fd;
+    char buf[TCP_BUFSZ];
+    size_t len;
+} g_tcp[TCP_MAX];
+
+static int g_reply_fd = -1;
+static int g_reply_tcp;
+static struct sockaddr_storage g_reply_peer;
+static socklen_t g_reply_plen;
+
+/* Registration context, captured from the 200 OK. A call has to be routed
+ * through the same P-CSCF path and carry the same security agreement, so
+ * everything the INVITE needs is kept here rather than rebuilt. */
+static struct {
+    char service_route[512];
+    char sec_verify[512];
+    int  port_c;          /* our protected client port */
+    int  port_s;          /* our protected server port (inbound requests) */
+    int  pcscf_port_s;    /* where protected requests go */
+    char public_id[300];   /* IMPU from P-Associated-URI; NEVER the IMPI */
+    int  valid;
+} g_reg;
+
+/* An inbound INVITE we have answered 180 to and are holding while the
+ * dialer rings. The daemon used to answer these itself, which meant a call
+ * connected with nobody told: the phone never rang, there was no session to
+ * route audio through, and the user could not decline. */
+static struct {
+    int  active;
+    char invite[SIP_MAX_MSG];   /* the request, for building the answer */
+    size_t invite_len;
+    char to_tag[64];            /* our tag, already sent in the 180 */
+    int  reply_fd;
+    int  reply_tcp;
+    struct sockaddr_storage peer;
+    socklen_t peerlen;
+} g_mt;
+
+/* The dialog of the call currently up. ua_call_invite() left its dialog on
+ * the stack, so once it returned there was no way to send a BYE and the
+ * call sat established until the far end or a session timer killed it. */
+static struct {
+    sip_dialog_t dlg;
+    char dest[300];        /* original request URI */
+    char target[300];      /* remote target from the 2xx Contact */
+    char route[1024];      /* route set: Record-Route reversed, RFC 3261 12.1.2 */
+    /* A To-tag has no length bound in RFC 3261. Google Voice via T-Mobile
+     * returns 81 characters; a 64-byte buffer silently truncated it to 63,
+     * so the reconstructed To could not match the dialog -- the far end
+     * retransmitted its 200 to timer H, and BYE was answered 481. */
+    char to_tag[192];
+    int  active;
+    int  se_sec;           /* RFC 4028 Session-Expires; 0 = none */
+    int  se_uac;           /* 1 if we are the refresher */
+    /* RFC 3261 13.2.2.4: the UAC must re-send the ACK for every
+     * retransmitted 2xx, so it has to outlive ua_call_invite(). */
+    char ack[SIP_MAX_MSG];
+    int  ack_len;
+    /* To/From exactly as the 2xx carried them. Every later in-dialog
+     * request must echo these or the far end answers 481. */
+    char to_hdr[320];
+    char from_hdr[320];
+    long refresh_at;
+} g_call;
+static ua_state_t g_state;
+static char g_err[160];
+
+/* Challenge carried between stages. */
+static sip_challenge_t g_ch;
+static sip_txn_t g_txn;
+
+void ua_init(ua_config_t *cfg)
+{
+    g_cfg = cfg;
+    g_state = UA_STATE_IDLE;
+    g_err[0] = '\0';
+    for (int i = 0; i < TCP_MAX; i++)
+        g_tcp[i].fd = -1;
+}
+
+ua_state_t ua_state(void) { return g_state; }
+
+const char *ua_errstr(void)
+{
+    return g_err[0] ? g_err : "-";
+}
+
+static void fail(const char *what, int rc)
+{
+    /* Masked: error strings carry codes/status lines, never identity. */
+    snprintf(g_err, sizeof(g_err), "%.60s rc=%d", what, rc);
+    klog(LOG_ERR, "%s", g_err);
+    g_state = UA_STATE_ERROR;
+}
+
+/* Call-setup failures must not drop REGISTER. A 30s INVITE timeout
+ * used fail() and the next Dialer tap got "call before register". */
+static void fail_call(const char *what, int rc)
+{
+    snprintf(g_err, sizeof(g_err), "%.60s rc=%d", what, rc);
+    klog(LOG_ERR, "%s", g_err);
+}
+
+static int sip_socket_bind(int local_port)
+{
+    int fam = strchr(g_cfg->id.local_ip, ':') ? AF_INET6 : AF_INET;
+    int s = socket(fam, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (s < 0)
+        return -1;
+    {
+        int one = 1;
+        setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    }
+    if (fam == AF_INET6) {
+        int v6only = 1;
+        setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
+    }
+    /* Android routes per-network via fwmark rules; pin egress to the IMS
+     * PDN interface or our packets leak to the default (internet) table
+     * and the P-CSCF never answers. */
+    if (g_cfg->id.iface[0]) {
+        if (setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE,
+                       g_cfg->id.iface, strlen(g_cfg->id.iface) + 1) < 0) {
+            klog(LOG_ERR, "SO_BINDTODEVICE %.16s failed errno=%d",
+                 g_cfg->id.iface, errno);
+            close(s);
+            return -1;
+        }
+    }
+    struct sockaddr_storage ss;
+    memset(&ss, 0, sizeof(ss));
+    if (fam == AF_INET6) {
+        struct sockaddr_in6 *a = (struct sockaddr_in6 *)&ss;
+        a->sin6_family = AF_INET6;
+        a->sin6_port = htons((uint16_t)local_port);
+        if (inet_pton(AF_INET6, g_cfg->id.local_ip, &a->sin6_addr) != 1) {
+            close(s);
+            return -1;
+        }
+    } else {
+        struct sockaddr_in *a = (struct sockaddr_in *)&ss;
+        a->sin_family = AF_INET;
+        a->sin_port = htons((uint16_t)local_port);
+        if (inet_pton(AF_INET, g_cfg->id.local_ip, &a->sin_addr) != 1) {
+            close(s);
+            return -1;
+        }
+    }
+    if (bind(s, (struct sockaddr *)&ss, sizeof(ss)) < 0) {
+        klog(LOG_ERR, "sip bind port %d failed errno=%d",
+             local_port, errno);
+        close(s);
+        return -1;
+    }
+    return s;
+}
+
+static int sip_tcp_listen(int local_port)
+{
+    int fam = strchr(g_cfg->id.local_ip, ':') ? AF_INET6 : AF_INET;
+    int s = socket(fam, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    if (s < 0)
+        return -1;
+    int one = 1;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    if (fam == AF_INET6) {
+        int v6only = 1;
+        setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
+    }
+    if (g_cfg->id.iface[0]) {
+        if (setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE,
+                       g_cfg->id.iface, strlen(g_cfg->id.iface) + 1) < 0) {
+            klog(LOG_WARN, "tcp SO_BINDTODEVICE errno=%d", errno);
+        }
+    }
+    struct sockaddr_storage ss;
+    memset(&ss, 0, sizeof(ss));
+    if (fam == AF_INET6) {
+        struct sockaddr_in6 *a = (struct sockaddr_in6 *)&ss;
+        a->sin6_family = AF_INET6;
+        a->sin6_port = htons((uint16_t)local_port);
+        if (inet_pton(AF_INET6, g_cfg->id.local_ip, &a->sin6_addr) != 1) {
+            close(s);
+            return -1;
+        }
+    } else {
+        struct sockaddr_in *a = (struct sockaddr_in *)&ss;
+        a->sin_family = AF_INET;
+        a->sin_port = htons((uint16_t)local_port);
+        if (inet_pton(AF_INET, g_cfg->id.local_ip, &a->sin_addr) != 1) {
+            close(s);
+            return -1;
+        }
+    }
+    if (bind(s, (struct sockaddr *)&ss, sizeof(ss)) < 0) {
+        klog(LOG_ERR, "sip tcp bind port %d errno=%d", local_port, errno);
+        close(s);
+        return -1;
+    }
+    if (listen(s, 4) < 0) {
+        close(s);
+        return -1;
+    }
+    return s;
+}
+
+static void fd_close(int *fd)
+{
+    if (fd && *fd >= 0) {
+        close(*fd);
+        *fd = -1;
+    }
+}
+
+static void hold_protected_ports(int port_c, int port_s)
+{
+    if (g_port_s_fd >= 0 && g_port_s_bound != port_s)
+        fd_close(&g_port_s_fd);
+    if (g_port_s_fd < 0) {
+        g_port_s_fd = sip_socket_bind(port_s);
+        if (g_port_s_fd < 0)
+            klog(LOG_WARN, "could not hold protected server port %d", port_s);
+        else {
+            g_port_s_bound = port_s;
+            klog(LOG_INFO, "holding protected server port %d", port_s);
+        }
+    }
+    if (g_port_c_fd >= 0 && g_port_c_bound != port_c)
+        fd_close(&g_port_c_fd);
+    if (g_port_c_fd < 0) {
+        g_port_c_fd = sip_socket_bind(port_c);
+        if (g_port_c_fd < 0)
+            klog(LOG_WARN, "could not hold protected client port %d", port_c);
+        else {
+            g_port_c_bound = port_c;
+            klog(LOG_INFO, "holding protected client port %d", port_c);
+        }
+    }
+    if (g_tcp_s_fd >= 0 && g_tcp_s_bound != port_s)
+        fd_close(&g_tcp_s_fd);
+    if (g_tcp_s_fd < 0) {
+        g_tcp_s_fd = sip_tcp_listen(port_s);
+        if (g_tcp_s_fd < 0)
+            klog(LOG_WARN, "tcp listen port-s %d failed", port_s);
+        else {
+            g_tcp_s_bound = port_s;
+            klog(LOG_INFO, "tcp listen protected server port %d", port_s);
+        }
+    }
+    if (g_tcp_c_fd >= 0 && g_tcp_c_bound != port_c)
+        fd_close(&g_tcp_c_fd);
+    if (g_tcp_c_fd < 0) {
+        g_tcp_c_fd = sip_tcp_listen(port_c);
+        if (g_tcp_c_fd < 0)
+            klog(LOG_WARN, "tcp listen port-c %d failed", port_c);
+        else {
+            g_tcp_c_bound = port_c;
+            klog(LOG_INFO, "tcp listen protected client port %d", port_c);
+        }
+    }
+}
+
+static void tcp_accept(int ls)
+{
+    struct sockaddr_storage peer;
+    socklen_t plen = sizeof(peer);
+    int c = accept4(ls, (struct sockaddr *)&peer, &plen, SOCK_CLOEXEC | SOCK_NONBLOCK);
+    if (c < 0)
+        return;
+    int slot = -1;
+    for (int i = 0; i < TCP_MAX; i++) {
+        if (g_tcp[i].fd < 0) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        klog(LOG_WARN, "tcp accept dropped (no slot)");
+        close(c);
+        return;
+    }
+    g_tcp[slot].fd = c;
+    g_tcp[slot].len = 0;
+    klog(LOG_INFO, "inbound tcp accept");
+}
+
+static int add_fd(fd_set *rfds, int fd, int maxfd)
+{
+    if (fd >= 0) {
+        FD_SET(fd, rfds);
+        if (fd > maxfd)
+            maxfd = fd;
+    }
+    return maxfd;
+}
+
+int ua_select_prep(fd_set *rfds, int maxfd)
+{
+    maxfd = add_fd(rfds, g_port_s_fd, maxfd);
+    maxfd = add_fd(rfds, g_port_c_fd, maxfd);
+    maxfd = add_fd(rfds, g_tcp_s_fd, maxfd);
+    maxfd = add_fd(rfds, g_tcp_c_fd, maxfd);
+    for (int i = 0; i < TCP_MAX; i++)
+        maxfd = add_fd(rfds, g_tcp[i].fd, maxfd);
+    maxfd = add_fd(rfds, rtp_fd(), maxfd);
+    maxfd = add_fd(rfds, rtp_rtcp_fd(), maxfd);
+    return maxfd;
+}
+
+static int media_from_sip(const char *msg)
+{
+    sdp_media_t m;
+    if (sdp_parse_media(msg, &m) != 0) {
+        klog(LOG_WARN, "no SDP media in message");
+        return -1;
+    }
+    int pt = m.have_pcmu ? 0 : m.pt;
+    klog(LOG_INFO, "sdp media port=%d mux=%d rtcp=%d",
+         m.port, m.have_rtcp_mux, m.rtcp_port);
+    return rtp_start(g_cfg->id.local_ip, g_cfg->id.iface,
+                     40000, m.ip, m.port, pt, m.have_rtcp_mux, m.rtcp_port);
+}
+
+static int sip_sendto(int s, int dport, const char *pkt, size_t len);
+
+/* Wait for a datagram on `s` or `alt`, whichever speaks first. */
+static int sip_wait_recv(int s, int alt, char *rx, size_t rxlen,
+                         int timeout_ms)
+{
+    struct timeval tv;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    int maxfd = -1;
+    maxfd = add_fd(&rfds, s, maxfd);
+    maxfd = add_fd(&rfds, alt, maxfd);
+    maxfd = ua_select_prep(&rfds, maxfd);
+    if (maxfd < 0)
+        return -1;
+    if (select(maxfd + 1, &rfds, NULL, NULL, &tv) <= 0)
+        return -1;
+
+    if (g_tcp_s_fd >= 0 && FD_ISSET(g_tcp_s_fd, &rfds))
+        tcp_accept(g_tcp_s_fd);
+    if (g_tcp_c_fd >= 0 && FD_ISSET(g_tcp_c_fd, &rfds))
+        tcp_accept(g_tcp_c_fd);
+
+    for (int i = 0; i < TCP_MAX; i++) {
+        if (g_tcp[i].fd < 0 || !FD_ISSET(g_tcp[i].fd, &rfds))
+            continue;
+        ssize_t n = recv(g_tcp[i].fd, g_tcp[i].buf + g_tcp[i].len,
+                         TCP_BUFSZ - 1 - g_tcp[i].len, 0);
+        if (n <= 0) {
+            close(g_tcp[i].fd);
+            g_tcp[i].fd = -1;
+            g_tcp[i].len = 0;
+            continue;
+        }
+        g_tcp[i].len += (size_t)n;
+        g_tcp[i].buf[g_tcp[i].len] = '\0';
+        int got = sip_extract_one(g_tcp[i].buf, &g_tcp[i].len, rx, rxlen);
+        if (got == 1) {
+            g_reply_fd = g_tcp[i].fd;
+            g_reply_tcp = 1;
+            klog(LOG_INFO, "reply arrived on tcp");
+            return (int)strlen(rx);
+        }
+    }
+
+    int from = -1;
+    if (s >= 0 && FD_ISSET(s, &rfds))
+        from = s;
+    else if (alt >= 0 && FD_ISSET(alt, &rfds))
+        from = alt;
+    else if (g_port_s_fd >= 0 && FD_ISSET(g_port_s_fd, &rfds))
+        from = g_port_s_fd;
+    else if (g_port_c_fd >= 0 && FD_ISSET(g_port_c_fd, &rfds))
+        from = g_port_c_fd;
+    if (from < 0)
+        return -1;
+    g_reply_plen = sizeof(g_reply_peer);
+    ssize_t r = recvfrom(from, rx, rxlen - 1, 0,
+                         (struct sockaddr *)&g_reply_peer, &g_reply_plen);
+    if (r <= 0)
+        return -1;
+    rx[r] = '\0';
+    g_reply_fd = from;
+    g_reply_tcp = 0;
+    klog(LOG_INFO, "reply arrived on %s port socket",
+         from == g_port_c_fd ? "client" : "server");
+    return (int)r;
+}
+
+/* Returned when the datagram never left the host. "No reply" and "could not
+ * send" are different faults with different fixes, and reporting both as -1
+ * sent a debugging session chasing a silent network that was never asked a
+ * question. */
+#define SIP_SEND_FAILED (-2)
+
+static int sip_send_recv_dual(int s, int alt, int dport,
+                              const char *pkt, size_t len,
+                              char *rx, size_t rxlen, int timeout_ms)
+{
+    if (sip_sendto(s, dport, pkt, len) < 0)
+        return SIP_SEND_FAILED;
+
+    return sip_wait_recv(s, alt, rx, rxlen, timeout_ms);
+}
+
+static int sip_sendto(int s, int dport, const char *pkt, size_t len)
+{
+    struct sockaddr_storage dst;
+    memset(&dst, 0, sizeof(dst));
+    socklen_t dlen;
+    int fam = strchr(g_cfg->id.pcscf, ':') ? AF_INET6 : AF_INET;
+    if (fam == AF_INET6) {
+        struct sockaddr_in6 *a = (struct sockaddr_in6 *)&dst;
+        a->sin6_family = AF_INET6;
+        a->sin6_port = htons((uint16_t)dport);
+        dlen = sizeof(*a);
+        if (inet_pton(AF_INET6, g_cfg->id.pcscf, &a->sin6_addr) != 1)
+            return -1;
+    } else {
+        struct sockaddr_in *a = (struct sockaddr_in *)&dst;
+        a->sin_family = AF_INET;
+        a->sin_port = htons((uint16_t)dport);
+        dlen = sizeof(*a);
+        if (inet_pton(AF_INET, g_cfg->id.pcscf, &a->sin_addr) != 1)
+            return -1;
+    }
+    ssize_t w = sendto(s, pkt, len, 0, (struct sockaddr *)&dst, dlen);
+    if (w < 0 || (size_t)w != len) {
+        klog(LOG_ERR, "sendto failed errno=%d w=%zd len=%zu",
+             errno, w, len);
+        return -1;
+    }
+    return 0;
+}
+
+/* ---- P-CSCF failover ---------------------------------------------------
+ *
+ * The IMS PDN advertises several P-CSCF addresses. The UA used to take the
+ * first and retry it forever; when the carrier drained that node mid-session
+ * every REGISTER and INVITE went unanswered for 45 minutes, and only a radio
+ * bounce recovered it -- because the bounce happened to return a different
+ * primary. On a failure we now park the candidate that stopped answering and
+ * move to the next, letting the block lapse so a drained node can come back.
+ */
+#define PCSCF_BLOCK_MS 900000L   /* 15 min: longer than the retry cadence */
+
+static void pcscf_select(void)
+{
+    ua_config_t *c = g_cfg;
+    if (c->pcscf_n <= 0)
+        return;
+
+    long now = now_ms();
+    int pick = -1;
+    for (int i = 0; i < c->pcscf_n; i++) {
+        if (c->pcscf_list[i].blocked_until_ms &&
+            c->pcscf_list[i].blocked_until_ms <= now)
+            c->pcscf_list[i].blocked_until_ms = 0;
+        if (pick < 0 && !c->pcscf_list[i].blocked_until_ms)
+            pick = i;
+    }
+    if (pick < 0) {
+        /* Everything is parked. Forget the blocks rather than stall: a
+         * candidate we cannot reach is still better than none at all. */
+        for (int i = 0; i < c->pcscf_n; i++)
+            c->pcscf_list[i].blocked_until_ms = 0;
+        pick = 0;
+        klog(LOG_INFO, "pcscf every candidate blocked; cleared");
+    }
+    if (strcmp(c->id.pcscf, c->pcscf_list[pick].addr))
+        klog(LOG_INFO, "pcscf switching to candidate %d of %d",
+             pick + 1, c->pcscf_n);
+    snprintf(c->id.pcscf, sizeof(c->id.pcscf), "%s",
+             c->pcscf_list[pick].addr);
+}
+
+/* Park the candidate in use. Never parks a sole candidate: there would be
+ * nothing to move to, and the block would only add delay. */
+static void pcscf_block_current(const char *why)
+{
+    ua_config_t *c = g_cfg;
+    if (c->pcscf_n <= 1)
+        return;
+    for (int i = 0; i < c->pcscf_n; i++) {
+        if (!strcmp(c->pcscf_list[i].addr, c->id.pcscf)) {
+            c->pcscf_list[i].blocked_until_ms = now_ms() + PCSCF_BLOCK_MS;
+            klog(LOG_INFO, "pcscf candidate %d of %d parked for %lds (%s)",
+                 i + 1, c->pcscf_n, PCSCF_BLOCK_MS / 1000, why);
+            return;
+        }
+    }
+}
+
+int ua_register_stage1(char *nonce_out, size_t nonce_len)
+{
+    g_err[0] = '\0';
+    if (!g_cfg->id.have_id || !g_cfg->id.local_ip[0] ||
+        !g_cfg->id.pcscf[0]) {
+        fail("no id/net yet", 1);
+        return -1;
+    }
+
+    pcscf_select();
+
+    sip_identity_t id = g_cfg->id;
+    joan_sec_params_default(&g_cfg->mine);
+    txn_new(&g_txn, &id, g_cfg->mine);
+    g_ch.have_nonce = 0;
+    g_ch.have_sec_server = 0;
+
+    char msg[SIP_MAX_MSG];
+    int n = build_register(msg, sizeof(msg), &id, &g_txn, 1, NULL,
+                           NULL, 0, NULL, NULL);
+    if (n <= 0) {
+        fail("build reg1", 2);
+        return -2;
+    }
+    klog(LOG_INFO, "reg1 built (%d bytes) UDP", n);
+
+    g_state = UA_STATE_TRYING;
+    int s = sip_socket_bind(g_cfg->id.local_port);
+    if (s < 0) {
+        fail("bind", 3);
+        return -3;
+    }
+    char rx[4096];
+    int r = sip_send_recv_dual(s, -1, g_cfg->id.pcscf_port, msg,
+                               (size_t)n, rx, sizeof(rx), 8000);
+    close(s);
+    if (r == SIP_SEND_FAILED) {
+        /* Our own send failed, so the candidate has not been given a
+         * chance to answer -- parking it would blame the wrong thing. */
+        fail("reg1 send failed", 10);
+        return -10;
+    }
+    if (r <= 0) {
+        pcscf_block_current("reg1 no reply");
+        fail("reg1 no reply", 4);
+        return -4;
+    }
+    sip_response_t resp;
+    if (parse_response(rx, (size_t)r, &resp) != 0) {
+        fail("reg1 parse", 5);
+        return -5;
+    }
+    klog(LOG_INFO, "reg1 reply: %d %s", resp.status, resp.reason);
+
+    if (resp.status != 401) {
+        snprintf(g_err, sizeof(g_err), "reg1 unexpected %d", resp.status);
+        klog(LOG_ERR, "%s", g_err);
+        g_state = resp.status >= 200 && resp.status < 300
+                      ? UA_STATE_REGISTERED
+                      : UA_STATE_ERROR;
+        return resp.status >= 200 && resp.status < 300 ? 0 : -6;
+    }
+
+    /* 401: stash WWW-Authenticate + Security-Server. */
+    if (!resp.have_www_auth) {
+        fail("401 no www-auth", 7);
+        return -7;
+    }
+    /* Extract nonce="..." from WWW-Authenticate value. */
+    const char *p = strcasestr(resp.www_authenticate, "nonce=\"");
+    if (!p) {
+        fail("401 no nonce", 8);
+        return -8;
+    }
+    p += 7;
+    const char *e = strchr(p, '"');
+    size_t nl = e ? (size_t)(e - p) : strlen(p);
+    if (nl >= sizeof(g_ch.nonce_b64))
+        nl = sizeof(g_ch.nonce_b64) - 1;
+    memcpy(g_ch.nonce_b64, p, nl);
+    g_ch.nonce_b64[nl] = '\0';
+    g_ch.have_nonce = 1;
+
+    snprintf(g_ch.algorithm, sizeof(g_ch.algorithm), "AKAv1-MD5");
+    {
+        const char *al = strcasestr(resp.www_authenticate, "algorithm=");
+        if (al) {
+            al += 10;
+            char tmp[32];
+            size_t ti = 0;
+            while (*al && *al != ',' && *al != '"' && ti + 1 < sizeof(tmp))
+                tmp[ti++] = *al++;
+            tmp[ti] = '\0';
+            if (ti)
+                snprintf(g_ch.algorithm, sizeof(g_ch.algorithm), "%s", tmp);
+        }
+    }
+    if (resp.have_sec_server) {
+        snprintf(g_ch.sec_server, sizeof(g_ch.sec_server), "%s",
+                 resp.security_server);
+        g_ch.have_sec_server = 1;
+    } else {
+        fail("401 no security-server", 9);
+        return -9;
+    }
+
+    g_state = UA_STATE_CHALLENGED;
+    if (nonce_out && nonce_len) {
+        snprintf(nonce_out, nonce_len, "%s", g_ch.nonce_b64);
+    }
+    klog(LOG_INFO, "challenge stashed (algorithm=%s)", g_ch.algorithm);
+    return 0;
+}
+
+int ua_register_stage2(const uint8_t *res, size_t res_len,
+                       const uint8_t *ck, const uint8_t *ik)
+{
+    if (g_state != UA_STATE_CHALLENGED || !g_ch.have_nonce) {
+        fail("stage2 without challenge", 20);
+        return -20;
+    }
+    if (!res || (res_len != 8 && res_len != 16) || !ck || !ik) {
+        fail("stage2 missing keys arg", 21);
+        return -21;
+    }
+
+    /* Security agreement both sides. */
+    sec_agree_t ue_sec, pcscf_sec;
+    {
+        char sec_cli_value[1024];
+        sip_identity_t id = g_cfg->id;
+        sip_txn_t t = g_txn;
+        char probe[SIP_MAX_MSG];
+        sip_challenge_t ch_probe;
+        memset(&ch_probe, 0, sizeof(ch_probe));
+        build_register(probe, sizeof(probe), &id, &t, 99, NULL,
+                       NULL, 0, NULL, NULL);
+        const char *m = strcasestr(probe, "Security-Client: ");
+        if (!m) {
+            fail("self sec-client missing", 22);
+            return -22;
+        }
+        m += 17;
+        const char *meol = strstr(m, "\r\n");
+        size_t vl = meol ? (size_t)(meol - m) : strlen(m);
+        if (vl >= sizeof(sec_cli_value))
+            vl = sizeof(sec_cli_value) - 1;
+        memcpy(sec_cli_value, m, vl);
+        sec_cli_value[vl] = '\0';
+        if (sec_agree_parse(sec_cli_value, &ue_sec) != 0) {
+            fail("own sec-agree parse", 23);
+            return -23;
+        }
+        if (sec_agree_parse(g_ch.sec_server, &pcscf_sec) != 0) {
+            fail("server sec-agree parse", 24);
+            return -24;
+        }
+    }
+
+    /* Carrier-level security-agreement parameters only: algorithm names,
+     * SPIs and ports. No identity, no key material. Needed because a
+     * mis-parsed Security-Server means we encrypt with the wrong SPI and
+     * the P-CSCF drops the packet without answering. */
+    klog(LOG_INFO, "sec-agree ue: alg=%s ealg=%s spi-c=%u spi-s=%u "
+                   "port-c=%u port-s=%u",
+         ue_sec.alg, ue_sec.ealg, ue_sec.spi_c, ue_sec.spi_s,
+         ue_sec.port_c, ue_sec.port_s);
+    klog(LOG_INFO, "sec-agree pcscf: alg=%s ealg=%s spi-c=%u spi-s=%u "
+                   "port-c=%u port-s=%u",
+         pcscf_sec.alg, pcscf_sec.ealg, pcscf_sec.spi_c, pcscf_sec.spi_s,
+         pcscf_sec.port_c, pcscf_sec.port_s);
+    klog(LOG_INFO, "sec-server raw: %.200s", g_ch.sec_server);
+
+    /* Kernel IPsec: SA+policy set from CK/IK (UDP+TCP selectors). */
+    xfrm_status_t xs;
+    int xr = xfrm_install(g_cfg->id.local_ip, g_cfg->id.pcscf,
+                          &ue_sec, &pcscf_sec, ck, ik, &xs);
+    if (xr != 0)
+        klog(LOG_WARN, "xfrm install partial rc=%d (continuing)", xr);
+
+    /* RFC 3329 / TS 33.203: hold BOTH protected ports for the life of the
+     * registration, UDP and TCP. Closing port-c after REG2 left inbound
+     * requests that the core sent to the client port (or over TCP, which
+     * pmOS measured as ESP next-header=6) with nowhere to land. */
+    hold_protected_ports((int)ue_sec.port_c, (int)ue_sec.port_s);
+
+    /* Give the P-CSCF a moment to install its own SAs before the first
+     * protected packet arrives. */
+    usleep(300 * 1000);
+
+    /* Protected REGISTER.
+     *
+     * This one does NOT go out on 5060 like REG1 did. Once the security
+     * association exists, TS 33.203 / RFC 3329 require the protected
+     * REGISTER to travel inside it: from the UE's protected client port
+     * to the P-CSCF's protected server port, the same selectors
+     * xfrm_install() just programmed. Sending it 5060 -> 5060 bypasses
+     * every SA we installed while the message asserts
+     * integrity-protected=yes and echoes Security-Verify, and the P-CSCF
+     * answers 401 -- which is exactly what this daemon did until now.
+     *
+     * Via and Contact must advertise port-c too, so responses and
+     * subsequent requests come back inside the association. This mirrors
+     * the pmOS implementation that achieved REGISTER 200 on this handset,
+     * which builds msg2 with local_port=port_c and pcscf_port=
+     * pcscf_sec.port_s and sends it over the SA socket.
+     */
+    sip_identity_t id = g_cfg->id;
+    id.local_port = (int)ue_sec.port_c;
+    id.contact_port = (int)ue_sec.port_s;
+    id.pcscf_port = (int)pcscf_sec.port_s;
+    char msg[SIP_MAX_MSG];
+    int n = build_register(msg, sizeof(msg), &id, &g_txn, 2, &g_ch,
+                           res, res_len, ck, ik);
+    if (n <= 0) {
+        fail("build reg2", 25);
+        return -25;
+    }
+    klog(LOG_INFO, "reg2 built (%d bytes)", n);
+
+    int s = g_port_c_fd;
+    if (s < 0) {
+        fail("bind2", 26);
+        return -26;
+    }
+    klog(LOG_INFO, "reg2 sending %u -> %u (protected)",
+         ue_sec.port_c, pcscf_sec.port_s);
+    char rx[4096];
+    int r = sip_send_recv_dual(s, g_port_s_fd, (int)pcscf_sec.port_s,
+                               msg, (size_t)n, rx, sizeof(rx), 8000);
+    if (r == SIP_SEND_FAILED) {
+        fail("reg2 send failed", 11);
+        return -11;
+    }
+    if (r <= 0) {
+        /* The candidate answered reg1 and then went quiet mid-handshake;
+         * that still counts against it. */
+        pcscf_block_current("reg2 no reply");
+        fail("reg2 no reply", 27);
+        return -27;
+    }
+    sip_response_t resp;
+    if (parse_response(rx, (size_t)r, &resp) != 0) {
+        fail("reg2 parse", 28);
+        return -28;
+    }
+    klog(LOG_INFO, "reg2 reply: %d %s", resp.status, resp.reason);
+    if (resp.status >= 200 && resp.status < 300) {
+        g_state = UA_STATE_REGISTERED;
+        memset(&g_reg, 0, sizeof(g_reg));
+        if (resp.have_service_route)
+            snprintf(g_reg.service_route, sizeof(g_reg.service_route),
+                     "%s", resp.service_route);
+        snprintf(g_reg.sec_verify, sizeof(g_reg.sec_verify), "%s",
+                 g_ch.sec_server);
+        g_reg.port_c = (int)ue_sec.port_c;
+        g_reg.port_s = (int)ue_sec.port_s;
+        g_reg.pcscf_port_s = (int)pcscf_sec.port_s;
+        /* Take the public identity from P-Associated-URI.
+         *
+         * Without it build_invite() falls back to the IMPI, which is
+         * IMSI@ims.mnc<MNC>.mcc<MCC>.3gppnetwork.org -- so an outgoing call
+         * presents the subscriber's permanent IMSI as its calling identity
+         * and the far end displays it as the caller ID. That happened on a
+         * live call. The IMPI authenticates us; it is not a public
+         * identity and must never leave in From, Contact or
+         * P-Preferred-Identity.
+         *
+         * P-Associated-URI is the core telling us which public identities
+         * it registered, so it is both correct and carrier-neutral. Prefer
+         * a tel: URI, else the first sip: URI. */
+        if (resp.have_p_associated_uri) {
+            const char *p = resp.p_associated_uri;
+            const char *pick = strstr(p, "<tel:");
+            if (!pick)
+                pick = strstr(p, "<sip:");
+            if (pick) {
+                pick++;
+                const char *gt = strchr(pick, '>');
+                size_t l = gt ? (size_t)(gt - pick) : 0;
+                if (l && l < sizeof(g_reg.public_id)) {
+                    memcpy(g_reg.public_id, pick, l);
+                    g_reg.public_id[l] = '\0';
+                }
+            }
+        }
+        g_reg.valid = 1;
+        klog(LOG_INFO, "public identity from P-Associated-URI: %s",
+             g_reg.public_id[0] ? "yes" : "NONE (calls blocked)");
+        klog(LOG_INFO, "REGISTERED expires=%d service-route=%s",
+             resp.expires > 0 ? resp.expires : 600000,
+             resp.have_service_route ? "yes" : "none");
+        return 0;
+    }
+    if (resp.status == 401) {
+        /* Surface realm/stale (carrier-level metadata, never identity or
+         * key material) so we can see whether the P-CSCF re-challenged
+         * because of a realm mismatch or a digest mismatch. */
+        const char *rp = strcasestr(rx, "realm=\"");
+        char realm[96] = "";
+        if (rp) {
+            rp += 7;
+            const char *re = strchr(rp, '"');
+            size_t rl = re ? (size_t)(re - rp) : 0;
+            if (rl >= sizeof(realm))
+                rl = sizeof(realm) - 1;
+            memcpy(realm, rp, rl);
+            realm[rl] = '\0';
+        }
+        const char *sp = strcasestr(rx, "stale=");
+        int stale = sp ? (!strncasecmp(sp + 6, "true", 4)) : -1;
+        klog(LOG_INFO, "reg2 401 realm=%s stale=%d have_www_auth=%d",
+             realm[0] ? realm : "(none)", stale, resp.have_www_auth);
+    }
+    snprintf(g_err, sizeof(g_err), "reg2 status %d", resp.status);
+    g_state = UA_STATE_ERROR;
+    return -29;
+}
+
+
+/* ---- MO call ----------------------------------------------------------- */
+
+#define JOAN_RTP_PORT 40000
+
+static void extract_to_tag(const char *msg, char *dst, size_t n)
+{
+    dst[0] = '\0';
+    const char *t = strcasestr(msg, "\r\nTo:");
+    if (!t)
+        return;
+    const char *eol = strstr(t + 2, "\r\n");
+    const char *tag = strcasestr(t, "tag=");
+    if (!tag || (eol && tag > eol))
+        return;
+    tag += 4;
+    size_t i = 0;
+    while (tag[i] && tag[i] != ';' && tag[i] != '\r' && tag[i] != '>' &&
+           i + 1 < n) {
+        dst[i] = tag[i];
+        i++;
+    }
+    dst[i] = '\0';
+}
+
+/* Host[:port] of a SIP URI, with any user part dropped. Used only for
+ * diagnostics: a Record-Route or Contact host is carrier topology, never
+ * subscriber identity, so it is safe to log where a URI is not. */
+static void uri_host_only(const char *uri, char *dst, size_t n)
+{
+    dst[0] = '\0';
+    if (!uri || !n)
+        return;
+    const char *p = uri;
+    while (*p == ' ' || *p == '<')
+        p++;
+    if (!strncasecmp(p, "sip:", 4))
+        p += 4;
+    else if (!strncasecmp(p, "sips:", 5))
+        p += 5;
+    else if (!strncasecmp(p, "tel:", 4))
+        p += 4;
+    /* Skip a user part only if the '@' really belongs to this URI. */
+    const char *at = p;
+    while (*at && *at != '@' && *at != '>' && *at != ';' && *at != ',')
+        at++;
+    if (*at == '@')
+        p = at + 1;
+    size_t i = 0;
+    while (p[i] && p[i] != '>' && p[i] != ';' && p[i] != ',' && i + 1 < n) {
+        dst[i] = p[i];
+        i++;
+    }
+    dst[i] = '\0';
+}
+
+/* URI inside the first <...> of a header value, else the whole value. */
+static void hdr_uri(const char *val, char *dst, size_t n)
+{
+    dst[0] = '\0';
+    if (!val)
+        return;
+    const char *lt = strchr(val, '<');
+    const char *gt = lt ? strchr(lt, '>') : NULL;
+    if (lt && gt) {
+        size_t l = (size_t)(gt - lt - 1);
+        if (l >= n)
+            l = n - 1;
+        memcpy(dst, lt + 1, l);
+        dst[l] = '\0';
+        return;
+    }
+    snprintf(dst, n, "%s", val);
+}
+
+int ua_call_invite(const char *dest)
+{
+    if (g_state != UA_STATE_REGISTERED || !g_reg.valid) {
+        fail("call before register", 40);
+        return -40;
+    }
+    if (!dest || !dest[0]) {
+        fail_call("call no dest", 41);
+        return -41;
+    }
+
+    /* Refuse to dial without a public identity rather than fall back to
+     * the IMPI and leak the IMSI as caller ID. */
+    if (!g_reg.public_id[0]) {
+        fail_call("no public identity (IMPU); refusing to dial", 47);
+        return -47;
+    }
+
+    sip_identity_t id = g_cfg->id;
+    id.local_port = g_reg.port_c;
+    id.contact_port = g_reg.port_s;
+    id.pcscf_port = g_reg.pcscf_port_s;
+    snprintf(id.impu, sizeof(id.impu), "%s", g_reg.public_id);
+
+    memset(&g_call, 0, sizeof(g_call));
+    sip_dialog_t dlg;
+    memset(&dlg, 0, sizeof(dlg));
+    char msg[SIP_MAX_MSG];
+    int n = build_invite(msg, sizeof(msg), &id, dest,
+                         g_reg.service_route, g_reg.sec_verify,
+                         JOAN_RTP_PORT, &dlg);
+    if (n <= 0) {
+        fail_call("build invite", 42);
+        return -42;
+    }
+    klog(LOG_INFO, "invite built (%d bytes)", n);
+
+    int s = g_port_c_fd;
+    if (s < 0) {
+        fail_call("invite bind", 43);
+        return -43;
+    }
+    if (sip_sendto(s, g_reg.pcscf_port_s, msg, (size_t)n) < 0) {
+        fail_call("invite send", 44);
+        return -44;
+    }
+
+    /* Provisional responses (100/180/183) precede the answer, so keep
+     * reading until a final one arrives or the call setup timer runs out. */
+    char rx[4096];
+    char to_tag[192] = "";
+    int rc = -45;
+    long deadline = now_ms() + 30000;
+    while (now_ms() < deadline) {
+        int remain = (int)(deadline - now_ms());
+        int r = sip_wait_recv(s, g_port_s_fd, rx, sizeof(rx),
+                              remain > 0 ? remain : 1);
+        if (r <= 0)
+            break;
+        sip_response_t resp;
+        if (parse_response(rx, (size_t)r, &resp) != 0)
+            continue;
+        klog(LOG_INFO, "invite reply: %d %s", resp.status, resp.reason);
+        if (resp.status >= 100 && resp.status < 200) {
+            extract_to_tag(rx, to_tag, sizeof(to_tag));
+            /* RFC 3262: a reliable 1xx (RSeq / 100rel) needs PRACK or
+             * the UAS never sends 200. We saw 183 Session Progress
+             * retransmits until CANCEL; GV never rang. */
+            if (resp.rseq > 0) {
+                const char *tgt = dest;
+                char prack[SIP_MAX_MSG];
+                int pn = build_prack(prack, sizeof(prack), &id, tgt, dest,
+                                     g_reg.service_route, g_reg.sec_verify,
+                                     &dlg, to_tag, resp.rseq,
+                                     resp.to_hdr, resp.from_hdr);
+                if (pn > 0 && sip_sendto(s, g_reg.pcscf_port_s, prack,
+                                         (size_t)pn) == 0)
+                    klog(LOG_INFO, "PRACK sent for 1xx rseq=%d", resp.rseq);
+                else
+                    klog(LOG_WARN, "PRACK failed rseq=%d", resp.rseq);
+            }
+            continue;
+        }
+        if (resp.status >= 200 && resp.status < 300) {
+            extract_to_tag(rx, to_tag, sizeof(to_tag));
+            snprintf(g_call.dest, sizeof(g_call.dest), "%s", dest);
+            snprintf(g_call.to_tag, sizeof(g_call.to_tag), "%s", to_tag);
+            snprintf(g_call.to_hdr, sizeof(g_call.to_hdr), "%s", resp.to_hdr);
+            snprintf(g_call.from_hdr, sizeof(g_call.from_hdr), "%s",
+                     resp.from_hdr);
+            /* RFC 3261: an in-dialog request goes to the remote target,
+             * which is the Contact of the 2xx -- not the URI we originally
+             * dialled. Sending BYE to the dialled AOR gets 481 Call/
+             * Transaction Does Not Exist, which is what happened. */
+            if (resp.have_contact) {
+                const char *lt = strchr(resp.contact, '<');
+                const char *gt = lt ? strchr(lt, '>') : NULL;
+                if (lt && gt && (size_t)(gt - lt) < sizeof(g_call.target)) {
+                    size_t tl = (size_t)(gt - lt - 1);
+                    memcpy(g_call.target, lt + 1, tl);
+                    g_call.target[tl] = '\0';
+                } else {
+                    snprintf(g_call.target, sizeof(g_call.target), "%s",
+                             resp.contact);
+                }
+            } else {
+                snprintf(g_call.target, sizeof(g_call.target), "%s", dest);
+            }
+            snprintf(g_call.route, sizeof(g_call.route), "%s",
+                     resp.have_record_route ? resp.record_route
+                                            : g_reg.service_route);
+            klog(LOG_INFO, "dialog target captured (rr=%s n=%d)",
+                 resp.have_record_route ? "yes" : "no",
+                 resp.record_route_n);
+            g_call.dlg = dlg;
+            g_call.active = 1;
+            g_call.se_sec = resp.session_expires;
+            g_call.se_uac = 0;
+            g_call.refresh_at = 0;
+            if (resp.session_expires > 0) {
+                /* RFC 4028 §7.2: a 2xx with Session-Expires starts the
+                 * timer even if we did not advertise Supported: timer.
+                 * refresher=uac (or absent while we are UAC) means we
+                 * send UPDATE at half the interval. */
+                if (!resp.se_refresher[0] ||
+                    !strcasecmp(resp.se_refresher, "uac"))
+                    g_call.se_uac = 1;
+                klog(LOG_INFO, "session-expires=%d refresher=%s",
+                     resp.session_expires,
+                     resp.se_refresher[0] ? resp.se_refresher : "uac");
+                if (g_call.se_uac) {
+                    int half = resp.session_expires / 2;
+                    if (half < 15)
+                        half = resp.session_expires > 15 ? 15
+                                                       : resp.session_expires - 1;
+                    if (half < 1)
+                        half = 1;
+                    g_call.refresh_at = now_ms() + (long)half * 1000;
+                }
+            } else {
+                klog(LOG_INFO, "session-expires=none");
+            }
+            char ack[SIP_MAX_MSG];
+            int an = build_ack(ack, sizeof(ack), &id,
+                               g_call.target[0] ? g_call.target : dest,
+                               dest, g_call.route[0] ? g_call.route
+                                                     : g_reg.service_route,
+                               g_reg.sec_verify, &dlg, to_tag,
+                               resp.to_hdr, resp.from_hdr);
+            {
+                /* Why is the far end not accepting this ACK? Log the
+                 * routing shape (hosts only, no identities) so the next
+                 * call answers it instead of another guess. */
+                char rhost[96], thost[96], dhost[96];
+                uri_host_only(g_call.route, rhost, sizeof(rhost));
+                uri_host_only(g_call.target[0] ? g_call.target : dest,
+                              thost, sizeof(thost));
+                uri_host_only(dest, dhost, sizeof(dhost));
+                klog(LOG_INFO,
+                     "ack diag route_host=%s ruri_host=%s dest_host=%s "
+                     "pcscf=%s route_is_pcscf=%d rr_n=%d",
+                     rhost[0] ? rhost : "-", thost[0] ? thost : "-",
+                     dhost[0] ? dhost : "-", g_cfg->id.pcscf,
+                     strstr(rhost, g_cfg->id.pcscf) != NULL ? 1 : 0,
+                     resp.record_route_n);
+                /* Did the core rewrite the To URI? If so, the ACK we used
+                 * to build could never have matched the dialog. */
+                char to_uri_resp[300], to_host[96];
+                hdr_uri(resp.to_hdr, to_uri_resp, sizeof(to_uri_resp));
+                uri_host_only(to_uri_resp, to_host, sizeof(to_host));
+                klog(LOG_INFO, "ack diag to_rewritten=%d to_host=%s "
+                     "have_to_hdr=%d have_from_hdr=%d",
+                     (to_uri_resp[0] && strcmp(to_uri_resp, dest)) ? 1 : 0,
+                     to_host[0] ? to_host : "-",
+                     resp.to_hdr[0] ? 1 : 0, resp.from_hdr[0] ? 1 : 0);
+                /* Exactly which header did the old rebuild get wrong?
+                 * Compare against what it would have produced. Lengths and
+                 * booleans only -- these headers carry identities. */
+                {
+                    const char *pid = id.impu[0] ? id.impu : id.impi;
+                    char aor2[300], reb_to[400], reb_from[400];
+                    if (!strncmp(pid, "tel:", 4) || !strncmp(pid, "sip:", 4))
+                        snprintf(aor2, sizeof(aor2), "%s", pid);
+                    else
+                        snprintf(aor2, sizeof(aor2), "sip:%s", pid);
+                    if (to_tag[0])
+                        snprintf(reb_to, sizeof(reb_to), "<%s>;tag=%s",
+                                 dest, to_tag);
+                    else
+                        snprintf(reb_to, sizeof(reb_to), "<%s>", dest);
+                    snprintf(reb_from, sizeof(reb_from), "<%s>;tag=%s",
+                             aor2, dlg.from_tag);
+                    klog(LOG_INFO,
+                         "ack diag to_differs=%d from_differs=%d "
+                         "to_len=%d/%d from_len=%d/%d "
+                         "to_display=%d from_display=%d",
+                         strcmp(resp.to_hdr, reb_to) ? 1 : 0,
+                         strcmp(resp.from_hdr, reb_from) ? 1 : 0,
+                         (int)strlen(resp.to_hdr), (int)strlen(reb_to),
+                         (int)strlen(resp.from_hdr), (int)strlen(reb_from),
+                         resp.to_hdr[0] && resp.to_hdr[0] != '<' ? 1 : 0,
+                         resp.from_hdr[0] && resp.from_hdr[0] != '<' ? 1 : 0);
+                }
+            }
+            if (an > 0 && (size_t)an <= sizeof(g_call.ack)) {
+                memcpy(g_call.ack, ack, (size_t)an);
+                g_call.ack_len = an;
+            }
+            if (an > 0 && sip_sendto(s, g_reg.pcscf_port_s, ack,
+                                     (size_t)an) == 0)
+                klog(LOG_INFO, "call answered, ACK sent %d B", an);
+            else
+                klog(LOG_WARN, "call answered but ACK failed");
+            media_from_sip(rx);
+            rc = 0;
+            break;
+        }
+        klog(LOG_ERR, "call rejected %d", resp.status);
+        snprintf(g_err, sizeof(g_err), "invite status %d", resp.status);
+        rc = -46;
+        break;
+    }
+    if (rc == -45) {
+        /* Withdraw the INVITE rather than leaving the far end ringing
+         * until its own timer gives up. */
+        char cancel[SIP_MAX_MSG];
+        int cn = build_cancel(cancel, sizeof(cancel), &id, dest,
+                              g_reg.service_route, g_reg.sec_verify, &dlg);
+        if (cn > 0 && sip_sendto(s, g_reg.pcscf_port_s, cancel,
+                                 (size_t)cn) == 0)
+            klog(LOG_INFO, "setup timed out, CANCEL sent");
+        else
+            klog(LOG_WARN, "setup timed out, CANCEL failed");
+        fail_call("invite no final reply", 45);
+    }
+    return rc;
+}
+
+
+int ua_call_is_active(void)
+{
+    return g_call.active ? 1 : 0;
+}
+
+int ua_call_hangup(void)
+{
+    if (!g_call.active) {
+        klog(LOG_WARN, "hangup with no call up");
+        return -1;
+    }
+    sip_identity_t id = g_cfg->id;
+    id.local_port = g_reg.port_c;
+    id.pcscf_port = g_reg.pcscf_port_s;
+
+    char msg[SIP_MAX_MSG];
+    int n = build_bye(msg, sizeof(msg), &id, g_call.target, g_call.dest,
+                      g_call.route, g_reg.sec_verify,
+                      &g_call.dlg, g_call.to_tag,
+                      g_call.to_hdr, g_call.from_hdr);
+    if (n <= 0) {
+        g_call.active = 0;
+        return -1;
+    }
+    rtp_stop();
+    int s = g_port_c_fd;
+    if (s < 0) {
+        g_call.active = 0;
+        return -1;
+    }
+    int rc = -1;
+    if (sip_sendto(s, g_reg.pcscf_port_s, msg, (size_t)n) == 0) {
+        char rx[2048];
+        int r = sip_wait_recv(s, g_port_s_fd, rx, sizeof(rx), 5000);
+        if (r > 0) {
+            sip_response_t resp;
+            if (parse_response(rx, (size_t)r, &resp) == 0)
+                klog(LOG_INFO, "bye reply: %d %s", resp.status, resp.reason);
+        } else {
+            klog(LOG_WARN, "bye sent, no reply");
+        }
+        rc = 0;
+    }
+    g_call.active = 0;
+    return rc;
+}
+
+
+/* ---- Inbound (MT) calls ------------------------------------------------ */
+
+int ua_inbound_fd(void)
+{
+    return (g_state == UA_STATE_REGISTERED) ? g_port_s_fd : -1;
+}
+
+int ua_media_poll_ms(void)
+{
+    return rtp_poll_ms();
+}
+
+void ua_media_tick(void)
+{
+    rtp_tick();
+    if (!g_call.active || !g_call.se_uac || g_call.se_sec <= 0 ||
+        g_call.refresh_at <= 0 || now_ms() < g_call.refresh_at)
+        return;
+    sip_identity_t id = g_cfg->id;
+    id.local_port = g_reg.port_c;
+    id.pcscf_port = g_reg.pcscf_port_s;
+    char msg[SIP_MAX_MSG];
+    int n = build_update(msg, sizeof(msg), &id,
+                         g_call.target[0] ? g_call.target : g_call.dest,
+                         g_call.dest, g_call.route, g_reg.sec_verify,
+                         &g_call.dlg, g_call.to_tag, g_call.se_sec,
+                         g_call.to_hdr, g_call.from_hdr);
+    if (n <= 0 || g_port_c_fd < 0) {
+        klog(LOG_WARN, "session UPDATE build failed");
+        g_call.refresh_at = now_ms() + 5000;
+        return;
+    }
+    if (sip_sendto(g_port_c_fd, g_reg.pcscf_port_s, msg, (size_t)n) == 0) {
+        g_call.dlg.cseq++;
+        klog(LOG_INFO, "session UPDATE sent se=%d", g_call.se_sec);
+        g_call.refresh_at = now_ms() + (long)(g_call.se_sec / 2) * 1000;
+    } else {
+        klog(LOG_WARN, "session UPDATE send failed");
+        g_call.refresh_at = now_ms() + 2000;
+    }
+}
+
+static void inbound_send(const char *pkt, size_t len)
+{
+    if (g_reply_fd < 0) {
+        klog(LOG_WARN, "inbound_send no reply fd");
+        return;
+    }
+    ssize_t w;
+    if (g_reply_tcp)
+        w = send(g_reply_fd, pkt, len, MSG_NOSIGNAL);
+    else
+        w = sendto(g_reply_fd, pkt, len, 0,
+                   (const struct sockaddr *)&g_reply_peer, g_reply_plen);
+    if (w < 0 || (size_t)w != len)
+        klog(LOG_WARN, "inbound_send w=%zd len=%zu errno=%d tcp=%d",
+             w, len, errno, g_reply_tcp);
+}
+
+/* ---- MT: answer / decline the held INVITE ------------------------------ */
+
+/* Reply into the transaction the INVITE arrived on. handle_sip_request()
+ * uses the live g_reply_* for this; by the time the user answers, those
+ * have moved on, so the held copy is restored first. */
+static void mt_send(const char *pkt, size_t len)
+{
+    int save_fd = g_reply_fd;
+    int save_tcp = g_reply_tcp;
+    struct sockaddr_storage save_peer = g_reply_peer;
+    socklen_t save_len = g_reply_plen;
+
+    g_reply_fd = g_mt.reply_fd;
+    g_reply_tcp = g_mt.reply_tcp;
+    g_reply_peer = g_mt.peer;
+    g_reply_plen = g_mt.peerlen;
+    inbound_send(pkt, len);
+
+    g_reply_fd = save_fd;
+    g_reply_tcp = save_tcp;
+    g_reply_peer = save_peer;
+    g_reply_plen = save_len;
+}
+
+int ua_call_answer(void)
+{
+    if (!g_mt.active) {
+        klog(LOG_WARN, "answer with no call ringing");
+        return -1;
+    }
+    sip_identity_t id = g_cfg->id;
+    id.local_port = g_reg.port_c;
+    id.contact_port = g_reg.port_s;
+    id.pcscf_port = g_reg.pcscf_port_s;
+    snprintf(id.impu, sizeof(id.impu), "%s", g_reg.public_id);
+
+    const char *body = strstr(g_mt.invite, "\r\n\r\n");
+    char sdp[768];
+    int sl = sdp_answer(sdp, sizeof(sdp), g_cfg->id.local_ip,
+                        40000, body ? body + 4 : NULL);
+    if (sl <= 0) {
+        klog(LOG_WARN, "answer: no SDP answer from offer");
+        return -1;
+    }
+    char resp[SIP_MAX_MSG];
+    int n = build_response(resp, sizeof(resp), g_mt.invite, 200, "OK",
+                           &id, g_mt.to_tag, sdp);
+    if (n <= 0) {
+        klog(LOG_WARN, "answer: 200 build failed");
+        return -1;
+    }
+    mt_send(resp, (size_t)n);
+    klog(LOG_INFO, "inbound call answered by dialer (200 OK sent)");
+    media_from_sip(g_mt.invite);
+
+    /* Adopt the inbound dialog so we can end the call. Without this the
+     * BYE was built from an empty dialog, the far end ignored it, and the
+     * call sat up on their side until their own timer dropped it.
+     *
+     * The roles are mirrored from an outgoing call: our tag is the one we
+     * put in the 180/200, and the remote tag is the caller's From tag. So
+     * the From of anything we send in this dialog is the INVITE's To plus
+     * our tag, and the To is the INVITE's From exactly as it arrived. */
+    memset(&g_call.dlg, 0, sizeof(g_call.dlg));
+    sip_header_copy(g_mt.invite, "Call-ID", g_call.dlg.call_id,
+                    sizeof(g_call.dlg.call_id));
+    g_call.dlg.cseq = 0;          /* BYE takes cseq+1 */
+
+    char inv_to[320], inv_from[320];
+    inv_to[0] = inv_from[0] = '\0';
+    sip_header_copy(g_mt.invite, "To", inv_to, sizeof(inv_to));
+    sip_header_copy(g_mt.invite, "From", inv_from, sizeof(inv_from));
+    snprintf(g_call.from_hdr, sizeof(g_call.from_hdr), "%s;tag=%s",
+             inv_to, g_mt.to_tag);
+    snprintf(g_call.to_hdr, sizeof(g_call.to_hdr), "%s", inv_from);
+    snprintf(g_call.to_tag, sizeof(g_call.to_tag), "%s", "");
+
+    /* Remote target is the caller's Contact; a UAS keeps the Record-Route
+     * in the order it arrived (RFC 3261 12.1.1), unlike a UAC. */
+    char contact[320];
+    if (sip_header_copy(g_mt.invite, "Contact", contact,
+                        sizeof(contact)) >= 0) {
+        const char *lt = strchr(contact, '<');
+        const char *gt = lt ? strchr(lt, '>') : NULL;
+        if (lt && gt && (size_t)(gt - lt - 1) < sizeof(g_call.target)) {
+            size_t tl = (size_t)(gt - lt - 1);
+            memcpy(g_call.target, lt + 1, tl);
+            g_call.target[tl] = '\0';
+        } else {
+            snprintf(g_call.target, sizeof(g_call.target), "%s", contact);
+        }
+    }
+    int rr_n = 0;
+    if (sip_route_set_uas(g_mt.invite, g_call.route, sizeof(g_call.route),
+                          &rr_n) < 0)
+        g_call.route[0] = '\0';
+    klog(LOG_INFO, "inbound dialog adopted (rr=%d)", rr_n);
+
+    g_call.active = 1;
+    g_mt.active = 0;
+    return 0;
+}
+
+int ua_call_reject(int code)
+{
+    if (!g_mt.active) {
+        klog(LOG_WARN, "reject with no call ringing");
+        return -1;
+    }
+    sip_identity_t id = g_cfg->id;
+    id.local_port = g_reg.port_c;
+    id.contact_port = g_reg.port_s;
+    id.pcscf_port = g_reg.pcscf_port_s;
+    snprintf(id.impu, sizeof(id.impu), "%s", g_reg.public_id);
+
+    char resp[SIP_MAX_MSG];
+    const char *reason = (code == 603) ? "Decline" : "Busy Here";
+    int n = build_response(resp, sizeof(resp), g_mt.invite, code, reason,
+                           &id, g_mt.to_tag, NULL);
+    if (n > 0)
+        mt_send(resp, (size_t)n);
+    klog(LOG_INFO, "inbound call declined by dialer (%d sent)", code);
+    g_mt.active = 0;
+    return n > 0 ? 0 : -1;
+}
+
+static void handle_sip_request(char *rx, size_t r)
+{
+    /* Never log the request line: it carries the public identity. */
+    char method[16];
+    if (sip_request_method(rx, method, sizeof(method)) != 0) {
+        int code = 0;
+        if (!strncmp(rx, "SIP/2.0", 7))
+            code = atoi(rx + 8);
+        klog(LOG_INFO, "inbound datagram (%zu B): response %d", r, code);
+        /* A 2xx repeating on the INVITE means the far end never saw our
+         * ACK; it will tear the call down on timer H if we stay quiet.
+         * RFC 3261 13.2.2.4: answer every retransmission. */
+        if (code >= 200 && code < 300 && g_call.active && g_call.ack_len > 0) {
+            sip_response_t rr;
+            if (parse_response(rx, r, &rr) == 0 &&
+                !strcasecmp(rr.cseq_method, "INVITE") &&
+                rr.call_id[0] &&
+                !strcmp(rr.call_id, g_call.dlg.call_id)) {
+                /* Google Voice forks to several endpoints. A 2xx from a
+                 * second fork carries a different To-tag, and the stored
+                 * ACK -- built for the first fork -- can never satisfy it. */
+                char rtag[192];
+                extract_to_tag(rx, rtag, sizeof(rtag));
+                int same_fork = rtag[0] && !strcmp(rtag, g_call.to_tag);
+                char ctc[300], chost[96];
+                hdr_uri(rr.contact, ctc, sizeof(ctc));
+                uri_host_only(ctc, chost, sizeof(chost));
+                klog(LOG_INFO, "2xx retransmit: same_fork=%d contact_host=%s",
+                     same_fork, chost[0] ? chost : "-");
+                if (sip_sendto(g_port_c_fd, g_reg.pcscf_port_s,
+                               g_call.ack, (size_t)g_call.ack_len) == 0)
+                    klog(LOG_INFO, "2xx retransmit: ACK re-sent %d B",
+                         g_call.ack_len);
+                else
+                    klog(LOG_WARN, "2xx retransmit: ACK re-send failed");
+            }
+        }
+        return;
+    }
+    klog(LOG_INFO, "inbound datagram (%zu B): %s", r, method);
+
+    sip_identity_t id = g_cfg->id;
+    id.local_port = g_reg.port_c;
+    id.contact_port = g_reg.port_s;
+    id.pcscf_port = g_reg.pcscf_port_s;
+    snprintf(id.impu, sizeof(id.impu), "%s", g_reg.public_id);
+
+    char resp[SIP_MAX_MSG];
+    int n;
+
+    if (!strcasecmp(method, "INVITE")) {
+        klog(LOG_INFO, "inbound INVITE");
+        if (g_mt.active || g_call.active) {
+            /* One call at a time: tell the caller rather than silently
+             * dropping the second INVITE. */
+            n = build_response(resp, sizeof(resp), rx, 486, "Busy Here",
+                               &id, NULL, NULL);
+            if (n > 0) inbound_send(resp, (size_t)n);
+            klog(LOG_INFO, "inbound INVITE while busy: 486 sent");
+            return;
+        }
+
+        char tag[16];
+        mk_tag_public(tag, sizeof(tag));
+
+        n = build_response(resp, sizeof(resp), rx, 100, "Trying", &id, NULL, NULL);
+        if (n > 0) inbound_send(resp, (size_t)n);
+
+        n = build_response(resp, sizeof(resp), rx, 180, "Ringing", &id, tag, NULL);
+        if (n > 0) inbound_send(resp, (size_t)n);
+        klog(LOG_INFO, "sent 100 + 180");
+
+        /* Hold it. The app decides: the dialer has to ring, and the user
+         * has to be able to decline. Answering here would connect a call
+         * nobody was told about. */
+        memset(&g_mt, 0, sizeof(g_mt));
+        size_t rl = strlen(rx);
+        if (rl >= sizeof(g_mt.invite)) {
+            n = build_response(resp, sizeof(resp), rx, 500,
+                               "Server Internal Error", &id, tag, NULL);
+            if (n > 0) inbound_send(resp, (size_t)n);
+            klog(LOG_WARN, "inbound INVITE too large to hold (%zu B)", rl);
+            return;
+        }
+        memcpy(g_mt.invite, rx, rl);
+        g_mt.invite[rl] = '\0';
+        g_mt.invite_len = rl;
+        snprintf(g_mt.to_tag, sizeof(g_mt.to_tag), "%s", tag);
+        g_mt.reply_fd = g_reply_fd;
+        g_mt.reply_tcp = g_reply_tcp;
+        g_mt.peer = g_reply_peer;
+        g_mt.peerlen = g_reply_plen;
+        g_mt.active = 1;
+
+        /* The caller's number has to reach the dialer or the call shows as
+         * "unknown". Passing it over the control socket is not logging it:
+         * it goes to the app that is about to display it, and no klog here
+         * ever carries it. Withheld numbers stay withheld -- an anonymous
+         * caller yields an empty field and Telecom shows unknown. */
+        char cli[300], cna[200];
+        int have_cli = sip_calling_identity(g_mt.invite, cli, sizeof(cli),
+                                            cna, sizeof(cna));
+        /* "-" for a withheld number keeps the name field unambiguous when
+         * the app splits the line. A display name may contain spaces, so
+         * it goes last and the app takes the remainder. */
+        ctl_emit_event("EVENT INCOMING %s %s",
+                       have_cli ? cli : "-", cna);
+        klog(LOG_INFO, "inbound call held; dialer notified "
+             "(number=%s name=%s)",
+             have_cli ? "yes" : "withheld", cna[0] ? "yes" : "none");
+        return;
+    }
+
+    if (!strcasecmp(method, "BYE")) {
+        klog(LOG_INFO, "inbound BYE");
+        n = build_response(resp, sizeof(resp), rx, 200, "OK", &id, NULL, NULL);
+        if (n > 0) {
+            inbound_send(resp, (size_t)n);
+            klog(LOG_INFO, "BYE 200 sent %d B fd=%d tcp=%d",
+                 n, g_reply_fd, g_reply_tcp);
+        } else {
+            klog(LOG_WARN, "BYE 200 build failed");
+        }
+        rtp_stop();
+        g_call.active = 0;
+        g_mt.active = 0;
+        ctl_emit_event("EVENT ENDED");
+        return;
+    }
+
+    if (!strcasecmp(method, "CANCEL")) {
+        klog(LOG_INFO, "inbound CANCEL");
+        n = build_response(resp, sizeof(resp), rx, 200, "OK", &id, NULL, NULL);
+        if (n > 0) inbound_send(resp, (size_t)n);
+        if (g_mt.active) {
+            /* RFC 3261 9.2: the INVITE transaction still owes a final
+             * response, and the dialer must stop ringing. */
+            n = build_response(resp, sizeof(resp), g_mt.invite, 487,
+                               "Request Terminated", &id, g_mt.to_tag, NULL);
+            if (n > 0)
+                mt_send(resp, (size_t)n);
+            g_mt.active = 0;
+            ctl_emit_event("EVENT CANCELLED");
+            klog(LOG_INFO, "ringing call cancelled by caller (487 sent)");
+        }
+        return;
+    }
+
+    if (!strcasecmp(method, "ACK"))
+        return;
+
+    if (!strcasecmp(method, "OPTIONS")) {
+        n = build_response(resp, sizeof(resp), rx, 200, "OK", &id, NULL, NULL);
+        if (n > 0) inbound_send(resp, (size_t)n);
+        return;
+    }
+
+    if (!strcasecmp(method, "UPDATE")) {
+        klog(LOG_INFO, "inbound UPDATE");
+        n = build_response(resp, sizeof(resp), rx, 200, "OK", &id, NULL, NULL);
+        if (n > 0) inbound_send(resp, (size_t)n);
+        return;
+    }
+
+    klog(LOG_INFO, "inbound %.12s (not handled)", method);
+    n = build_response(resp, sizeof(resp), rx, 501, "Not Implemented",
+                       &id, NULL, NULL);
+    if (n > 0) inbound_send(resp, (size_t)n);
+}
+
+void ua_select_handle(fd_set *rfds)
+{
+    if (g_tcp_s_fd >= 0 && FD_ISSET(g_tcp_s_fd, rfds))
+        tcp_accept(g_tcp_s_fd);
+    if (g_tcp_c_fd >= 0 && FD_ISSET(g_tcp_c_fd, rfds))
+        tcp_accept(g_tcp_c_fd);
+
+    for (int i = 0; i < TCP_MAX; i++) {
+        if (g_tcp[i].fd < 0 || !FD_ISSET(g_tcp[i].fd, rfds))
+            continue;
+        ssize_t n = recv(g_tcp[i].fd, g_tcp[i].buf + g_tcp[i].len,
+                         TCP_BUFSZ - 1 - g_tcp[i].len, 0);
+        if (n <= 0) {
+            close(g_tcp[i].fd);
+            g_tcp[i].fd = -1;
+            g_tcp[i].len = 0;
+            continue;
+        }
+        g_tcp[i].len += (size_t)n;
+        g_tcp[i].buf[g_tcp[i].len] = '\0';
+        char rx[4096];
+        int got;
+        while ((got = sip_extract_one(g_tcp[i].buf, &g_tcp[i].len,
+                                      rx, sizeof(rx))) == 1) {
+            g_reply_fd = g_tcp[i].fd;
+            g_reply_tcp = 1;
+            handle_sip_request(rx, strlen(rx));
+        }
+    }
+
+    int udp[2] = { g_port_s_fd, g_port_c_fd };
+    for (int i = 0; i < 2; i++) {
+        int fd = udp[i];
+        if (fd < 0 || !FD_ISSET(fd, rfds))
+            continue;
+        char rx[4096];
+        g_reply_plen = sizeof(g_reply_peer);
+        ssize_t r = recvfrom(fd, rx, sizeof(rx) - 1, 0,
+                             (struct sockaddr *)&g_reply_peer, &g_reply_plen);
+        if (r <= 0)
+            continue;
+        rx[r] = '\0';
+        g_reply_fd = fd;
+        g_reply_tcp = 0;
+        handle_sip_request(rx, (size_t)r);
+    }
+    if (rtp_fd() >= 0 && FD_ISSET(rtp_fd(), rfds))
+        rtp_tick();
+    if (rtp_rtcp_fd() >= 0 && FD_ISSET(rtp_rtcp_fd(), rfds))
+        rtp_tick();
+}
+
+void ua_handle_inbound(void)
+{
+    /* Legacy entry: drain the server UDP socket. ctl_serve now uses
+     * ua_select_handle on the full set. */
+    if (g_port_s_fd < 0)
+        return;
+    char rx[4096];
+    g_reply_plen = sizeof(g_reply_peer);
+    ssize_t r = recvfrom(g_port_s_fd, rx, sizeof(rx) - 1, 0,
+                         (struct sockaddr *)&g_reply_peer, &g_reply_plen);
+    if (r <= 0)
+        return;
+    rx[r] = '\0';
+    g_reply_fd = g_port_s_fd;
+    g_reply_tcp = 0;
+    handle_sip_request(rx, (size_t)r);
+}

@@ -39,33 +39,6 @@ INSTALL = [
     ('joan-ims.apk', 'ImsStack.apk', 3),
     ('JoanIms', 'ImsStack', 11),
     ('org.joan.ims.xml', 'com.android.imsstack.xml', 10),
-    # Third overlay: the CarrierConfig overlay carries the IMS carrier data
-    # (converted Pixel data + our rules, aosp-ims/carrier/). Space and the
-    # install block below, then the stamp and the uninstaller cover it.
-    ('PROD_NEED=$(need_kb "$TMP/app/ImsStackPhoneOverlay.apk" "$TMP/app/ImsStackFrameworkOverlay.apk")\n',
-     'PROD_NEED=$(need_kb "$TMP/app/ImsStackPhoneOverlay.apk" "$TMP/app/ImsStackFrameworkOverlay.apk" '
-     '"$TMP/app/ImsStackCarrierConfigOverlay.apk")\n', 1),
-    ('''  copy_file "$TMP/app/ImsStackFrameworkOverlay.apk" \\
-    "$PRODMNT/overlay/ImsStackFrameworkOverlay.apk" 644 u:object_r:system_file:s0
-fi
-''',
-     '''  copy_file "$TMP/app/ImsStackFrameworkOverlay.apk" \\
-    "$PRODMNT/overlay/ImsStackFrameworkOverlay.apk" 644 u:object_r:system_file:s0
-fi
-
-# --- RRO: CarrierConfig IMS carrier data ---------------------------------
-# Replaces the CarrierConfig app's res/xml/vendor.xml wholesale, so it
-# carries the ROM's own content plus the converted Pixel carrier data and
-# our rules (aosp-ims/tools/make-carrier-config.py). Without it only the
-# run-time gate would configure carriers, and the deep IMS settings (SIP
-# timers, codecs, ePDG data) would be missing.
-if [ -f "$TMP/app/ImsStackCarrierConfigOverlay.apk" ]; then
-  ui_print "Installing CarrierConfig overlay (IMS carrier data)"
-  mkdir -p "$PRODMNT/overlay"
-  copy_file "$TMP/app/ImsStackCarrierConfigOverlay.apk" \\
-    "$PRODMNT/overlay/ImsStackCarrierConfigOverlay.apk" 644 u:object_r:system_file:s0
-fi
-''', 1),
     ('    ui_print "    otherwise open \\"joan IMS\\" once from the launcher"\n',
      '    ui_print "    otherwise grant them over adb (aosp-ims/zip/grant-permissions.sh)"\n', 1),
     ('    warn "  skipped the default grants; open \\"joan IMS\\" once from the launcher"\n',
@@ -120,7 +93,6 @@ done
      '      "$SYS/etc/sysconfig/"*.joan-new \\\n', 1),
     ('  "$PRODMNT/overlay/ImsStackPhoneOverlay.apk" "$PRODMNT/overlay/ImsStackFrameworkOverlay.apk"\n',
      '  "$PRODMNT/overlay/ImsStackPhoneOverlay.apk" "$PRODMNT/overlay/ImsStackFrameworkOverlay.apk" \\\n'
-     '  "$PRODMNT/overlay/ImsStackCarrierConfigOverlay.apk" \\\n'
      '  "$SYS/priv-app/Iwlan/Iwlan.apk" "$SYS/priv-app/Iwlan" \\\n'
      '  "$SYS/priv-app/QualifiedNetworksService/QualifiedNetworksService.apk" \\\n'
      '  "$SYS/priv-app/QualifiedNetworksService"\n', 1),
@@ -181,8 +153,7 @@ UNINSTALL = [
     ('rm -f "$PRODMNT/overlay/JoanImsPhoneDefault.apk"\n',
      'rm -f "$PRODMNT/overlay/ImsStackPhoneOverlay.apk"\n', 1),
     ('rm -f "$PRODMNT/overlay/JoanFwVolte.apk"\n',
-     'rm -f "$PRODMNT/overlay/ImsStackFrameworkOverlay.apk"\n'
-     'rm -f "$PRODMNT/overlay/ImsStackCarrierConfigOverlay.apk"\n', 1),
+     'rm -f "$PRODMNT/overlay/ImsStackFrameworkOverlay.apk"\n', 1),
 ]
 
 

@@ -1,0 +1,666 @@
+package org.joan.ims;
+
+import android.content.Context;
+import android.util.Log;
+
+import org.json.JSONObject;
+
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+
+/**
+ * Carrier behavior profile, distilled from stock LG Ims6 configuration
+ * XMLs (values transcribed as discovered facts; no LG files ship).
+ *
+ * The profile picks the conference focus URI, the REFER subscription
+ * style, and call/session knobs per carrier. Unknown carriers get the
+ * 3GPP defaults (factory conference URI, RFC-typical timers) — the
+ * same fallbacks stock's UCSessionConfig uses when a table is empty.
+ */
+public final class JoanCarrierProfile {
+    private static final String TAG = "JoanIms";
+
+    // 3GPP TS 24.147 conference factory URI (stock fallback too).
+    public final String confUri;
+    public final boolean referSub;
+    public final boolean confSub;
+    public final boolean confSubInDialog;
+    public final int maxSessions;
+    public final int cwType;
+    public final boolean use180Rpr;
+    public final int offerResCode;
+    /**
+     * The carrier's {@code common_tcp_criterion_len}: a SIP message longer
+     * than this goes over TCP. 0 means "no criterion" and &lt;0 means the
+     * profile did not carry one.
+     */
+    public final int tcpCriterionLen;
+    /** Per-transport-family criteria; 0 means "use the common one". */
+    public final int tcpCriterionV4;
+    public final int tcpCriterionV6;
+    /** The carrier's REGISTER Expires, seconds; 0 if not carried. */
+    public final int regExpiration;
+    /**
+     * The carrier's ordered VoLTE audio offer, or empty.
+     *
+     * <p>From the stock media configuration, which is the only source
+     * that carries an AMR mode-set: Android's carrier config supplies
+     * payload types and framing on some networks and leaves the codec
+     * attribute bundles empty on every one tested so far.
+     */
+    public final java.util.List<JoanSipBuilder.Capability> codecs;
+    /** The carrier's unprotected P-CSCF port, or 0. */
+    public final int pcscfPort;
+    /** Whether this carrier's stock profile sends a User-Agent. */
+    public final boolean sendUserAgent;
+    /**
+     * The carrier's declared sec-agree algorithm set,
+     * {@code aos_reg_0_ipsec_algs} from the vendor snapshot, or -1 when
+     * absent (offer everything implemented). Distilled into the assets
+     * since the beginning and read by nothing until now -- the same
+     * shape of gap {@code xcap_server} had. Bit layout in
+     * {@link JoanSipCrypto#setOfferMask}.
+     */
+    public final int ipsecAlgs;
+    /**
+     * Whether this carrier's stock profile puts the {@code algorithm}
+     * parameter in the REGISTER's Authorization header -- bit 24 of
+     * {@code common_sip_features}.
+     *
+     * <p>True when the profile says nothing, which is the RFC 3310
+     * reading and keeps every carrier we have no configuration for on the
+     * behaviour it registers with today.
+     */
+    public final boolean sendAuthAlgorithm;
+    /**
+     * Whether this carrier expects a preloaded {@code Route} on the
+     * REGISTER -- {@code common_sip_features} bit 20, which AOSP names
+     * {@code SIP_FEATURE_CAPS_ROUTE_HEADER_IN_REG} and
+     * {@code RegParameter::FormHeaders} tests before it adds the header
+     * at all.
+     *
+     * <p>Only 7 of 136 shipped profiles set it, T-Mobile among them and
+     * China Mobile not. TS 24.229 5.1.1.2 describes the preloaded route
+     * set, but the reference stack makes emitting it a per-carrier
+     * decision rather than a rule, so joan follows the carrier and not
+     * the paraphrase: false where nothing says otherwise, which is the
+     * behaviour every network joan registers on today already has.
+     */
+    public final boolean routeHeaderInReg;
+    /**
+     * Whether this carrier expects {@code Supported: gruu} on the
+     * REGISTER -- {@code common_sip_features} bit 1, AOSP's
+     * {@code SIP_FEATURE_CAPS_GRUU}, which
+     * {@code RegParameter::FormHeaders} tests before adding the tag.
+     *
+     * <p>87 of 136 shipped profiles set it; T-Mobile does, China Mobile
+     * does not. joan advertised it to nobody.
+     */
+    public final boolean supportsGruu;
+    /**
+     * The gap between the protected client and server ports,
+     * {@code aos_reg_0_ipsec_port_interval}. joan hardcoded 1000, which
+     * is what T-Mobile's shipping configuration carries -- verified in
+     * the raw LG XML -- but it is a vendor knob, not a constant.
+     */
+    public final int ipsecPortInterval;
+    /**
+     * How many times the same P-CSCF is retried before moving to the
+     * next, {@code aos_reg_0_retry_pcscf_count}. 0 in 133 of 136
+     * profiles, which is one attempt each and what joan already did.
+     */
+    public final int retryPcscfCount;
+    /** {@code aos_condition_0_isim_index_for_pcscf}; 1 everywhere seen. */
+    public final int isimIndexForPcscf;
+    /** {@code aos_condition_0_multiple_discovery_scheme}; 2 everywhere. */
+    public final int multipleDiscoveryScheme;
+    /** {@code aos_condition_0_pcscf_changed_control}; 0 everywhere. */
+    public final int pcscfChangedControl;
+    /** {@code aos_reg_0_retry_base_time}, seconds; 30 where carried. */
+    public final int regRetryBaseTime;
+    /** {@code aos_reg_0_retry_max_time}, seconds; 1800 where carried. */
+    public final int regRetryMaxTime;
+    /**
+     * {@code aos_reg_0_retry_interval}, the carrier's own backoff curve
+     * in seconds, or empty. T-Mobile's is 120,240,480,960,1920,3840,7200
+     * -- verified against the raw LG XML, which matches what we
+     * distilled. 70 of 136 profiles carry a value that does not parse as
+     * a doubling curve and whose source could not be checked here; those
+     * simply yield fewer usable steps rather than nonsense, because only
+     * positive entries are kept.
+     */
+    public final int[] regRetryIntervals;
+    /**
+     * Ut/XCAP: where this carrier keeps the subscriber's supplementary
+     * services, and whether it expects them controlled that way.
+     *
+     * <p>Carried in the shipped profile since it was distilled and read
+     * by nothing until now. 56 of 136 profiles name a server, and
+     * {@code utControl} is {@code "ut"} for 123 of them -- the rest say
+     * {@code "sip"} or {@code "ps"}, meaning the carrier does not expect
+     * XCAP to be the control path at all.
+     */
+    public final String xcapServer;
+    public final int xcapPort;
+    public final boolean xcapTls;
+    public final String xcapPdn;
+    public final String utControl;
+    /**
+     * Whether this carrier negotiates RFC 3329 sec-agree and protects
+     * signalling with IPsec, {@code aos_reg_0_ipsec}.
+     *
+     * <p>False for Verizon (every variant), US Cellular, Sprint, Beeline
+     * and MegaFon, CSL, 3 and PCCW Hong Kong, Eastlink, Freedom and
+     * Telenor Bulgaria in LG's own configuration: their cores challenge
+     * with AKA but never answer a Security-Client, and a REGISTER that
+     * insists on sec-agree gets a 401 with no Security-Server -- which
+     * joan used to treat as a fatal protocol error, so none of those
+     * networks could register at all. True where nothing says otherwise,
+     * which is what every network joan registers on today uses.
+     */
+    public final boolean ipsec;
+    public final String srcKey;
+    /**
+     * How {@link #srcKey} was chosen: {@code carrier-id:<id>},
+     * {@code plmn:<mccmnc>}, {@code rule} or {@code default}. In the trace
+     * so a wrong profile can be traced to the table that picked it.
+     */
+    public String via = "default";
+
+    private static volatile JoanCarrierProfile sCached;
+    private static volatile String sCachedMccMnc;
+
+    private JoanCarrierProfile(String confUri, boolean referSub,
+                               boolean confSub, boolean confSubInDialog,
+                               int maxSessions, int cwType,
+                               boolean use180Rpr, int offerResCode,
+                               int tcpCriterionLen, int tcpCriterionV4,
+                               int tcpCriterionV6, int regExpiration,
+                               java.util.List<JoanSipBuilder.Capability> codecs,
+                               int pcscfPort, boolean sendUserAgent,
+                               int ipsecAlgs,
+                               boolean sendAuthAlgorithm,
+                               boolean routeHeaderInReg,
+                               boolean supportsGruu,
+                               int ipsecPortInterval, int retryPcscfCount,
+                               int isimIndexForPcscf,
+                               int multipleDiscoveryScheme,
+                               int pcscfChangedControl,
+                               int regRetryBaseTime, int regRetryMaxTime,
+                               int[] regRetryIntervals,
+                               String xcapServer, int xcapPort,
+                               boolean xcapTls, String xcapPdn,
+                               String utControl,
+                               boolean ipsec,
+                               String srcKey) {
+        this.confUri = confUri;
+        this.referSub = referSub;
+        this.confSub = confSub;
+        this.confSubInDialog = confSubInDialog;
+        this.maxSessions = maxSessions;
+        this.cwType = cwType;
+        this.use180Rpr = use180Rpr;
+        this.offerResCode = offerResCode;
+        this.tcpCriterionLen = tcpCriterionLen;
+        this.tcpCriterionV4 = tcpCriterionV4;
+        this.tcpCriterionV6 = tcpCriterionV6;
+        this.regExpiration = regExpiration;
+        this.codecs = codecs == null
+                ? java.util.Collections.<JoanSipBuilder.Capability>emptyList()
+                : java.util.Collections.unmodifiableList(codecs);
+        this.pcscfPort = pcscfPort;
+        this.sendUserAgent = sendUserAgent;
+        this.ipsecAlgs = ipsecAlgs;
+        this.sendAuthAlgorithm = sendAuthAlgorithm;
+        this.routeHeaderInReg = routeHeaderInReg;
+        this.supportsGruu = supportsGruu;
+        this.ipsecPortInterval = ipsecPortInterval > 0
+                ? ipsecPortInterval : DEFAULT_IPSEC_PORT_INTERVAL;
+        this.retryPcscfCount = Math.max(0, retryPcscfCount);
+        this.isimIndexForPcscf = isimIndexForPcscf > 0 ? isimIndexForPcscf : 1;
+        this.multipleDiscoveryScheme = multipleDiscoveryScheme;
+        this.pcscfChangedControl = pcscfChangedControl;
+        this.regRetryBaseTime = Math.max(0, regRetryBaseTime);
+        this.regRetryMaxTime = Math.max(0, regRetryMaxTime);
+        this.regRetryIntervals = regRetryIntervals == null
+                ? new int[0] : regRetryIntervals.clone();
+        this.xcapServer = xcapServer;
+        this.xcapPort = xcapPort;
+        this.xcapTls = xcapTls;
+        this.xcapPdn = xcapPdn;
+        this.utControl = utControl;
+        this.ipsec = ipsec;
+        this.srcKey = srcKey;
+    }
+
+    /**
+     * The carrier's audio offer, as capabilities the SIP builder can use.
+     *
+     * <p>Only AMR is taken. EVS appears in several carriers' lists and
+     * LineageOS 22 ships no EVS encoder, so offering it would name a codec
+     * this device cannot open -- the failure mode that makes a carrier
+     * pick it, the encoder fail, and the media layer fall back to PCMU
+     * while the peer keeps sending EVS. telephone-event is handled
+     * separately because it is not a speech codec.
+     */
+    private static java.util.List<JoanSipBuilder.Capability> parseCodecs(
+            org.json.JSONArray arr) {
+        if (arr == null) {
+            return null;
+        }
+        java.util.List<JoanSipBuilder.Capability> out =
+                new java.util.ArrayList<>();
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject c = arr.optJSONObject(i);
+            if (c == null || !"AMR".equalsIgnoreCase(c.optString("type"))) {
+                continue;
+            }
+            int pt = c.optInt("pt", -1);
+            int rate = c.optInt("rate", -1);
+            if (pt < 96 || pt > 127 || (rate != 8000 && rate != 16000)) {
+                continue;
+            }
+            org.json.JSONArray ms = c.optJSONArray("mode_set");
+            int[] modes = null;
+            if (ms != null && ms.length() > 0) {
+                modes = new int[ms.length()];
+                for (int k = 0; k < ms.length(); k++) {
+                    modes[k] = ms.optInt(k, -1);
+                }
+            }
+            out.add(JoanSipBuilder.Capability.amr(
+                    rate == 16000 ? "AMR-WB" : "AMR", rate, pt,
+                    c.optBoolean("octet_align", false), modes));
+        }
+        return out;
+    }
+
+    /** 3GPP defaults when nothing better is known. */
+    static JoanCarrierProfile defaults(String mcc, String mnc) {
+        String factory = String.format(
+                "sip:mmtel@conf-factory.ims.mnc%s.mcc%s.3gppnetwork.org",
+                pad3(mnc), mcc);
+        return new JoanCarrierProfile(factory, true, true, false,
+                2, 1, true, 183, -1, 0, 0, 0, null, 0, true, -1, true,
+                false, false, DEFAULT_IPSEC_PORT_INTERVAL, 0, 1, 2, 0,
+                0, 0, null, "", 0, false, "", "", true, "3gpp-default");
+    }
+
+    /**
+     * {@code common_sip_features} bit 24. AOSP names it
+     * {@code SIP_FEATURE_CAPS_AUTHENTICATION_ALGORITHM_PARAMETER} and
+     * sets it only from the carrier key
+     * {@code ims.allow_algorithm_param_in_sip_authorization_header_bool}
+     * -- an ALLOW flag absent from its baseline, so the reference stack's
+     * default is to omit the parameter and sending it is what a carrier
+     * opts into. 130 of LG's 136 profiles leave it off.
+     */
+    private static final long SIP_FEATURE_AUTH_ALGORITHM_PARAM = 0x01000000L;
+
+    /**
+     * {@code common_sip_features} bit 20, AOSP's
+     * {@code SIP_FEATURE_CAPS_ROUTE_HEADER_IN_REG}. Gates the preloaded
+     * Route on a REGISTER in {@code RegParameter::FormHeaders}.
+     */
+    private static final long SIP_FEATURE_ROUTE_HEADER_IN_REG = 0x00100000L;
+
+    /**
+     * The protected client/server port gap when a profile carries none.
+     * T-Mobile's shipping configuration says 1000, which is the value
+     * joan had hardcoded.
+     */
+    static final int DEFAULT_IPSEC_PORT_INTERVAL = 1000;
+
+    /**
+     * A comma-separated list of seconds, as the vendor writes retry
+     * curves. Only positive entries are kept: several profiles carry
+     * groups of zeros that are not usable delays, and a curve of
+     * whatever did parse is better than refusing the whole field.
+     */
+    static int[] parseSeconds(String csv) {
+        if (csv == null || csv.isEmpty()) {
+            return new int[0];
+        }
+        String[] parts = csv.split(",");
+        int[] tmp = new int[parts.length];
+        int n = 0;
+        for (String part : parts) {
+            try {
+                int v = Integer.parseInt(part.trim());
+                if (v > 0) {
+                    tmp[n++] = v;
+                }
+            } catch (NumberFormatException e) {
+                /* Not a number is not a delay. */
+            }
+        }
+        /* A retry curve only ever climbs. Several profiles carry a
+         * value that falls back partway -- China Mobile's parses to
+         * 120,240,480,960,192 -- and since the last entry is what the
+         * curve clamps to once the steps run out, honouring that would
+         * pin the retry at 192s forever. joan's own backoff reached 900s
+         * and China Mobile's own 404s ask for between 304s and 875s, so
+         * obeying the corrupt tail would hammer the one core we most
+         * need to stop hammering.
+         *
+         * A step that goes backwards is bad data, not a policy, so the
+         * climbing prefix is kept and the rest dropped. China Mobile
+         * lands on 120,240,480,960 and clamps at 960s. The source of the
+         * corruption is upstream of this converter and could not be
+         * checked against the vendor XML here -- only 6 carrier files
+         * were extracted, and T-Mobile's, which is clean, matches what
+         * we distilled. */
+        int keep = n;
+        for (int i = 1; i < n; i++) {
+            if (tmp[i] < tmp[i - 1]) {
+                keep = i;
+                break;
+            }
+        }
+        int[] out = new int[keep];
+        System.arraycopy(tmp, 0, out, 0, keep);
+        return out;
+    }
+
+    /** {@code common_sip_features} bit 1, AOSP's SIP_FEATURE_CAPS_GRUU. */
+    private static final long SIP_FEATURE_GRUU = 0x00000002L;
+
+    /**
+     * Test one bit of a profile's {@code sip_features} mask.
+     *
+     * <p>A profile carrying no readable mask answers true: a missing
+     * declaration is not the value zero, and the standards-clean default
+     * is the safe one to fall back to.
+     */
+    private static boolean hasSipFeature(String features, long bit) {
+        if (features == null) {
+            return true;
+        }
+        String v = features.trim();
+        if (v.isEmpty()) {
+            return true;
+        }
+        if (v.startsWith("0x") || v.startsWith("0X")) {
+            v = v.substring(2);
+        }
+        try {
+            return (Long.parseLong(v, 16) & bit) != 0L;
+        } catch (NumberFormatException e) {
+            Log.w(TAG, "carrier profile: unreadable sip_features");
+            return true;
+        }
+    }
+
+    private static String pad3(String mnc) {
+        if (mnc == null || mnc.isEmpty()) {
+            return "000";
+        }
+        if (mnc.length() >= 3) {
+            return mnc;
+        }
+        StringBuilder b = new StringBuilder(mnc);
+        while (b.length() < 3) {
+            b.insert(0, '0');
+        }
+        return b.toString();
+    }
+
+    /**
+     * Load (and cache) the profile for the current network. The JSON
+     * asset maps carrier keys like "TMO.US.NAO" to knob values; the
+     * MCC/MNC table below picks the key.
+     */
+    public static JoanCarrierProfile forNetwork(Context ctx,
+                                                String mcc,
+                                                String mnc) {
+        if (mcc == null || mnc == null || mcc.isEmpty() || mnc.isEmpty()) {
+            return defaults(mcc, mnc);
+        }
+        int[] ids = simCarrierIds(ctx, mcc, mnc);
+        String cacheKey = mcc + ":" + mnc + ":" + ids[0] + ":" + ids[1];
+        JoanCarrierProfile hit = sCached;
+        if (hit != null && cacheKey.equals(sCachedMccMnc)) {
+            return hit;
+        }
+        JoanCarrierProfile p = load(ctx, mcc, mnc, ids);
+        sCached = p;
+        sCachedMccMnc = cacheKey;
+        return p;
+    }
+
+    /**
+     * The SIM's specific and canonical Android carrier ids, or -1s.
+     *
+     * <p>Android resolves a SIM to a carrier with the carrier id database
+     * in TelephonyProvider -- an MVNO to its own id, by GID1, SPN or IMSI
+     * prefix -- and hands the answer to any app without a permission.
+     * That is the key AOSP's own ImsStack selects carrier configuration
+     * by, and the only way to tell Cricket from AT&T or MetroPCS from
+     * T-Mobile, which share their host's PLMN.
+     *
+     * <p>Only trusted when the SIM being described is the one whose PLMN
+     * we were asked about: the ids come from the default data
+     * subscription, and a second SIM's carrier must never pick this one's
+     * profile.
+     */
+    private static int[] simCarrierIds(Context ctx, String mcc, String mnc) {
+        int[] none = { -1, -1 };
+        try {
+            android.telephony.TelephonyManager tm = ctx.getSystemService(
+                    android.telephony.TelephonyManager.class);
+            if (tm == null) {
+                return none;
+            }
+            int sub = android.telephony.SubscriptionManager
+                    .getDefaultDataSubscriptionId();
+            if (sub >= 0) {
+                tm = tm.createForSubscriptionId(sub);
+            }
+            String op = tm.getSimOperator();
+            if (op == null || !op.equals(mcc + mnc)) {
+                return none;
+            }
+            return new int[] { tm.getSimSpecificCarrierId(),
+                    tm.getSimCarrierId() };
+        } catch (Throwable t) {
+            return none;
+        }
+    }
+
+    /** Read a whole JSON asset, or null. */
+    private static JSONObject asset(Context ctx, String name) {
+        try {
+            InputStream in = ctx.getAssets().open(name);
+            byte[] buf = new byte[in.available()];
+            int n = 0, r;
+            while ((r = in.read(buf, n, buf.length - n)) > 0) {
+                n += r;
+                if (n == buf.length) {
+                    break;
+                }
+            }
+            in.close();
+            return new JSONObject(new String(buf, 0, n,
+                    StandardCharsets.UTF_8));
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * The profile key for a PLMN, from the shipped PLMN map.
+     *
+     * <p>The map is transcribed from stock configuration and covers 294
+     * PLMNs. {@link #carrierKey} remains as the fallback for the handful
+     * of ranges joan mapped by hand before the table existed, and as the
+     * answer for a PLMN the table does not list.
+     */
+    private static String mappedKey(Context ctx, String mcc, String mnc) {
+        JSONObject map = asset(ctx, "carrier-plmn-map.json");
+        if (map == null) {
+            return null;
+        }
+        /* A PLMN is MCC + MNC with the MNC's own width: 2-digit and
+         * 3-digit MNCs are different networks, so try the SIM's width
+         * first and only then the padded form. */
+        String k = mcc + mnc;
+        if (map.has(k)) {
+            return map.optString(k, null);
+        }
+        String k3 = mcc + pad3(mnc);
+        if (map.has(k3)) {
+            return map.optString(k3, null);
+        }
+        return null;
+    }
+
+    /**
+     * The profile key for a carrier id, from the shipped carrier id map
+     * (tools/make-carrier-id-map.py), or null. The specific id wins: it is
+     * the MVNO where there is one.
+     */
+    private static String carrierIdKey(Context ctx, int[] ids) {
+        if (ids == null || (ids[0] <= 0 && ids[1] <= 0)) {
+            return null;
+        }
+        JSONObject map = asset(ctx, "carrier-id-map.json");
+        if (map == null) {
+            return null;
+        }
+        for (int id : ids) {
+            if (id > 0 && map.has(String.valueOf(id))) {
+                return map.optString(String.valueOf(id), null);
+            }
+        }
+        return null;
+    }
+
+    private static JoanCarrierProfile load(Context ctx, String mcc, String mnc,
+                                           int[] ids) {
+        String via;
+        String key = carrierIdKey(ctx, ids);
+        if (key != null) {
+            via = "carrier-id:" + (ids[0] > 0 ? ids[0] : ids[1]);
+        } else {
+            key = mappedKey(ctx, mcc, mnc);
+            via = "plmn:" + mcc + mnc;
+            if (key == null) {
+                key = carrierKey(mcc, mnc);
+                via = "rule";
+            }
+        }
+        try {
+            JSONObject all = asset(ctx, "carrier-profiles.json");
+            if (all == null) {
+                return defaults(mcc, mnc);
+            }
+            if (key != null && all.has(key)) {
+                JSONObject o = all.getJSONObject(key);
+                String conf = o.optString("conf_uri", "");
+                String base = conf.isEmpty()
+                        ? defaults(mcc, mnc).confUri : conf;
+                JoanCarrierProfile hit = new JoanCarrierProfile(
+                        base,
+                        o.optBoolean("refer_sub", true),
+                        o.optBoolean("conf_sub", true),
+                        o.optBoolean("conf_sub_in_dialog", false),
+                        o.optInt("max_sessions", 2),
+                        o.optInt("cw_type", 1),
+                        o.optBoolean("use_180_rpr", true),
+                        o.optInt("offer_res_code", 183),
+                        o.optInt("tcp_criterion_len", -1),
+                        o.optInt("reg_tcp_criterion_v4", 0),
+                        o.optInt("reg_tcp_criterion_v6", 0),
+                        o.optInt("reg_expiration", 0),
+                        parseCodecs(o.optJSONArray("codecs")),
+                        o.optInt("pcscf_port", 0),
+                        !o.optString("user_agent_fmt", "").isEmpty(),
+                        o.optInt("ipsec_algs", -1),
+                        hasSipFeature(o.optString("sip_features", ""),
+                                SIP_FEATURE_AUTH_ALGORITHM_PARAM),
+                        hasSipFeature(o.optString("sip_features", ""),
+                                SIP_FEATURE_ROUTE_HEADER_IN_REG),
+                        hasSipFeature(o.optString("sip_features", ""),
+                                SIP_FEATURE_GRUU),
+                        o.optInt("ipsec_port_interval",
+                                DEFAULT_IPSEC_PORT_INTERVAL),
+                        o.optInt("retry_pcscf_count", 0),
+                        o.optInt("isim_index_for_pcscf", 1),
+                        o.optInt("multiple_discovery_scheme", 2),
+                        o.optInt("pcscf_changed_control", 0),
+                        o.optInt("reg_retry_base_time", 0),
+                        o.optInt("reg_retry_max_time", 0),
+                        parseSeconds(o.optString("reg_retry_interval", "")),
+                        o.optString("xcap_server", ""),
+                        o.optInt("xcap_port", 0),
+                        o.optBoolean("xcap_tls", false),
+                        o.optString("xcap_pdn", ""),
+                        o.optString("ut_control_preference", ""),
+                        o.optBoolean("ipsec", true),
+                        key);
+                hit.via = via;
+                return hit;
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "carrier profile load failed "
+                    + t.getClass().getSimpleName());
+        }
+        JoanCarrierProfile d = defaults(mcc, mnc);
+        Log.i(TAG, "carrier profile: default for " + mcc + "/" + mnc);
+        return d;
+    }
+
+    /**
+     * China Mobile's own MNCs under MCC 460.
+     *
+     * <p>Confirmed against a shipping LineageOS device tree rather than
+     * guessed: OnePlus's CarrierConfigResCommon vendor.xml (sm8250-common
+     * and siblings) lists exactly these five under
+     * {@code <carrier_config operator="CMCC">}, with China Unicom
+     * (46001/46006/46009), China Telecom (46003/46005/46011/46012) and
+     * China Broadnet (46015) as separate operators with their own
+     * entries.
+     *
+     * <p>An MNC left out of this set gets the 3GPP defaults rather than
+     * another operator's profile, so being wrong by omission costs a
+     * tuned profile, while being wrong by inclusion would apply China
+     * Mobile's settings to a Unicom or Telecom subscriber.
+     */
+    private static final java.util.Set<String> CMCC_MNCS =
+            new java.util.HashSet<>(java.util.Arrays.asList(
+                    "000", "002", "004", "007", "008"));
+
+    /** True for a China Mobile PLMN, by the confirmed MNC set. */
+    static boolean isCmcc(String mcc, String mnc) {
+        return "460".equals(mcc) && mnc != null
+                && CMCC_MNCS.contains(pad3(mnc));
+    }
+
+    /**
+     * The hand-kept rule for a PLMN neither map lists, or null.
+     *
+     * <p>This used to guess by MCC: every PLMN in 310-316 got T-Mobile's
+     * profile unless it was one of three hard-coded MNCs, all of 440/441
+     * got NTT DoCoMo's, and all of 450 got LG U+'s. So AT&T, Verizon and
+     * U.S. Cellular subscribers registered with T-Mobile's settings --
+     * including T-Mobile's IPsec, which Verizon and U.S. Cellular do not
+     * negotiate -- and Rakuten, SoftBank-MVNO and KT MVNO subscribers with
+     * a competitor's. Those operators are now in the PLMN and carrier id
+     * maps by their own PLMNs, and a PLMN still unlisted gets the 3GPP
+     * defaults, which are right far more often than another operator's
+     * file.
+     *
+     * <p>One rule remains: China Mobile's MNC 004, which LG's table does
+     * not list but the OnePlus CarrierConfig in LineageOS confirms.
+     */
+    static String carrierKey(String mcc, String mnc) {
+        if ("460".equals(mcc)) {
+            /* MCC 460 is all of China, not one operator. Only China
+             * Mobile's own MNCs get its profile; Unicom and Telecom get
+             * the 3GPP defaults, because LG shipped no profile for them
+             * and a competitor's is worse than none. */
+            return CMCC_MNCS.contains(pad3(mnc)) ? "CMCC.CN" : null;
+        }
+        return null;
+    }
+}

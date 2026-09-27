@@ -1,44 +1,40 @@
 #!/usr/bin/env python3
-"""The zip's carrier data as CarrierConfig vendor.xml blocks.
+"""The zip's carrier gate as CarrierConfig vendor.xml blocks, for a ROM
+built from source with the AOSP IMS stack (upstream/AOSP-IMS.md).
 
-The flashable zip and the repacked ROM ship ImsStackCarrierConfigOverlay,
-a runtime resource overlay replacing the CarrierConfig app's
-res/xml/vendor.xml wholesale (a device tree says the same thing statically
-in its own vendor.xml; same region, same tool). The overlay must carry the
-ROM's own vendor.xml content -- an RRO replaces the whole resource -- so
-the file is assembled in three layers, in document order:
+The flashable zip cannot change CarrierConfig, so CarrierImsGate overrides
+carrier config at run time from inside ImsStack. A device tree can say the
+same thing statically, in the vendor.xml overlay CarrierConfig already
+reads. Same data, same decisions:
 
-- the ROM's vendor.xml (aosp-ims/carrier/joan-common-vendor-base.xml for
-  joan), untouched;
-- the region this tool writes between the aosp-ims markers:
-  1. our ePDG blocks: addresses for the operators whose ePDG is not the
-     3GPP default name, read from CarrierImsGate.java so the gate and the
-     file cannot drift. One block per carrier id and per PLMN, PLMN
-     blocks first: CarrierConfig merges every matching block in document
-     order, so a carrier id block overrides its PLMN's block, as the gate
-     prefers the carrier id.
-  2. the imported blocks (aosp-ims/carrier/lineage-pixel-ims.xml): the
-     IMS keys LineageOS converts from Google's Pixel CarrierSettings,
-     with the converter's own filters (mcc/mnc, gid1, spn, imsi). Their
-     ePDG addresses are authoritative: where Google's data and our table
-     disagree, Google's wins, which is why ours come first.
-  3. the filterless block last, so it wins for its keys: VoLTE and
-     Wi-Fi calling available for every SIM, both toggles visible and
-     editable, and IMS stays user-turnoff-able.
+- VoLTE is offered for every SIM, with the Enhanced 4G LTE toggle visible
+  and editable.
+- Wi-Fi calling is offered where the SIM's LG profile shipped VoWiFi. A
+  SIM resolves to a profile by Android carrier id, then by PLMN, as the
+  gate does. One block per carrier id and per PLMN, PLMN blocks first:
+  CarrierConfig merges every matching block in document order, so a
+  carrier id block overrides its PLMN's block, as the gate prefers the
+  carrier id.
+- The ePDG address is set for the operators whose ePDG is not the 3GPP
+  default name. Read from CarrierImsGate.java, so the two cannot drift.
 
-Only carrier ids the gate can match get a block of their own. The gate
-reads TelephonyManager.getSimCarrierId(); a vendor.xml cid filter also
-matches the specific carrier id, so ids that are specific (they have a
-parent in carrier_list.textpb) are left out.
-tests/check-carrier-config.py checks the result against the gate's rules
-for every carrier id and PLMN.
+Only carrier ids the gate can match get a block. The gate reads
+TelephonyManager.getSimCarrierId(); a vendor.xml cid filter also matches
+the specific carrier id, so ids that are specific (they have a parent in
+carrier_list.textpb) are left out. tests/check-carrier-config.py checks
+the result against the gate's rules for every carrier id and PLMN.
+
+One difference, by design: vendor.xml overrides the carrier's own config
+where the gate only fills in what is missing. Android 15's CarrierConfig
+assets set no ePDG address and never disable Wi-Fi calling for a carrier
+listed here, so the outcome is the same on LineageOS 22.2.
 
 Usage:
   make-carrier-config.py <carrier-id-map.json> <carrier-plmn-map.json>
-      <CarrierImsGate.java> <carrier_list.textpb> [--import <import.xml>]
+      <wfc-profiles.json> <CarrierImsGate.java> <carrier_list.textpb>
       [--splice <vendor.xml>]
 
-Prints the region. With --splice, writes it into the given vendor.xml
+Prints the blocks. With --splice, writes them into the given vendor.xml
 between the aosp-ims markers, replacing an earlier copy, or before
 </carrier_config_list> the first time.
 """
@@ -54,24 +50,19 @@ KEY_VOLTE = 'carrier_volte_available_bool'
 KEY_HIDE_4G = 'hide_enhanced_4g_lte_bool'
 KEY_EDITABLE_4G = 'editable_enhanced_4g_lte_bool'
 KEY_WFC = 'carrier_wfc_ims_available_bool'
-KEY_TURNOFF = 'carrier_allow_turnoff_ims_bool'
 KEY_EPDG_STATIC = 'iwlan.epdg_static_address_string'
 KEY_EPDG_PRIORITY = 'iwlan.epdg_address_priority_int_array'
 EPDG_ADDRESS_STATIC, EPDG_ADDRESS_PLMN = 0, 1
-
-FINAL = [
-    (KEY_VOLTE, True),
-    (KEY_WFC, True),
-    (KEY_HIDE_4G, False),
-    (KEY_EDITABLE_4G, True),
-    (KEY_TURNOFF, True),
-]
 
 
 def operator_of(profile):
     """"OP.CC" of an LG profile key such as TMO.US.NAO (CarrierImsGate.operatorOf)."""
     parts = profile.split('.')
     return parts[0] + '.' + parts[1] if len(parts) >= 2 else profile
+
+
+def is_wfc(profile, wfc):
+    return profile is not None and (profile in wfc or operator_of(profile) in wfc)
 
 
 def epdg_map(gate_java):
@@ -100,64 +91,48 @@ def carrier_list(textpb):
     return out
 
 
-def load(id_map, plmn_map, gate_java, textpb):
+def load(id_map, plmn_map, wfc_json, gate_java, textpb):
     return (json.load(open(id_map)), json.load(open(plmn_map)),
-            epdg_map(gate_java), carrier_list(textpb))
+            set(json.load(open(wfc_json))['profiles']), epdg_map(gate_java),
+            carrier_list(textpb))
 
 
-def epdg_values(addr):
-    """The ePDG values the gate applies for one profile."""
-    return [(KEY_EPDG_STATIC, addr),
-            (KEY_EPDG_PRIORITY, [EPDG_ADDRESS_STATIC, EPDG_ADDRESS_PLMN])]
+def wfc_values(profile, epdg):
+    """The Wi-Fi calling values the gate applies for one profile."""
+    vals = [(KEY_WFC, True)]
+    addr = epdg.get(operator_of(profile))
+    if addr:
+        vals.append((KEY_EPDG_STATIC, addr))
+        vals.append((KEY_EPDG_PRIORITY, [EPDG_ADDRESS_STATIC, EPDG_ADDRESS_PLMN]))
+    return vals
 
 
-def blocks(ids, plmns, epdg, carriers):
-    """[(filter attrs, comment, [(key, value)])] for our own rules."""
-    out = []
+def blocks(ids, plmns, wfc, epdg, carriers):
+    """[(filter attrs, comment, [(key, value)])] in document order."""
+    out = [({}, 'VoLTE for every SIM, with the toggle visible and editable',
+            [(KEY_VOLTE, True), (KEY_HIDE_4G, False), (KEY_EDITABLE_4G, True)])]
     for plmn in sorted(plmns):
-        addr = epdg.get(operator_of(plmns[plmn]))
-        if addr:
-            out.append(({'mcc': plmn[:3], 'mnc': plmn[3:]}, plmns[plmn],
-                        epdg_values(addr)))
+        profile = plmns[plmn]
+        if is_wfc(profile, wfc):
+            out.append(({'mcc': plmn[:3], 'mnc': plmn[3:]}, profile,
+                        wfc_values(profile, epdg)))
     for cid in sorted(ids, key=int):
         profile = ids[cid]
-        addr = epdg.get(operator_of(profile))
         name, parent = carriers.get(int(cid), ('', None))
-        if parent is not None or not addr:
+        if parent is not None or not is_wfc(profile, wfc):
             continue
         attrs = {'cid': cid}
         if name:
             attrs['name'] = name
-        out.append((attrs, profile, epdg_values(addr)))
+        out.append((attrs, profile, wfc_values(profile, epdg)))
     return out
 
 
-def imported(path):
-    """[(filter attrs, comment, [child lines])] read back from the
-    importer's output (import-carrier-settings.py), passed through
-    verbatim: its blocks are already rendered CarrierConfig XML."""
-    out = []
-    for m in re.finditer(
-            r'    <!-- (.+?) -->\n(    <carrier_config[^\n]*>\n(?:.*?\n)?    </carrier_config>)',
-            open(path, encoding='utf-8').read(), re.S):
-        el = m.group(2)
-        head = el[:el.index('>')]
-        attrs = dict(re.findall(r'([a-z0-9_]+)="([^"]*)"', head))
-        children = el[el.index('>') + 1:el.rindex('</carrier_config>')].strip('\n')
-        out.append((attrs, m.group(1), children.split('\n')))
-    if not out:
-        raise SystemExit(f'{path}: no imported blocks found')
-    return out
-
-
-def render(bl, imp):
+def render(bl):
     lines = [BEGIN,
-             '    <!-- AOSP IMS stack (ImsStack): ePDG overrides for the operators whose',
-             '         ePDG is not the 3GPP default name (CarrierImsGate\'s table); then',
-             '         the IMS carrier data converted from Google\'s Pixel CarrierSettings',
-             '         (aosp-ims/carrier/lineage-pixel-ims.xml), whose addresses win; then',
-             '         VoLTE and Wi-Fi calling for every SIM, both toggles usable. Same',
-             '         rules as the flashable zip\'s CarrierImsGate. -->']
+             '    <!-- AOSP IMS stack (ImsStack): VoLTE for every carrier; Wi-Fi calling',
+             '         where the SIM\'s LG profile shipped VoWiFi, by carrier id, then PLMN.',
+             '         Same rules as the flashable zip\'s CarrierImsGate. -->']
     for attrs, comment, values in bl:
         head = ''.join(f' {k}={quoteattr(v)}' for k, v in attrs.items())
         lines.append(f'    <carrier_config{head}> <!-- {escape(comment)} -->')
@@ -171,24 +146,8 @@ def render(bl, imp):
             else:
                 lines.append(f'        <string name="{key}">{escape(value)}</string>')
         lines.append('    </carrier_config>')
-    for attrs, comment, children in imp:
-        head = ''.join(f' {k}={quoteattr(v)}' for k, v in attrs.items())
-        lines.append(f'    <!-- {escape(comment)} -->')
-        lines.append(f'    <carrier_config{head}>')
-        lines += children
-        lines.append('    </carrier_config>')
-    lines.append('    <carrier_config> <!-- offered for every SIM -->')
-    for key, value in FINAL:
-        lines.append(f'        <boolean name="{key}" value="{str(value).lower()}" />')
-    lines.append('    </carrier_config>')
     lines.append(END)
     return '\n'.join(lines) + '\n'
-
-
-def region_text(ids, plmns, epdg, carriers, import_path):
-    bl = blocks(ids, plmns, epdg, carriers)
-    imp = imported(import_path) if import_path else []
-    return render(bl, imp)
 
 
 def splice(vendor_xml, text):
@@ -204,19 +163,15 @@ def splice(vendor_xml, text):
 
 
 def main(argv):
-    target = import_path = None
+    target = None
     if '--splice' in argv:
         i = argv.index('--splice')
         target = argv[i + 1]
         argv = argv[:i] + argv[i + 2:]
-    if '--import' in argv:
-        i = argv.index('--import')
-        import_path = argv[i + 1]
-        argv = argv[:i] + argv[i + 2:]
-    if len(argv) != 4:
+    if len(argv) != 5:
         raise SystemExit(__doc__)
-    ids, plmns, epdg, carriers = load(*argv)
-    text = region_text(ids, plmns, epdg, carriers, import_path)
+    ids, plmns, wfc, epdg, carriers = load(*argv)
+    text = render(blocks(ids, plmns, wfc, epdg, carriers))
     if target:
         splice(target, text)
         print(f'{target}: {text.count("<carrier_config")} carrier_config blocks')

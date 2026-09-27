@@ -1,0 +1,452 @@
+package org.joan.ims;
+
+import android.content.Context;
+import android.os.Bundle;
+import android.telephony.TelephonyManager;
+import android.telephony.ims.ImsCallProfile;
+import android.telephony.ims.feature.ImsFeature;
+import android.telephony.ims.feature.MmTelFeature;
+import android.telephony.ims.stub.ImsCallSessionImplBase;
+import android.util.Log;
+
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * MmTel feature: the capability surface Dialer and telephony query, plus
+ * call sessions in both directions.
+ *
+ * Inbound calls arrive from JoanSipUa, which holds the INVITE at 180
+ * Ringing until the user answers, declines, or the caller cancels.
+ */
+public class JoanMmTelFeature extends MmTelFeature {
+    private static final String TAG = "JoanIms";
+
+    private final Context app;
+
+    public JoanMmTelFeature(Context app) {
+        super(app.getMainExecutor());
+        this.app = app.getApplicationContext();
+        /* Publish and attach here rather than in a callback: which of
+         * onFeatureReady / changeEnabledCapabilities the framework calls,
+         * and when, varies. An inbound call that arrives before we are
+         * attached cannot ring, so attach as early as we exist. */
+        sInstance = this;
+        // Framework should call onFeatureReady(); also post READY in case
+        // the listener attach races FeatureConnector's first status read.
+        app.getMainExecutor().execute(this::markReady);
+    }
+
+    @Override
+    public void changeEnabledCapabilities(
+            CapabilityChangeRequest request, CapabilityCallbackProxy c) {
+        Log.i(TAG, "changeEnabledCapabilities");
+        sInstance = this;
+        JoanDriver.start(app);
+        markReady();
+    }
+
+    @Override
+    public void onFeatureReady() {
+        Log.i(TAG, "onFeatureReady");
+        JoanTrace.note("onFeatureReady");
+        sInstance = this;
+        JoanDriver.start(app);
+        markReady();
+    }
+
+    /* The live feature, so a pushed event can reach Telecom. There is one
+     * MmTelFeature per subscription and joan is single-SIM. */
+    private static volatile JoanMmTelFeature sInstance;
+    private static volatile JoanCallSession sIncoming;
+    private static volatile JoanCallSession sConference;
+    private static final ConcurrentHashMap<String, JoanCallSession> sBySip =
+            new ConcurrentHashMap<>();
+
+    static void track(String sipCallId, JoanCallSession s) {
+        if (sipCallId != null && s != null) {
+            sBySip.put(sipCallId, s);
+        }
+    }
+
+    static void untrack(String sipCallId) {
+        if (sipCallId != null) {
+            sBySip.remove(sipCallId);
+        }
+    }
+
+    static void onDialogEnded(String sipCallId) {
+        JoanCallSession s = sipCallId != null ? sBySip.remove(sipCallId) : null;
+        if (s != null) {
+            s.onRemoteEnded();
+            if (sIncoming == s) {
+                sIncoming = null;
+            }
+            return;
+        }
+        onCallEndedRemotely();
+    }
+
+    static void onDialogHeld(String sipCallId) {
+        JoanCallSession s = sipCallId != null ? sBySip.get(sipCallId) : null;
+        if (s != null) {
+            s.onHeldByUa();
+        }
+    }
+
+    /**
+     * The network started an SRVCC: our LTE calls are being handed to the
+     * circuit-switched domain.
+     *
+     * <p>The modem cannot rebuild the calls on the CS side without
+     * knowing what is up and what state each leg is in, and this callback
+     * is the only place it can learn that -- so a stack that does not
+     * answer it drops every call at the moment coverage leaves LTE, which
+     * is exactly when a handover was supposed to save them.
+     *
+     * <p>Held legs are reported as holding and ringing legs as alerting
+     * or incoming: handing a ringing call back as an answered one would
+     * have the modem rebuild it already connected.
+     */
+    @Override
+    public void notifySrvccStarted(
+            java.util.function.Consumer<
+                    java.util.List<android.telephony.ims.SrvccCall>> consumer) {
+        java.util.List<android.telephony.ims.SrvccCall> calls =
+                new java.util.ArrayList<>();
+        try {
+            boolean held = JoanSipUa.liveHeld();
+            String liveId = JoanSipUa.currentCallId();
+            for (java.util.Map.Entry<String, JoanCallSession> e
+                    : sBySip.entrySet()) {
+                JoanCallSession s = e.getValue();
+                if (s == null || s.callProfile() == null) {
+                    continue;
+                }
+                boolean thisHeld = held && e.getKey().equals(liveId);
+                calls.add(new android.telephony.ims.SrvccCall(
+                        e.getKey(), s.preciseState(thisHeld),
+                        s.callProfile()));
+            }
+        } catch (Throwable t) {
+            JoanTrace.note("srvcc started " + t.getClass().getSimpleName());
+        }
+        JoanTrace.note("srvcc started; reporting " + calls.size() + " call(s)");
+        if (consumer != null) {
+            consumer.accept(calls);
+        }
+    }
+
+    /**
+     * The handover finished. The calls are CS now and the IMS dialogs
+     * behind them are gone.
+     *
+     * <p>Deliberately no BYE: the network moved the call, and sending one
+     * would tear down the CS leg the handover just built. The dialogs are
+     * dropped locally instead.
+     */
+    @Override
+    public void notifySrvccCompleted() {
+        JoanTrace.note("srvcc completed; releasing " + sBySip.size()
+                + " dialog(s) without BYE");
+        for (JoanCallSession s : sBySip.values()) {
+            if (s != null) {
+                s.onSrvccCompleted();
+            }
+        }
+        sBySip.clear();
+        sIncoming = null;
+        JoanSipUa.forgetCallsAfterSrvcc();
+    }
+
+    @Override
+    public void notifySrvccFailed() {
+        JoanTrace.note("srvcc failed; the IMS call stands");
+    }
+
+    @Override
+    public void notifySrvccCanceled() {
+        JoanTrace.note("srvcc canceled; the IMS call stands");
+    }
+
+    /** The far end held or resumed the call identified by its Call-ID. */
+    static void onPeerHoldChanged(String sipCallId, boolean held) {
+        JoanCallSession s = sipCallId != null ? sBySip.get(sipCallId) : null;
+        if (s == null) {
+            s = sIncoming;
+        }
+        if (s != null) {
+            s.onPeerHold(held);
+        }
+    }
+
+    /** conference-info participant list from the focus NOTIFYs. */
+    static void onConferenceUsers(java.util.List<String> users) {
+        JoanCallSession conf = sConference;
+        if (conf != null) {
+            conf.onConferenceUsers(users);
+        }
+    }
+
+    static void trackConference(JoanCallSession s) {
+        sConference = s;
+    }
+
+    /** A leg finished transferring into the conference focus: end its
+     * session so Telecom folds the dialog into the conference call
+     * instead of showing a disconnected line. */
+    static void onMergedIntoConference(String sipCallId) {
+        JoanCallSession s = sipCallId != null ? sBySip.remove(sipCallId) : null;
+        if (s != null) {
+            s.onRemoteEnded();
+            if (sIncoming == s) {
+                sIncoming = null;
+            }
+        }
+    }
+
+    /**
+     * An inbound INVITE is being held at 180 while we ring. Build a session
+     * for it and hand it to Telecom.
+     */
+    static void onIncomingCall(Context ctx, String callerUri,
+                               String callerName, String sipCallId) {
+        JoanMmTelFeature f = sInstance;
+        if (f == null) {
+            Log.w(TAG, "incoming call but no MmTelFeature; cannot ring");
+            JoanTrace.note("incoming with no feature");
+            new Thread(() -> JoanSipUa.reject(486),
+                    "joan-ims-nofeature-reject").start();
+            return;
+        }
+        try {
+            ImsCallProfile p = new ImsCallProfile(
+                    ImsCallProfile.SERVICE_TYPE_NORMAL,
+                    ImsCallProfile.CALL_TYPE_VOICE);
+            applyCallerId(p, callerUri, callerName);
+            JoanCallSession s = JoanCallSession.incoming(ctx, f, p, sipCallId);
+            sIncoming = s;
+            if (sipCallId != null) {
+                track(sipCallId, s);
+            }
+            Bundle extras = new Bundle();
+            f.notifyIncoming(s, extras);
+            Log.i(TAG, "notifyIncomingCall delivered");
+            JoanTrace.note("incoming call -> dialer");
+        } catch (Throwable t) {
+            Log.w(TAG, "notifyIncomingCall failed", t);
+            JoanTrace.note("incoming failed " + t.getClass().getSimpleName());
+            new Thread(() -> JoanSipUa.reject(486),
+                    "joan-ims-fail-reject").start();
+        }
+    }
+
+    /* Telecom reads the calling party from the profile extras. Without
+     * these the dialer has nothing to show and the call reads "unknown".
+     * The names are the framework's own ImsCallProfile keys; they are
+     * spelled out rather than referenced so this compiles against the
+     * trimmed stub. */
+    private static final String EXTRA_OI = "oi";     /* originating number */
+    private static final String EXTRA_CNA = "cna";   /* originating name */
+    private static final String EXTRA_OIR = "oir";   /* presentation */
+    private static final int OIR_PRESENTATION_NOT_RESTRICTED = 2;
+    private static final int OIR_PRESENTATION_RESTRICTED = 1;
+
+    private static void applyCallerId(ImsCallProfile p, String uri,
+                                      String name) {
+        String number = dialableFrom(uri);
+        String cna = (name == null) ? "" : name.trim();
+        if (cna.length() > 80) {
+            cna = cna.substring(0, 80);
+        }
+        if (number == null || number.isEmpty()) {
+            /* Withheld, or unparseable. Say so explicitly rather than
+             * leaving the field unset. A name without a number is still
+             * worth showing if the network supplied one. */
+            p.setCallExtraInt(EXTRA_OIR, OIR_PRESENTATION_RESTRICTED);
+            if (!cna.isEmpty()) {
+                p.setCallExtra(EXTRA_CNA, cna);
+            }
+            return;
+        }
+        p.setCallExtra(EXTRA_OI, number);
+        p.setCallExtra(EXTRA_CNA, cna);
+        p.setCallExtraInt(EXTRA_OIR, OIR_PRESENTATION_NOT_RESTRICTED);
+    }
+
+    /**
+     * "tel:+15551234567" or "sip:+15551234567@ims.mnc260..." -> the number.
+     * Anything else is passed through so an alphanumeric caller still
+     * shows something rather than nothing.
+     */
+    private static String dialableFrom(String uri) {
+        if (uri == null) {
+            return null;
+        }
+        String u = uri.trim();
+        if (u.isEmpty()) {
+            return null;
+        }
+        if (u.startsWith("tel:")) {
+            u = u.substring(4);
+        } else if (u.startsWith("sip:") || u.startsWith("sips:")) {
+            u = u.substring(u.indexOf(':') + 1);
+        }
+        int at = u.indexOf('@');
+        if (at > 0) {
+            u = u.substring(0, at);
+        }
+        int semi = u.indexOf(';');
+        if (semi > 0) {
+            u = u.substring(0, semi);
+        }
+        return u.isEmpty() ? null : u;
+    }
+
+    /** Caller gave up, or the far end hung up. */
+    static void onCallEndedRemotely() {
+        JoanCallSession s = sIncoming;
+        sIncoming = null;
+        if (s != null) {
+            s.onRemoteEnded();
+        }
+    }
+
+    /**
+     * notifyIncomingCall has gained a call-id parameter in some releases.
+     * Bind it reflectively so the app works either way rather than dying
+     * with NoSuchMethodError on a device whose framework differs from the
+     * stub this was compiled against.
+     */
+    private void notifyIncoming(JoanCallSession s, Bundle extras)
+            throws Exception {
+        try {
+            java.lang.reflect.Method m = getClass().getMethod(
+                    "notifyIncomingCall", ImsCallSessionImplBase.class,
+                    String.class, Bundle.class);
+            m.invoke(this, s, s.getCallId(), extras);
+            return;
+        } catch (NoSuchMethodException ignored) {
+            // older shape below
+        }
+        java.lang.reflect.Method m = getClass().getMethod(
+                "notifyIncomingCall", ImsCallSessionImplBase.class,
+                Bundle.class);
+        m.invoke(this, s, extras);
+    }
+
+    @Override
+    public boolean queryCapabilityConfiguration(int capability, int radioTech) {
+        return capability == MmTelCapabilities.CAPABILITY_TYPE_VOICE;
+    }
+
+    @Override
+    public ImsCallProfile createCallProfile(int callSessionType, int callType) {
+        return new ImsCallProfile(callSessionType, callType);
+    }
+
+    @Override
+    public ImsCallSessionImplBase createCallSession(ImsCallProfile profile) {
+        Log.i(TAG, "createCallSession");
+        JoanTrace.lastDial("createCallSession");
+        if (profile != null
+                && profile.getServiceType()
+                        == ImsCallProfile.SERVICE_TYPE_CONFERENCE) {
+            /* Conference host session: merge() drives the stock-model
+             * flow (focus INVITE + REFER legs + conference-info). */
+            JoanCallSession s = new JoanCallSession(app, this, profile);
+            JoanMmTelFeature.trackConference(s);
+            return s;
+        }
+        return new JoanCallSession(app, this, profile);
+    }
+
+    /**
+     * AOSP MmTelFeature#setCallAudioHandler: AUDIO_HANDLER_ANDROID
+     * makes Telephony Connection audioModeIsVoip=true, which Telecom
+     * turns into MODE_IN_COMMUNICATION instead of MODE_IN_CALL (radio
+     * mixer). Call after the session is ACTIVE so ImsPhoneCallTracker
+     * can find the Connection.
+     */
+    void useAndroidAudioHandler() {
+        try {
+            setCallAudioHandler(AUDIO_HANDLER_ANDROID);
+            JoanTrace.note("audio handler ANDROID");
+            Log.i(TAG, "setCallAudioHandler ANDROID");
+        } catch (Throwable t) {
+            JoanTrace.note("audio handler " + t.getClass().getSimpleName());
+            Log.w(TAG, "setCallAudioHandler", t);
+        }
+    }
+
+    /**
+     * Telephony asks whether a dial should go over IMS or fall back to CS.
+     *
+     * Emergency numbers always fall back. This stack has no emergency
+     * registration and no urn:service:sos path, so an emergency dial placed
+     * over it would reach an S-CSCF that has no idea it is an emergency
+     * call. If the number cannot be classified at all we also fall back:
+     * losing VoLTE on a call is recoverable, guessing wrong about an
+     * emergency call is not.
+     */
+    @Override
+    public int shouldProcessCall(String[] numbers) {
+        int n = numbers == null ? 0 : numbers.length;
+        if (!JoanRegistration.isRegistered()) {
+            JoanTrace.lastDial("shouldProcessCall n=" + n
+                    + " registered=false -> CSFB");
+            return PROCESS_CALL_CSFB;
+        }
+        if (anyEmergency(numbers)) {
+            JoanTrace.lastDial("shouldProcessCall n=" + n
+                    + " emergency -> CSFB");
+            return PROCESS_CALL_CSFB;
+        }
+        JoanTrace.lastDial("shouldProcessCall n=" + n
+                + " registered=true -> IMS");
+        return PROCESS_CALL_IMS;
+    }
+
+    private boolean anyEmergency(String[] numbers) {
+        if (numbers == null || numbers.length == 0) {
+            return false;
+        }
+        TelephonyManager tm = app.getSystemService(TelephonyManager.class);
+        if (tm == null) {
+            return true;
+        }
+        for (String n : numbers) {
+            if (n == null || n.isEmpty()) {
+                continue;
+            }
+            try {
+                if (tm.isEmergencyNumber(n)) {
+                    return true;
+                }
+            } catch (Throwable t) {
+                /* Cannot classify: treat as emergency and use CS. */
+                Log.w(TAG, "isEmergencyNumber unavailable "
+                        + t.getClass().getSimpleName());
+                JoanTrace.note("emergency check failed "
+                        + t.getClass().getSimpleName());
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void markReady() {
+        try {
+            setFeatureState(ImsFeature.STATE_READY);
+        } catch (Throwable t) {
+            Log.w(TAG, "setFeatureState failed "
+                    + t.getClass().getSimpleName());
+        }
+        try {
+            notifyCapabilitiesStatusChanged(new MmTelCapabilities(
+                    MmTelCapabilities.CAPABILITY_TYPE_VOICE));
+        } catch (Throwable t) {
+            Log.w(TAG, "cap notify failed "
+                    + t.getClass().getSimpleName());
+        }
+    }
+}

@@ -1,0 +1,11 @@
+# Open IMS UA (VoLTE). Started after radio.
+service joan-imsd /system/bin/joan-ims register
+    class late_start
+    user root
+    group radio inet system
+    capabilities NET_ADMIN NET_RAW
+    seclabel u:r:joan_imsd:s0
+    disabled
+
+on property:sys.boot_completed=1
+    start joan-imsd

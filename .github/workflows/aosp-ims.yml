@@ -15,8 +15,7 @@ on:
     paths:
       - 'aosp-ims/**'
       - '!aosp-ims/**/*.md'
-
-      - 'aosp-ims/assets/**'
+      - 'ims-service/assets/**'
       - 'scripts/**'
       - 'permissions/**'
       - 'apn/**'
@@ -109,18 +108,16 @@ jobs:
 
       - name: Carrier config matches the gate
         run: |
-          TP=$WORK/TelephonyProvider
-          if [ ! -f "$TP/assets/latest_carrier_id/carrier_list.textpb" ]; then
-            git clone -q --filter=blob:none --no-checkout --depth 1 -b android15-qpr2-release \
-                https://android.googlesource.com/platform/packages/providers/TelephonyProvider "$TP"
-            git -C "$TP" sparse-checkout set --no-cone /assets/latest_carrier_id/carrier_list.textpb
-            git -C "$TP" checkout -q
-          fi
+          TP=$RUNNER_TEMP/TelephonyProvider
+          git clone -q --filter=blob:none --no-checkout --depth 1 -b android15-qpr2-release \
+              https://android.googlesource.com/platform/packages/providers/TelephonyProvider "$TP"
+          git -C "$TP" sparse-checkout set --no-cone /assets/latest_carrier_id/carrier_list.textpb
+          git -C "$TP" checkout -q
           python3 aosp-ims/tests/check-carrier-config.py \
-              aosp-ims/assets/carrier-id-map.json aosp-ims/assets/carrier-plmn-map.json \
+              ims-service/assets/carrier-id-map.json ims-service/assets/carrier-plmn-map.json \
+              aosp-ims/zip/assets/wfc-profiles.json \
               aosp-ims/zip/java/com/android/imsstack/joan/CarrierImsGate.java \
               "$TP/assets/latest_carrier_id/carrier_list.textpb" \
-              --import aosp-ims/carrier/lineage-pixel-ims.xml \
               --patch upstream/aosp-ims/device/0001-joan-common-Add-the-AOSP-IMS-stack.patch
 
       - name: Installer end-to-end tests

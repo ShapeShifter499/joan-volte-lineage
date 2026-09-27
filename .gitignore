@@ -1,6 +1,10 @@
-# build artifacts
+# joan-volte-lineage build artifacts
 out/
-aosp-ims/work/
-aosp-ims/zip/rro-carrierconfig/res/xml/vendor.xml
-__pycache__/
+native/build/
+ims-service/build/
 *.apk.orig
+
+# Build artifact: pack-zip.sh regenerates this from native/build/
+root/system/bin/joan-ims
+rro/build/
+rro-fw/build/

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Device-level VoLTE admit. Matched to the target by resource name
+         (type/name), exactly as the com.android.phone RRO is. Deliberately
+         does NOT set config_device_vt_available: video calling is not
+         wired on joan and enabling its UI would promise what the stack
+         cannot deliver. -->
+    <bool name="config_device_volte_available">true</bool>
+</resources>

@@ -9,6 +9,7 @@ platform ActionBar, android.widget.SearchView and the DeviceDefault
 settings theme instead, and drop the appcompat dependency.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SByt7CZfKR6U4r1VS86tHS
 ---
  java/Android.bp                               |  1 -
  java/AndroidManifest.xml                      |  8 +-

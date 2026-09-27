@@ -26,10 +26,12 @@ python3 "$HERE/tools/merge-manifest.py" "$S/ImsStack/java/AndroidManifest.xml" \
     "$S/ImsMedia/service/AndroidManifest.xml" "$OUT/AndroidManifest.xml" \
     "$VERSION_CODE" "$VERSION_NAME"
 cp -r "$S/ImsStack/java/assets/." "$S/ImsMedia/service/assets/." "$OUT/assets/"
-# CarrierImsGate's data: joan's SIM -> LG profile maps (ePDG resolution).
+# CarrierImsGate's data: joan's SIM -> LG profile maps, and the profiles LG
+# shipped VoWiFi on.
 mkdir -p "$OUT/assets/joan"
-cp "$HERE/../aosp-ims/assets/carrier-id-map.json" \
-   "$HERE/../aosp-ims/assets/carrier-plmn-map.json" "$OUT/assets/joan/"
+cp "$HERE/../ims-service/assets/carrier-id-map.json" \
+   "$HERE/../ims-service/assets/carrier-plmn-map.json" \
+   "$HERE/zip/assets/wfc-profiles.json" "$OUT/assets/joan/"
 "$BT/aapt2" compile --dir "$S/ImsStack/java/res" -o "$OUT/res/stack.zip"
 "$BT/aapt2" compile --dir "$S/ImsMedia/service/res" -o "$OUT/res/media.zip"
 "$BT/aapt2" link --manifest "$OUT/AndroidManifest.xml" -I "$PUB" -A "$OUT/assets" \
@@ -81,31 +83,8 @@ with zipfile.ZipFile(os.path.join(out, 'unaligned.apk'), 'w', zipfile.ZIP_DEFLAT
 EOF
 "$BT/zipalign" -f -p 4 "$OUT/unaligned.apk" "$OUT/aligned.apk"
 
-# 5. Overlays. The CarrierConfig overlay's vendor.xml is generated, not
-#    committed: the ROM's own content (carrier/joan-common-vendor-base.xml)
-#    plus the converted Pixel IMS carrier data and our rules, spliced
-#    together by make-carrier-config.py (the same region the device-tree
-#    patch splices, so the two cannot drift; checked by
-#    tests/check-carrier-config.py).
-TP=$WORK/TelephonyProvider
-TEXTPB=${TEXTPB:-$TP/assets/latest_carrier_id/carrier_list.textpb}
-if [ ! -f "$TEXTPB" ]; then
-    git clone -q --filter=blob:none --no-checkout --depth 1 -b "$PLATFORM_BRANCH" \
-        https://android.googlesource.com/platform/packages/providers/TelephonyProvider "$TP"
-    git -C "$TP" sparse-checkout set --no-cone /assets/latest_carrier_id/carrier_list.textpb
-    git -C "$TP" checkout -q
-fi
-mkdir -p "$HERE/zip/rro-carrierconfig/res/xml"
-cp "$HERE/carrier/joan-common-vendor-base.xml" \
-   "$HERE/zip/rro-carrierconfig/res/xml/vendor.xml"
-python3 "$HERE/tools/make-carrier-config.py" \
-    "$HERE/../aosp-ims/assets/carrier-id-map.json" \
-    "$HERE/../aosp-ims/assets/carrier-plmn-map.json" \
-    "$HERE/zip/java/com/android/imsstack/joan/CarrierImsGate.java" \
-    "$TEXTPB" --import "$HERE/carrier/lineage-pixel-ims.xml" \
-    --splice "$HERE/zip/rro-carrierconfig/res/xml/vendor.xml"
-for rro in phone:ImsStackPhoneOverlay fw:ImsStackFrameworkOverlay \
-           carrierconfig:ImsStackCarrierConfigOverlay; do
+# 5. Overlays.
+for rro in phone:ImsStackPhoneOverlay fw:ImsStackFrameworkOverlay; do
     dir=$HERE/zip/rro-${rro%%:*}; name=${rro##*:}
     "$BT/aapt2" compile --dir "$dir/res" -o "$OUT/res/$name.zip"
     "$BT/aapt2" link -I "$PUB" --manifest "$dir/AndroidManifest.xml" \
@@ -128,7 +107,6 @@ sign() { "$BT/apksigner" sign --ks "$KS" --ks-pass pass:imsstack --ks-key-alias 
 sign "$OUT/aligned.apk" "$OUT/ImsStack.apk"
 sign "$OUT/ImsStackPhoneOverlay-unsigned.apk" "$OUT/ImsStackPhoneOverlay.apk"
 sign "$OUT/ImsStackFrameworkOverlay-unsigned.apk" "$OUT/ImsStackFrameworkOverlay.apk"
-sign "$OUT/ImsStackCarrierConfigOverlay-unsigned.apk" "$OUT/ImsStackCarrierConfigOverlay.apk"
 
 # 7. The allowlist must cover every privileged permission requested, or
 #    PackageManager stops the boot. Checked against the ROM's own

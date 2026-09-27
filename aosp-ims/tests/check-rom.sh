@@ -65,8 +65,7 @@ for f in priv-app/ImsStack/ImsStack.apk priv-app/Iwlan/Iwlan.apk \
          etc/sysconfig/com.google.android.iwlan.xml; do
     check system "/system/$f"
 done
-for f in overlay/ImsStackPhoneOverlay.apk overlay/ImsStackFrameworkOverlay.apk \
-         overlay/ImsStackCarrierConfigOverlay.apk etc/apns-conf.xml \
+for f in overlay/ImsStackPhoneOverlay.apk overlay/ImsStackFrameworkOverlay.apk etc/apns-conf.xml \
          etc/apns-conf.xml.joan-orig etc/apns-conf.xml.joan-merged; do
     check product "/$f"
 done

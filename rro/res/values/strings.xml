@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Device-default ImsService for the joan VoLTE stack. With this set,
+         ImsResolver classifies org.joan.ims as the device service at package
+         scan time (isDeviceService) and reads its manifest MMTEL_FEATURE
+         metadata directly - no runtime override, no dynamic feature query,
+         binds at every boot on every joan variant. -->
+    <string name="config_ims_mmtel_package" translatable="false">org.joan.ims</string>
+</resources>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.joan.ims.rro.fwvolte"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <uses-sdk android:minSdkVersion="35" android:targetSdkVersion="35" />
+    <application android:hasCode="false" />
+    <!-- Targets framework-res. ImsManager.isVolteEnabledByPlatform() ANDs
+         config_device_volte_available with carrier_volte_available_bool and
+         isGbaValid(); joan ships the framework bool false, which hides the
+         Settings/QS toggle and makes GsmCdmaPhone.isImsUseEnabled() false
+         for every carrier. The alpha19 carrier-config gate cannot reach
+         this resource. -->
+    <overlay android:targetPackage="android"
+        android:priority="2"
+        android:isStatic="true" />
+</manifest>
