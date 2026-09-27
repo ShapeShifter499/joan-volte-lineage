@@ -12,6 +12,10 @@ VoLTE and Wi-Fi calling for the LG V30 (joan) on LineageOS 22.2, using
 AOSP's own IMS stack from Android 17, backported to Android 15. It
 replaces joan's IMS stack.
 
+It is for every V30 model LineageOS supports, all on the one joan build:
+H930, H930DS, US998, H932, H931, H933, LS998, V300K, V300L, V300S and
+VS996 (tested so far: US998 on T-Mobile).
+
 | Part | What it does |
 |---|---|
 | ImsStack + ImsMedia (`com.android.imsstack`) | IMS registration, calls and SMS; call audio on Android |

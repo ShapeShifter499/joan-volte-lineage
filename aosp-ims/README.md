@@ -16,6 +16,14 @@ Qualcomm's IMS core (`docs/v30-modem-and-qualcomm-ims-2026-09-27.md`).
 AOSP's stack runs on the application processor and needs the modem only
 for the LTE bearer and SIM authentication, which the V30 has.
 
+**Phones.** Every V30 that LineageOS 22.2 supports, all on the one `joan`
+build (per the LineageOS wiki): H930, H930DS (dual SIM), US998, H932
+(T-Mobile), H931, H933, LS998, V300K, V300L, V300S and VS996. The zips
+check no model, and the ROM keeps the official nightly's device check,
+so both install wherever the official nightly does. Tested so far: a
+US998 on T-Mobile. Some carriers allow VoLTE only on phone models they
+have certified; that is decided by the network, not the phone.
+
 > **Alpha.** Bench results so far (US998, T-Mobile): the migrate zip
 > installs and ImsStack registers with IPsec, once patch 0004 stopped a
 > startup crash. The first calls then failed before any INVITE left the
