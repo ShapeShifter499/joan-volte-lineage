@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Makes AOSP ImsStack the device-default MMTEL ImsService: ImsResolver
+     reads config_ims_mmtel_package from com.android.phone. A ROM build sets
+     this in the device overlay instead (aosp-ims/upstream/). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.android.imsstack.rro.phone"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <uses-sdk android:minSdkVersion="35" android:targetSdkVersion="35" />
+    <application android:hasCode="false" />
+    <overlay android:targetPackage="com.android.phone"
+        android:priority="3"
+        android:isStatic="true" />
+</manifest>

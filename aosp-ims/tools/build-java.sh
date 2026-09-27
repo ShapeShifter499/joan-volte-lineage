@@ -24,7 +24,8 @@ CP=$CP:$WORK/deps/androidx-annotation.jar:$WORK/deps/libphonenumber.jar
 HAL=$WORK/hwif/radio/aidl/aidl_api
 for f in $(find "$HAL/android.hardware.radio.ims.media/2" -name '*.aidl') \
          "$HAL/android.hardware.radio/4/android/hardware/radio/AccessNetwork.aidl"; do
-    "$BT/aidl" --lang=java --structured --stability=vintf \
+    "$BT/aidl" --lang=java --structured --stability=vintf --version=2 \
+        --hash="$(tail -1 "$HAL/android.hardware.radio.ims.media/2/.hash")" \
         -I "$HAL/android.hardware.radio.ims.media/2" -I "$HAL/android.hardware.radio/4" \
         -o "$OUT/gen" "$f"
 done
@@ -52,7 +53,7 @@ PUB=$WORK/sdk/35/public/android.jar
 jc() { # jc <outdir> <classpath> <sources...>
     local d=$1 cp=$2; shift 2
     javac -J-Xmx4g -encoding UTF-8 -nowarn -proc:none -Xmaxerrs 200 \
-        -source 17 -target 17 -d "$d" -classpath "$cp" "$@"
+        -source 21 -target 21 -d "$d" -classpath "$cp" "$@"
 }
 find "$ISS" "$IMF" "$OUT/gen" "$OUT/rgen-stack" "$HERE/stubs/java" -name '*.java' > "$OUT/stack.srcs"
 jc "$OUT/imsstack" "$CP" @"$OUT/stack.srcs"

@@ -120,6 +120,7 @@ for j in framework telephony-common ims-common framework-location; do
     java -Xmx4g -cp "$(ls tools/d2j/*.jar | tr '\n' ':')" \
         com.googlecode.dex2jar.tools.Dex2jarCmd -f -n -o "fwcls/$j.jar" "rom/$j.jar" >/dev/null
 done
+[ -s rom/framework-res.apk ] || dump /system/framework/framework-res.apk rom/framework-res.apk
 for l in libbinder libutils libcutils libc++ liblog libbase libxml2 libcrypto libssl \
          libz libmediautils framework-permission-aidl-cpp libaaudio libandroid \
          libandroid_runtime libcamera2ndk libjnigraphics libmediandk libnativewindow; do

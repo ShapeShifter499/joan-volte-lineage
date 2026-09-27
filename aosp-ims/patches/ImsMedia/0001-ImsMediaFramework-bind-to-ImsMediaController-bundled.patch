@@ -1,0 +1,58 @@
+From 542efe6963c809a48d3690f6ceb6b11595df6737 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 06:26:14 +0000
+Subject: [PATCH] ImsMediaFramework: bind to ImsMediaController bundled in the
+ caller
+
+ImsMediaService runs as android.uid.phone, which only a build signed with
+the ROM's platform key can join. A build installed without that key, such
+as a flashable zip for an existing ROM, has to fold the service into the
+IMS app instead. Bind to ImsMediaController in the caller's own package
+when that package declares it, and to the standalone ImsMediaService
+otherwise, so the upstream layout is unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SByt7CZfKR6U4r1VS86tHS
+---
+ .../telephony/imsmedia/ImsMediaManager.java    | 18 +++++++++++++++++-
+ 1 file changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/framework/src/android/telephony/imsmedia/ImsMediaManager.java b/framework/src/android/telephony/imsmedia/ImsMediaManager.java
+index 2f905e2..55ef8b9 100644
+--- a/framework/src/android/telephony/imsmedia/ImsMediaManager.java
++++ b/framework/src/android/telephony/imsmedia/ImsMediaManager.java
+@@ -229,7 +229,7 @@ public class ImsMediaManager {
+         };
+ 
+         Intent intent = new Intent(IImsMedia.class.getName());
+-        intent.setClassName(MEDIA_SERVICE_PACKAGE, MEDIA_SERVICE_CLASS);
++        intent.setClassName(mediaServicePackage(), MEDIA_SERVICE_CLASS);
+         boolean bindingSuccessful = mContext.bindService(intent, mConnection,
+                 Context.BIND_AUTO_CREATE);
+ 
+@@ -239,6 +239,22 @@ public class ImsMediaManager {
+         }
+     }
+ 
++    /**
++     * The package hosting ImsMediaController: the caller's own package when it
++     * bundles the service (a build without the platform key cannot join
++     * android.uid.phone, so ImsMedia is folded into the IMS app there),
++     * otherwise the standalone ImsMediaService.
++     */
++    private String mediaServicePackage() {
++        String own = mContext.getPackageName();
++        Intent probe = new Intent(IImsMedia.class.getName()).setClassName(own, MEDIA_SERVICE_CLASS);
++        if (!MEDIA_SERVICE_PACKAGE.equals(own)
++                && mContext.getPackageManager().resolveService(probe, 0) != null) {
++            return own;
++        }
++        return MEDIA_SERVICE_PACKAGE;
++    }
++
+     private boolean isConnected() {
+         return mImsMedia != null;
+     }
+-- 
+2.43.0
+

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  signature|privileged permissions for the single-APK AOSP IMS build
+  (ImsStack with ImsMedia folded in). Upstream's list, which covers every
+  privileged permission the merged manifest requests; tools/build-apk.sh
+  refuses to build if the manifest asks for one this file lacks, because
+  an unlisted privileged permission stops the phone from booting.
+-->
+<permissions>
+    <privapp-permissions package="com.android.imsstack">
+        <permission name="android.permission.CONNECTIVITY_USE_RESTRICTED_NETWORKS"/>
+        <permission name="android.permission.INTERACT_ACROSS_USERS"/>
+        <permission name="android.permission.LOCAL_MAC_ADDRESS"/>
+        <permission name="android.permission.LOCATION_BYPASS"/>
+        <permission name="android.permission.MODIFY_PHONE_STATE"/>
+        <permission name="android.permission.READ_PRECISE_PHONE_STATE"/>
+        <permission name="android.permission.READ_PRIVILEGED_PHONE_STATE"/>
+        <permission name="android.permission.RECEIVE_STK_COMMANDS"/>
+        <permission name="android.permission.MANAGE_USERS"/>
+        <permission name="android.permission.WRITE_SECURE_SETTINGS"/>
+        <permission name="com.android.telephony.permission.USE_IMSMEDIA"/>
+    </privapp-permissions>
+</permissions>

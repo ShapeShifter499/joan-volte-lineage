@@ -1,0 +1,82 @@
+From 2ab46511d85a0c18b25427994635f6c8bcff79ef Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 06:26:01 +0000
+Subject: [PATCH] ImsStack: hand call audio to Android, where ImsMedia plays it
+
+ImsMedia's AudioSession never offloads audio to the modem, so every call's
+audio is played and recorded on the application processor. ImsStack never
+told Telephony, so Telecom kept the default AUDIO_HANDLER_BASEBAND and put
+calls in MODE_IN_CALL. Qualcomm audio HALs, the LG V30's included, wire
+MODE_IN_CALL to the modem's voice path and leave the AP streams unrouted.
+
+Set AUDIO_HANDLER_ANDROID once a call session has started, so Telecom uses
+MODE_IN_COMMUNICATION. The framework applies the handler to the call it is
+tracking at that moment, which is why this follows callSessionInitiated.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SByt7CZfKR6U4r1VS86tHS
+---
+ .../imsservice/mmtel/ImsCallSessionImpl.java  | 26 +++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/java/src/com/android/imsstack/imsservice/mmtel/ImsCallSessionImpl.java b/java/src/com/android/imsstack/imsservice/mmtel/ImsCallSessionImpl.java
+index 83514fc..882abd0 100644
+--- a/java/src/com/android/imsstack/imsservice/mmtel/ImsCallSessionImpl.java
++++ b/java/src/com/android/imsstack/imsservice/mmtel/ImsCallSessionImpl.java
+@@ -36,6 +36,7 @@ import android.telephony.ims.ImsReasonInfo;
+ import android.telephony.ims.ImsStreamMediaProfile;
+ import android.telephony.ims.ImsVideoCallProvider;
+ import android.telephony.ims.RtpHeaderExtension;
++import android.telephony.ims.feature.MmTelFeature;
+ import android.telephony.ims.stub.ImsCallSessionImplBase;
+ import android.text.TextUtils;
+ 
+@@ -62,6 +63,7 @@ import com.android.imsstack.enabler.mtc.SuppInfo;
+ import com.android.imsstack.enabler.mtc.SuppServiceUtils.SuppService;
+ import com.android.imsstack.enabler.mtc.conf.UsersInfo;
+ import com.android.imsstack.enabler.mtc.reg.MtcServiceState;
++import com.android.imsstack.imsservice.ImsServiceController;
+ import com.android.imsstack.imsservice.mmtel.base.ICallContext;
+ import com.android.imsstack.imsservice.mmtel.base.ICallLocationPolicy;
+ import com.android.imsstack.imsservice.mmtel.base.TtyModeTracker;
+@@ -2269,6 +2271,29 @@ public class ImsCallSessionImpl extends ImsCallSessionImplBase {
+         ImsLog.d("[ISIL] " + s);
+     }
+ 
++    /**
++     * Tells Telephony that this call's audio is played and recorded by Android.
++     *
++     * ImsMedia's AudioSession never offloads to the modem, so call audio runs on
++     * the AP. Without AUDIO_HANDLER_ANDROID, Telecom uses MODE_IN_CALL, which on
++     * devices whose audio HAL wires IN_CALL to the modem voice path (Qualcomm,
++     * e.g. LG V30) leaves the AP streams unrouted. The framework applies it to
++     * the call it currently tracks, so it has to follow callSessionInitiated.
++     */
++    private void useAndroidCallAudio() {
++        ImsServiceController controller = ImsServiceController.getInstance();
++        ImsMmTelService mmtel = (controller != null)
++                ? controller.getMmTelService(mCallContext.getSlotId()) : null;
++        if (mmtel == null) {
++            return;
++        }
++        try {
++            mmtel.setCallAudioHandler(MmTelFeature.AUDIO_HANDLER_ANDROID);
++        } catch (RuntimeException e) {
++            loge("useAndroidCallAudio: " + e);
++        }
++    }
++
+     private static void loge(String s) {
+         ImsLog.e("[ISIL] " + s);
+     }
+@@ -3143,6 +3168,7 @@ public class ImsCallSessionImpl extends ImsCallSessionImplBase {
+             setCallInfo(profile);
+ 
+             mCallback.invokeStarted(ImsCallSessionImpl.this, profile);
++            useAndroidCallAudio();
+ 
+             // Handle TTY mode related operations
+             onTtyModeReceived(mediaInfo.gttMode, true);
+-- 
+2.43.0
+
