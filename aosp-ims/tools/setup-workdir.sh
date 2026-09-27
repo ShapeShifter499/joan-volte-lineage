@@ -11,6 +11,10 @@ HERE=$(cd "$(dirname "$0")/.." && pwd)
 . "$HERE/upstream.lock"
 WORK=${WORK:-$HERE/work}
 mkdir -p "$WORK"
+# The work dir holds upstream Android.bp files. If this repository sits
+# inside an Android tree (vendor/lge/joan-ims), Soong would parse them and
+# fail on duplicate modules; a .find-ignore makes it skip the directory.
+touch "$WORK/.find-ignore"
 cd "$WORK"
 MAVEN=https://repo1.maven.org/maven2
 GOOGLE_MAVEN=https://dl.google.com/dl/android/maven2

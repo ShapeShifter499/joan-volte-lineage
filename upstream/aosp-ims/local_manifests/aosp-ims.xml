@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AOSP's IMS stack for LineageOS 22.2: ImsStack and ImsMedia from Android 17.
+
+  Copy this file to .repo/local_manifests/ in the LineageOS tree, sync the
+  two projects, then run upstream/aosp-ims/apply-patches.sh (see
+  upstream/AOSP-IMS.md in https://github.com/ShapeShifter499/joan-volte-lineage).
+
+  The tags are the ones aosp-ims/upstream.lock pins and the patches are made
+  against: ImsStack 1e3981c23117, ImsMedia 0101cb4caf48.
+-->
+<manifest>
+  <!-- Android 17's ImsStack links Android 17's ImsMediaFramework and native
+       libimsmedia_config, so ImsMedia moves to the same release. -->
+  <remove-project name="platform/packages/modules/ImsMedia" />
+  <project path="packages/modules/ImsMedia" name="platform/packages/modules/ImsMedia"
+           groups="pdk" remote="aosp" revision="refs/tags/android-17.0.0_r1" />
+
+  <!-- New in Android 17: not in the Android 15 manifest at all. -->
+  <project path="packages/modules/ImsStack" name="platform/packages/modules/ImsStack"
+           remote="aosp" revision="refs/tags/android-17.0.0_r1" />
+</manifest>

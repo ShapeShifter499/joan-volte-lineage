@@ -61,9 +61,15 @@ public final class CarrierImsGate {
     private static final String KEY_EPDG_PRIORITY = "iwlan.epdg_address_priority_int_array";
     private static final int EPDG_ADDRESS_STATIC = 0;
     private static final int EPDG_ADDRESS_PLMN = 1;
-    /** ePDGs that are not epdg.epc.mncXXX.mccYYY.pub.3gppnetwork.org, by LG operator. */
+    /**
+     * ePDGs that are not epdg.epc.mncXXX.mccYYY.pub.3gppnetwork.org, by LG
+     * operator. MetroPCS has its own LG profile but is T-Mobile's network
+     * (every PLMN in its carrier id is T-Mobile's), so it uses T-Mobile's
+     * ePDG. aosp-ims/tools/make-carrier-config.py reads this table.
+     */
     private static final Map<String, String> EPDG_BY_OPERATOR = Map.of(
             "TMO.US", "ss.epdg.epc.mnc260.mcc310.pub.3gppnetwork.org",
+            "MPCS.US", "ss.epdg.epc.mnc260.mcc310.pub.3gppnetwork.org",
             "ATT.US", "epdg.epc.att.net",
             "VZW.US", "wo.vzwwo.com");
 

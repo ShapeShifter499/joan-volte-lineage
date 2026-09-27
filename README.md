@@ -1,5 +1,23 @@
 # joan-volte-lineage
 
+> ### This branch: AOSP's IMS stack, backported (alpha, untested)
+>
+> Branch `claude/aosp-ims-a15-backport` replaces joan's own IMS with
+> AOSP's: ImsStack and ImsMedia from Android 17, plus IWLAN and QNS for
+> Wi-Fi calling, backported to LineageOS 22.2. It comes three ways:
+>
+> - **A ROM:** the official 2026-09-20 nightly with the stack built in.
+> - **Flashable zips** for LineageOS 22.2 and ROMs based on it: `-fresh`,
+>   `-migrate-from-joan`, `-uninstall`.
+> - **A source-build kit** for LineageOS: [`upstream/AOSP-IMS.md`](upstream/AOSP-IMS.md).
+>
+> Downloads are on the
+> [`aosp-ims-17.0.0_r1-a15-alpha1`](https://github.com/ShapeShifter499/joan-volte-lineage/releases/tag/aosp-ims-17.0.0_r1-a15-alpha1)
+> prerelease. Details, and the one adb step the zips and ROM need, are in
+> [`aosp-ims/README.md`](aosp-ims/README.md). **Nothing in it has run on a
+> phone yet**; joan's stack, described below, stays the fallback until it
+> has.
+
 VoLTE for the LG V30 (`joan`: US998 / H930 / H932) on **LineageOS 22**.
 Flashable recovery zip. No Magisk, no stock `Ims6` blobs, no CAF
 `OpenIMSd`.

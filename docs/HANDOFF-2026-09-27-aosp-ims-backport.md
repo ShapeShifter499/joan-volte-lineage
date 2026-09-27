@@ -1,4 +1,4 @@
-# Handoff — 2026-09-27 — AOSP 17 IMS stack backported to LineageOS 22.2 (builds; not yet packaged)
+# Handoff — 2026-09-27 — AOSP 17 IMS stack on LineageOS 22.2: zips, ROM, source kit (alpha, untested)
 
 Branch: `claude/aosp-ims-a15-backport`, cut from `claude/serene-bardeen-qj0tc6`.
 The joan stack and its zips are untouched on both branches. They stay the
@@ -7,171 +7,106 @@ fallback until the AOSP stack registers on a real phone.
 ## Direction
 
 The user asked to "swap everything for Qualcomm and upstream IMS, like
-the V60 did, but backport what makes 17's work". What that turned into:
+the V60 did, but backport what makes 17's work", then for a full backport
+including VoWiFi, a LineageOS 22.2 build with it, flashable zips (fresh
+and migrate-from-joan), and upstreaming instructions with the permissions.
 
 - **Qualcomm IMS: impossible on the V30.** The modem was built without
   Qualcomm's IMS core, and modem images are LG-signed
   (`docs/v30-modem-and-qualcomm-ims-2026-09-27.md`).
-- **Upstream IMS: AOSP `packages/modules/ImsStack` and `ImsMedia` at
-  `android-17.0.0_r1`, backported to Android 15 QPR2.** This is what this
-  branch does. It runs on the AP and needs from the modem only the LTE
-  bearer and SIM AKA, both working today with joan.
+- **Upstream IMS: AOSP ImsStack and ImsMedia at `android-17.0.0_r1`,
+  plus IWLAN and QNS for Wi-Fi calling, backported to Android 15 QPR2.**
+  It runs on the AP and needs from the modem only the LTE bearer and SIM
+  AKA, both working today with joan.
 - **Context from lifehackerhansol (LineageOS joan maintainer).** The V60's
   Android 17 (LineageOS 24) bringup exists but is not pushed to the
-  official repos, which is why only 22.2/23.x V60 trees (Qualcomm blobs)
-  were visible. He suggested forward-porting joan to 24 instead, as a
-  low-priority "maybe". The device-side pieces worked out here carry over
-  to that.
+  official repos. He suggested forward-porting joan to 24 instead, as a
+  low-priority "maybe". The device-side pieces here (the joan-common
+  patch) carry over to that; ImsStack needs no backport on 24.
   - **Open question for him:** does the V60 24 build run AOSP's
     `com.android.imsstack` or Qualcomm's `ims.apk`, and what device-side
-    config did it need?
+    config did it need? (The public 22.2/23.2 V60 trees use Qualcomm IMS.)
 
-## Done (all in `aosp-ims/`, see its README)
+## Done
 
-### 1. Java compiles against LineageOS 22.2's real framework
+Everything is in `aosp-ims/` (see its README) and `upstream/`.
 
-The classpath is the 2026-09-20 joan nightly's framework jars, dex2jar'd.
-The error count shows how much of Android 17's IMS is already present in
-Android 15:
+| Deliverable | Where | Checked by |
+|---|---|---|
+| Backport patches: ImsStack ×3, ImsMedia, Iwlan, QNS ×1 | `aosp-ims/patches/` | compile + link against the ROM's own framework and libraries |
+| Single-APK ImsStack (ImsMedia folded in), overlays, Iwlan, QNS | `tools/build-apk.sh`, `build-wfc.sh` | `check-privapp.py` against the ROM's framework-res |
+| Carrier gate: VoLTE for all; Wi-Fi calling for LG's 103 VoWiFi profiles; ePDG for TMO/Metro, ATT, VZW | `zip/java/.../CarrierImsGate.java` | `tests/check-carrier-config.py` |
+| Flashable zips: fresh, migrate-from-joan, uninstall (joan installer v8, alpha67's) | `tools/pack-zip.sh`, `make-installer.py` | `tests/run-e2e-install.sh`: 164 checks |
+| Unofficial ROM: 2026-09-20 nightly + the stack, `UNOFFICIAL-AOSPIMS-alpha1` | `tools/repack-rom.sh` | `tests/check-rom.sh` |
+| Source-build kit: local manifest, `apply-patches.sh`, joan-common patch, carrier `vendor.xml` generator | `upstream/AOSP-IMS.md`, `upstream/aosp-ims/` | patches apply; trees identical to the zip's sources; device patch applies to lineage-22.2 |
+| CI build + release | `.github/workflows/aosp-ims.yml`, `aosp-ims/RELEASE` | — |
 
-| Compiled against | Errors |
-|---|---|
-| Android 15 system stubs | 903 |
-| Android 15 module-lib stubs | 494 |
-| First Android 15 emulator image | 22 |
-| LineageOS 22.2 framework | 14 |
+Decisions worth knowing:
 
-Most of those were hidden, flagged or QPR additions that exist on the
-phone. The 14 were in five places. Four are Android 16/17 APIs, fixed in
-`patches/ImsStack/0001`. The fifth was the debug menu's androidx.appcompat
-dependency, dropped in `0002`.
+- **Source builds use the tree's own IWLAN and QNS.** Android 15 has both
+  (`packages/services/Iwlan` as a LineageOS fork,
+  `packages/modules/Telephony/services/QualifiedNetworksService`); joan
+  just never built them. Only ImsStack (new) and ImsMedia (ImsStack links
+  Android 17's `ImsMediaFramework` and `libimsmedia_config`) come from
+  Android 17. The zip ships Android 17 IWLAN and QNS because the ROM has
+  neither.
+- **Carrier config for source builds is static `vendor.xml`**, generated
+  from the same maps as the zip's run-time gate, not a gate app.
+  `check-carrier-config.py` simulates both over every carrier id,
+  specific carrier id and PLMN in Android's carrier database (2866 SIM
+  identities) and requires the same VoLTE, Wi-Fi calling and ePDG
+  outcome. It found one real gap on the way: MetroPCS got Wi-Fi calling
+  but not T-Mobile's non-default ePDG. Fixed in the gate.
+- **The ROM is a repack, not a source build.** A LineageOS tree does not
+  fit here. The official block OTA is unpacked, the zip's files are added
+  with `system_file` labels, the version is marked UNOFFICIAL, and the
+  images are written whole at exactly the partition sizes the OTA's
+  dynamic-partition ops declare. It keeps the zip's bookkeeping files
+  (`android.hardware.telephony.ims.xml.joan-added`,
+  `apns-conf.xml.joan-orig` / `.joan-merged`), so the uninstall zip fully
+  restores it. Unsigned: recovery warns and asks.
+- **No signing key is committed.** Each work dir (and each CI run)
+  generates its own.
+- **Versions** are distinct from joan's and LineageOS's: app
+  `17.0.0_r1-a15-alpha1`, zips `aosp-ims-17.0.0_r1-a15-alpha1-*`, ROM
+  `22.2-20260920-UNOFFICIAL-AOSPIMS-alpha1-joan`.
 
-ImsMediaFramework compiled unchanged, and so did the ImsMedia service
-(against ImsStack's classes).
+## Next
 
-### 2. Native libraries build and link against the ROM's own libraries
-
-- `libimsstack.so`: 746 C++ files, 7.8 MB. NEEDED: binder, cutils, log,
-  nativehelper, utils, xml2, z, crypto, ssl, mediautils, c++.
-- `libimsmedia.so`: 670 KB. NEEDED adds aaudio, android,
-  android_runtime, camera2ndk, jnigraphics, mediandk, nativewindow.
-
-How:
-- `tools/bp2ninja.py` builds the upstream Android.bp modules.
-- Soong's quirks had to be replicated to get this to compile:
-  - Soong's `commonGlobalIncludes`: `system/core/include` and
-    `frameworks/native/include` are how these modules reach `binder/`
-    and `utils/` without declaring them.
-  - libc++ headers from `clang-r536225`, the release Android 15 QPR2 used.
-    `external/libcxx` in that branch is stale.
-  - `libnativehelper` linked as the NDK library, for `AFileDescriptor_*`.
-  - `libandroid_runtime` re-exporting nativehelper headers.
-
-### 3. Runtime preconditions, checked in Android 15 source only
-
-- **Hidden API.** A system app plus `android:usesNonSdkApi="true"` →
-  `isAllowedToUseHiddenApis()`. The attribute is public (`0x0101058e`), so
-  aapt2 accepts it.
-- **Linking.** A bundled system app gets the shared linker namespace
-  → it can link `/system/lib64` libraries.
-
-## Next: packaging (task "Package AOSP IMS as a flashable zip")
-
-1. **One APK for the zip.** Upstream ImsMedia runs as
-   `sharedUserId="android.uid.phone"`, which needs the ROM's platform key.
-   - Fold the ImsMedia service into the `com.android.imsstack` APK: same
-     UID, `android:process="com.android.telephony.imsmedia"` on the
-     service.
-   - `ImsMediaManager.MEDIA_SERVICE_PACKAGE` is hard-coded
-     (`framework/src/android/telephony/imsmedia/ImsMediaManager.java:45`).
-     Patch it to bind within the caller's own package when that package
-     declares the service.
-   - Resolve the Application class clash:
-     `com.android.telephony.imsmedia.ImsMediaApplication` against
-     ImsStack's own application class. Check what each `onCreate` does
-     before choosing; the media process must not start the IMS stack.
-2. **Manifest.**
-   - Add `android:usesNonSdkApi="true"`.
-   - Merge the permissions of both apps.
-   - Keep `USE_IMSMEDIA` (it becomes self-granted).
-   - Drop the test activities if the debug menu is not wanted.
-3. **Privileged and signature permissions.**
-   - Upstream `privapp-permissions_com.android.imsstack.xml` covers the
-     privileged set.
-   - Signature-only permissions will not be granted to a zip-signed app:
-     `ACCESS_SURFACE_FLINGER`, `INTERACT_ACROSS_USERS_FULL`. Grep their
-     uses and guard or drop them.
-   - `RECORD_AUDIO` and location need default-permissions, as joan does
-     (`permissions/default-permissions-org.joan.ims.xml`).
-4. **Selecting the ImsService.**
-   - Framework overlay: `config_ims_mmtel_package = com.android.imsstack`,
-     `config_device_volte_available`. Same mechanism as joan's overlay, so
-     reuse the installer's overlay step.
-   - Carrier config `KEY_CONFIG_IMS_MMTEL_PACKAGE_OVERRIDE_STRING` is an
-     alternative.
-5. **Call audio routing: needs checking.**
-   - joan found that Telecom must put an AP-media IMS call in
-     `MODE_IN_COMMUNICATION`, not `MODE_IN_CALL`, on this audio HAL. See
-     `JoanCallSession.java:21,159` and `JoanMmTelFeature.java:366`.
-   - ImsMedia plays and records through AAudio `VOICE_COMMUNICATION`
-     (`core/audio/android/ImsMediaAudioSource.cpp:351`).
-   - Find how ImsStack reports its calls to Telecom and whether the same
-     treatment is needed. It likely needs a patch, since upstream assumes
-     the device's IN_CALL path works for AP media.
-6. **Native libraries in the APK.** Store them uncompressed and
-   page-aligned, and also install them to `<app dir>/lib/arm64/`, the
-   system-app layout.
-7. **Carrier settings.**
-   - ImsStack reads CarrierConfigManager plus
-     `assets/carrier_config/carrier_config.xml`.
-   - Map joan's 164 LG carrier profiles (`ims-service/assets/`) onto
-     ImsStack's keys to keep joan's carrier coverage.
-
-### First on-device checks, once a zip exists
-
-- `dumpsys package com.android.imsstack` (permissions, hidden API policy).
-- `logcat -b all | grep -iE 'imsstack|ImsResolver|imsmedia'`.
-- `dumpsys telephony.registry` and `dumpsys ims` for registration state.
-
-## VoWiFi (asked 2026-09-27): realistic, after VoLTE
-
-- **Present:**
-  - The kernel is 4.4.302 with `CONFIG_NET_IPVTI`, `CONFIG_IPV6_VTI`,
-    `CONFIG_INET(6)_ESP` and tunnel modes (read from the OTA's boot.img
-    ikconfig).
-  - `/vendor/etc/permissions/android.software.ipsec_tunnels.xml`.
-  - The `com.android.ipsec` (IKE) module.
-  - ImsStack implements Wi-Fi calling and handover.
-- **Missing:**
-  - AOSP's IWLAN ePDG service (`packages/services/Iwlan`). The ROM points
-    at Qualcomm's `vendor.qti.iwlan`, which never starts. It is Java-only,
-    so it can be added the same way.
-  - Per-carrier Wi-Fi calling config.
-  - US carriers additionally need an E911 address on the account.
-
-## Upstream route (V60-style)
-
-In a LineageOS 22.2 tree:
-- Add `packages/modules/ImsStack` and `ImsMedia` at `android-17.0.0_r1`
-  via a local manifest, and apply `aosp-ims/patches`.
-- `PRODUCT_PACKAGES += ImsStack ImsMediaService`.
-- Overlay `config_ims_mmtel_package`.
-
-Signed with the platform key there, so the zip-only workarounds above
-(merged APK, usesNonSdkApi) are unnecessary. Not yet written.
+1. **The release.** Pushing `aosp-ims/RELEASE` runs the `aosp-ims`
+   workflow; it builds from scratch on a runner and publishes the
+   prerelease `aosp-ims-17.0.0_r1-a15-alpha1` if all checks pass. If it
+   did not run or failed, see the Actions tab; the scripts reproduce the
+   build anywhere with the SDK, NDK r29 and root for the loop mounts.
+2. **First on a phone** (ROM or `-fresh` zip, then the adb step):
+   - `adb shell dumpsys package com.android.imsstack`: permissions
+     granted, hidden API policy, both processes.
+   - `adb logcat -b all | grep -iE 'imsstack|ImsResolver|imsmedia|iwlan|qns'`.
+   - `adb shell dumpsys telephony.registry`, `adb shell dumpsys ims`:
+     registration.
+   - A call each way: audio both directions (patch 0003 decides the
+     audio mode).
+   - Wi-Fi calling on T-Mobile: tunnel up (`dumpsys` of IWLAN), QNS
+     moving IMS to IWLAN.
+3. **A source build** of `upstream/AOSP-IMS.md` in a real LineageOS 22.2
+   tree: expect small `Android.bp` fixes; SELinux denials on first boot
+   (no policy was written: ImsStack is `platform_app`, ImsMedia `radio`).
+4. Then: submit the joan-common patch to LineageOS Gerrit, and ask whether
+   they would carry ImsStack/ImsMedia from Android 17 in 22.2 or only in
+   24.
 
 ## Environment notes
 
-- **Blobless sparse clones.** Use
-  `git clone --filter=blob:none --depth 1 -b <branch>` with a sparse
-  checkout for single AOSP directories. gitiles `+archive` of
-  frameworks/base subdirectories returns 503 every time.
-- **Device images.** `sdkmanager "system-images;android-35;default;arm64-v8a"`
-  is Android 15's first release (AE3A) and is missing QPR APIs.
-  LineageOS's download API
+- **Blobless sparse clones** (`git clone --filter=blob:none --depth 1 -b
+  <branch>` + sparse checkout) for single AOSP directories. gitiles
+  `+archive` and `?format=TEXT` return 503 under load.
+- **LineageOS's download API**
   (`https://download.lineageos.org/api/v2/devices/joan/builds`) gives the
-  real nightly.
-- **Unpacking the OTA.** It is block-based: `*.new.dat.br` +
-  `transfer.list` → brotli + `tools/sdat2img.py`. The ext4 image must
-  then be extended to its superblock size.
-- **dex2jar.** It is on Maven Central (`de.femtopedia.dex2jar`, 2.4.38).
+  real nightly; the SDK's `android-35` system image is Android 15's first
+  release and misses QPR APIs.
+- **The OTA is block-based:** `*.new.dat.br` + `transfer.list` → brotli +
+  `tools/sdat2img.py`, then extend the image to its superblock size.
+  `debugfs` reads images without root.
+- **dex2jar** is on Maven Central (`de.femtopedia.dex2jar`, 2.4.38).
+- **`run-e2e-install.sh` mounts a tmpfs on `/tmp`** inside its namespace:
+  keep `JOAN_E2E_WORK` off `/tmp` (the default, `aosp-ims/work/`, is fine).

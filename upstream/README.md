@@ -1,5 +1,19 @@
 # vendor/lge/joan-ims (LineageOS 22)
 
+> ### Building IMS into LineageOS now: AOSP's stack, see [`AOSP-IMS.md`](AOSP-IMS.md)
+>
+> On branch `claude/aosp-ims-a15-backport`, joan's own `ImsService` is being
+> replaced by AOSP's IMS stack from Android 17 (ImsStack, ImsMedia) with
+> AOSP's IWLAN and QNS for Wi-Fi calling, backported to LineageOS 22.2.
+> [`AOSP-IMS.md`](AOSP-IMS.md) is how to build it into a LineageOS tree: a
+> local manifest, the backport patches, and one `device/lge/joan-common`
+> patch that carries the overlays, carrier config and permissions. It needs
+> nothing from this directory.
+>
+> Use one stack or the other, never both. The rest of this file describes
+> joan's `ImsService`, which stays the fallback until the AOSP stack has
+> been proven on a phone.
+
 AP-side IMS (VoLTE) for the LG V30 (joan). SIP, AKA, and IPsec run in
 the Java `ImsService` over public `IpSecManager` APIs. There is no
 native daemon and no loopback control socket.
