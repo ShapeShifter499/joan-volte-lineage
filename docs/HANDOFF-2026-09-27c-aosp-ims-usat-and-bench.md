@@ -80,3 +80,8 @@ and 2 are done.
    LineageOS lacks (Android 15's default `ims` profile covers the rest).
    The zip's APN merge is Viettel-only.
 4. Build the source-tree integration in a real LineageOS tree.
+5. From the port audit (`docs/aosp-ims-port-audit-2026-09-27.md`): a
+   `GbaService` (LineageOS has none, and ImsStack's Ut/XCAP needs one
+   where the carrier asks for GBA), and for source builds a backport of
+   Android 17's `CatService#broadcastSetupEventList` (the SIM's event
+   list, for the IMS registration event download).
