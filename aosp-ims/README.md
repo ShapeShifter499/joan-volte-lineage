@@ -167,13 +167,14 @@ pinned in `upstream.lock`.
   `zip/rro-fw`): ImsStack as `config_ims_mmtel_package`; VoLTE and Wi-Fi
   calling available on the device; IWLAN and QNS as the WLAN data,
   network and qualified-networks services.
-- **What it cannot have.** `ACCESS_SURFACE_FLINGER`,
-  `INTERACT_ACROSS_USERS_FULL` and `USE_ICC_AUTH_WITH_DEVICE_IDENTIFIER`
-  are signature-only: video surfaces and work profiles may misbehave, and
-  GBA-based Ut/XCAP authentication (only where a carrier enables
-  `gba_mode_int`) will fail its SIM auth. `MANAGE_IPSEC_TUNNELS` comes
-  from the adb app-op instead. A source build signs with the platform key
-  and holds all of them.
+- **What it cannot have.** `ACCESS_SURFACE_FLINGER` and
+  `INTERACT_ACROSS_USERS_FULL` are signature-only: video surfaces and
+  work profiles may misbehave. `USE_ICC_AUTH_WITH_DEVICE_IDENTIFIER` is
+  also signature-only, but Android 15 falls back to
+  `READ_PRIVILEGED_PHONE_STATE` (which the zip holds) for the underlying
+  SIM auth, so GBA-based Ut/XCAP authentication still works.
+  `MANAGE_IPSEC_TUNNELS` comes from the adb app-op instead. A source
+  build signs with the platform key and holds everything.
 
 ## How it builds
 
