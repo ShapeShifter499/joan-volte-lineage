@@ -1,0 +1,53 @@
+From 42c3383680ca4568567f3ceb6710fcd4da6a23c8 Mon Sep 17 00:00:00 2001
+From: Fulgor Nymvale <fulgor@nym-skyforge>
+Date: Mon, 28 Sep 2026 09:13:20 -0700
+Subject: [PATCH] ImsStack: report the WLAN registration's RAT when data runs
+ on IWLAN
+
+getAccessNetworkInfo read only the WWAN-transport PS registration, whose
+access network stays LTE even while the data path has moved onto an ePDG
+tunnel; the native registration engine labels its registration with that
+type, so a tunnel registration was reported to the framework as LTE.
+With Wi-Fi-preferred calling the domain selection then concluded IWLAN
+was unregistered and every dial fell back to CS. When the WLAN-transport
+PS registration is in service, the registration runs over it: report its
+access network technology (IWLAN) instead.
+
+Assisted-by: ZCode:GLM-5.3-Flash
+Signed-off-by: Lance <Gero3977@gmail.com>
+---
+ .../imsstack/core/agents/dcm/DcUtils.java      | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/java/src/com/android/imsstack/core/agents/dcm/DcUtils.java b/java/src/com/android/imsstack/core/agents/dcm/DcUtils.java
+index 6f121ea..72a326e 100644
+--- a/java/src/com/android/imsstack/core/agents/dcm/DcUtils.java
++++ b/java/src/com/android/imsstack/core/agents/dcm/DcUtils.java
+@@ -100,6 +100,24 @@ public class DcUtils implements IDcUtils {
+                 ? nri.getAccessNetworkTechnology()
+                 : TelephonyManager.NETWORK_TYPE_UNKNOWN;
+ 
++        // The WWAN registration reports the cellular RAT even while the
++        // data path has moved onto an ePDG tunnel, and the native
++        // registration engine labels its registration with this network
++        // type - so a tunnel registration was reported to the framework
++        // as LTE, the WFC-preferred domain selection concluded IWLAN was
++        // unregistered, and every dial fell back to CS. When the
++        // WLAN-transport PS registration is in service (IWLAN), that is
++        // the network the registration actually runs over: report it.
++        if (ss != null) {
++            NetworkRegistrationInfo wlanNri = ss.getNetworkRegistrationInfo(
++                    NetworkRegistrationInfo.DOMAIN_PS,
++                    AccessNetworkConstants.TRANSPORT_TYPE_WLAN);
++            if (wlanNri != null && wlanNri.isInService()) {
++                nri = wlanNri;
++                networkType = wlanNri.getAccessNetworkTechnology();
++            }
++        }
++
+         if (networkType == TelephonyManager.NETWORK_TYPE_UNKNOWN) {
+             // When the network type is unknown (e.g., emergency calls without a UICC or
+             // IMS de-registration during airplane mode transitions),
+-- 
+2.55.0
+
