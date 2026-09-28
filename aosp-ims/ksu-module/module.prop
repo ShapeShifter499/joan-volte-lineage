@@ -1,0 +1,6 @@
+id=aosp_ims_joan
+name=AOSP IMS Stack (joan)
+version=17.0.0_r1-a15-alpha1
+versionCode=1
+author=joan-volte-lineage contributors
+description=AOSP's IMS stack (Android 17 ImsStack + ImsMedia, IWLAN, QNS) for LineageOS 22.2 on the LG V30. VoLTE, SMS over IMS, Wi-Fi calling. Systemless: nothing in /system is modified, removal is a module toggle.

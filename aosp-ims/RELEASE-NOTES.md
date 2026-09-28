@@ -94,7 +94,7 @@ after the first boot, with USB debugging on:
 sh grant-permissions.sh
 ```
 
-The script is attached here, inside the zips, and at
+The script is attached here, inside the zips at `scripts/`, and at
 `aosp-ims/zip/grant-permissions.sh` in the repository. On Windows use
 `grant-permissions.bat` (in the repository at
 `aosp-ims/zip/grant-permissions.bat`; run it from a Command Prompt with

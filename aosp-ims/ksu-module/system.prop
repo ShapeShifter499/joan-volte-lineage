@@ -1,0 +1,5 @@
+# The AOSP stack hands incoming calls to the framework's
+# ImsPhoneCallTracker, which LineageOS gates on this property; joan's
+# tree sets it false for the modem IMS this stack replaces. system.prop
+# is applied systemlessly at boot (resetprop), so no build.prop edit.
+ro.telephony.block_binder_thread_on_incoming_calls=true

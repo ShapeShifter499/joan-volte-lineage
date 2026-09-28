@@ -123,8 +123,8 @@ it), so:
   setting on the phone. With USB debugging on, once:
 
   ```
-  sh grant-permissions.sh        # in the zip, and at aosp-ims/zip/grant-permissions.sh
-  grant-permissions.bat          # Windows equivalent (needs adb on PATH)
+  sh scripts/grant-permissions.sh   # in the zip, and at aosp-ims/zip/grant-permissions.sh
+  scripts\grant-permissions.bat     # Windows equivalent (needs adb on PATH)
   # on the phone itself: aosp-ims/zip/grant-on-device.sh (see header)
   ```
 
