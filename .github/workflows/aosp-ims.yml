@@ -114,6 +114,9 @@ jobs:
       - name: The kit's build files under Android 15's Soong
         run: aosp-ims/tests/check-soong.sh --verify-stubs
 
+      - name: The kit's native code under Android 15's clang, warnings as errors
+        run: aosp-ims/tests/check-tree-compile.sh
+
       - name: AOSP 17's CarrierConfig changes, regenerated from the pinned sources
         run: aosp-ims/tools/regen-aosp-carrierconfig.sh --check
 

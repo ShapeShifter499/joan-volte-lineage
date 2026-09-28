@@ -19,6 +19,7 @@ package imscheck
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -136,4 +137,39 @@ func TestUnknownPropertyFails(t *testing.T) {
 			"platform_apis: true,\n    aosp_ims_check_is_live: true,", 1))
 	}).ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(
 		`unrecognized property "aosp_ims_check_is_live"`)).RunTest(t)
+}
+
+// With FLAGS_OUT set: writes the flags Soong gives each native module of
+// the kit (name|variant|first source|cFlags), for tests/tree-compile.py,
+// which compiles every source with them and Android 15's clang.
+func TestDumpNativeFlags(t *testing.T) {
+	out := os.Getenv("FLAGS_OUT")
+	if out == "" {
+		t.Skip("FLAGS_OUT not set")
+	}
+	res := kit(t, true, nil).RunTest(t)
+	var lines []string
+	for _, name := range strings.Split(env(t, "FLAGS_MODULES"), ",") {
+		found := false
+		for _, v := range res.ModuleVariantsForTests(name) {
+			if !strings.HasPrefix(v, "android_arm64_armv8-a") || strings.Contains(v, "_apex") ||
+				strings.Contains(v, "sdk") {
+				continue
+			}
+			b := res.ModuleForTests(name, v).MaybeRule("cc")
+			if b.Rule == nil {
+				continue
+			}
+			lines = append(lines, name+"|"+v+"|"+b.Input.String()+"|"+b.Args["cFlags"])
+			found = true
+			break
+		}
+		if !found {
+			t.Errorf("no arm64 compile of %s", name)
+		}
+	}
+	sort.Strings(lines)
+	if err := os.WriteFile(out, []byte(strings.Join(lines, "\n")+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 }

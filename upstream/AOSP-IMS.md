@@ -241,6 +241,12 @@ Checked against the `android15-qpr2-release` sources and the LineageOS
   `aosp-ims/tests/check-soong.sh` runs `build/soong` from
   `android15-qpr2-release` over them, and fails on a property it does
   not know (its own control case); CI runs it.
+- Every libimsstack and libimsmedia source (873) compiles under what a
+  tree build uses: Android 15's clang (`clang-r536225`) with Soong's
+  global warning flags and each module's own, warnings as errors
+  (`aosp-ims/tests/check-tree-compile.sh`, in CI; a warning planted in a
+  copy of one source must fail it). The zip's build uses the NDK's clang
+  with warnings off, so this is the only place that is checked.
 - Every one of the 51 modules those files use from the rest of the tree
   is defined in Android 15 (`check-soong.sh --verify-stubs`), among them
   `android.hardware.radio.ims.media-V2-java` (version 2 is frozen there),

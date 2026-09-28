@@ -139,7 +139,9 @@ branch, verified against the sources:
    TeleService, ImsStack's upstream privapp allowlist covers what its
    manifests request at Android 15's protection levels (`build-apk.sh`),
    and the zip's native compile flags match Soong's per module except
-   Soong's hardening sanitizers.
+   Soong's hardening sanitizers. `tests/check-tree-compile.sh` (in CI)
+   compiles all 873 native sources with Android 15's clang and Soong's
+   warnings as errors: clean.
 5. ~~From the port audit~~: done. GBA service (ImsStack 0008, device
    patch 0002), the IMS/XCAP/emergency APNs LineageOS lacks (ImsApnGate,
    vendor/apn/aosp-ims.xml), IWLAN flags at the Android 17 release values.
