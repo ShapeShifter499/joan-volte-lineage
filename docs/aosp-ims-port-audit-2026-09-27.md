@@ -3,9 +3,10 @@
 A check of everything at the boundary between Android 17's IMS modules
 (ImsStack, ImsMedia, IWLAN, QNS) and LineageOS 22.2 (Android 15 QPR2),
 done by diffing the sources, not by reading release notes. Sources:
-`frameworks/base`, `frameworks/opt/telephony`, `packages/services/Telephony`
-and `packages/providers/TelephonyProvider` at `android15-qpr2-release` and
-`android-17.0.0_r1`, `system/sepolicy` and `build/release` at the same,
+`frameworks/base`, `frameworks/opt/telephony`, `packages/services/Telephony`,
+`packages/apps/CarrierConfig`, `packages/providers/TelephonyProvider` and
+`build/soong` at `android15-qpr2-release` and `android-17.0.0_r1`,
+`system/sepolicy` and `build/release` at the same,
 the modules at the commits in `aosp-ims/upstream.lock`, LineageOS's
 `vendor/apn` and `android` manifest (lineage-22.2), and the 2026-09-20
 joan nightly (TeleService resources, product APN list, vendor VINTF
@@ -15,10 +16,12 @@ manifest).
 
 At the Android version boundary the port is complete: every Android 16/17
 API ImsStack uses has an Android 15 translation or is shown to change
-nothing on LineageOS 22.2, and the flags match the Android 17 release.
+nothing on LineageOS 22.2, the flags match the Android 17 release, and
+the IMS settings Android 17's own carrier data changed are carried over.
 The two platform pieces the stack needs and LineageOS lacks, a GBA
-service and the carriers' IMS APNs, are now supplied (below). What
-remains is on-device verification and joan's own hardware limits.
+service and the carriers' IMS APNs, are now supplied (below), and the
+source-build kit passes Android 15's own Soong. What remains is
+on-device verification and joan's own hardware limits.
 
 ## What was checked
 
@@ -33,6 +36,7 @@ remains is on-device verification and joan's own hardware limits.
 | Native libraries | Full upstream `libimsstack` and `libimsmedia` graphs, linked against the ROM's `/system/lib64` with `--no-undefined`; only these two are loaded. Each module's compile flags match what Android 15's Soong gives it (C++20, no RTTI or exceptions, the same defines), less Soong's hardening (integer-overflow and bounds sanitizers, CFI, shadow call stack, LTO) and the userdebug-only `__IMS_TRACE_MEM__` debug-log define | Every symbol resolves on this ROM; a tree build adds the hardening, so an overflow the zip wraps would abort there, as on upstream's own builds |
 | Build files (`Android.bp`, the source-build kit) | Android 15's Soong (`android15-qpr2-release`) reads ImsStack's and ImsMedia's Android 17 files, patched, with no error in user or userdebug; every one of the 51 modules they take from the rest of the tree is defined in Android 15; Android 17's ImsMedia keeps every module Android 15's defines | A LineageOS 22.2 tree gets past Soong's analysis (`tests/check-soong.sh`, in CI) |
 | Manifests (ImsStack merged, IWLAN, QNS) | All 51 permissions requested and every component's permission are defined on the ROM | Every binding and request can succeed |
+| Privileged-permission allowlists | The zip's covers its 11 privileged permissions; in a tree build, ImsStack's upstream allowlist covers the 10 its manifests request at Android 15's levels; ImsMedia requests none | An enforcing build boots (`tools/check-privapp.py`, in `build-apk.sh`) |
 | Reflection | None in ImsStack or ImsMedia | No hidden run-time lookups |
 | Permission and sysconfig files | Ours list upstream's names; the zip adds `WRITE_APN_SETTINGS` for its APN gate | Same grants as upstream |
 | SELinux | Android 17 has no ImsStack-specific policy (runs as `platform_app`) | Nothing to port |
