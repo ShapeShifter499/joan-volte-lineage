@@ -88,6 +88,18 @@ LineageOS-based ROMs (alpha67): it checks free space before writing,
 copies atomically, writes the permission allowlists before the APKs, and
 invalidates the package manager's cache so the next boot rescans.
 
+### LineageOS updates
+
+The zips and the repacked ROM install `/system/addon.d/60-aosp-ims.sh`.
+A LineageOS update runs it through its backuptool before and after
+rewriting system and product. The script puts the stack back, then redoes
+the build.prop incoming-call flip and the Viettel APN merge on the
+update's own files. Afterwards the phone is as if the zip had been
+flashed onto the update, so there is no need to re-flash after each
+nightly. The uninstall zip removes the script. `tests/run-e2e-install.sh` runs the
+joan OTA's own backuptool around a simulated update, and CI checks that
+copy against the pinned OTA.
+
 ### Permissions (zips and repacked ROM)
 
 The apps are not signed with the ROM's platform key (only LineageOS has
@@ -212,7 +224,7 @@ validates against LineageOS's schema.
 | `libimsstack.so`, `libimsmedia.so`, linked against the ROM's libraries | done |
 | IWLAN + QNS (Android 17) for the zip | done: 1 patch each |
 | Single-APK packaging, overlays, permission files | done |
-| Flashable zips (fresh, migrate, uninstall) | done; 179 end-to-end installer checks pass |
+| Flashable zips (fresh, migrate, uninstall) | done; 261 end-to-end installer checks pass, LineageOS updates (addon.d) included |
 | Repacked LineageOS 22.2 ROM | done; `tests/check-rom.sh` passes |
 | Source-tree integration (`upstream/AOSP-IMS.md`) | written and checked piece by piece, its build files by Android 15's own Soong (`tests/check-soong.sh`, in CI); not yet built in a tree |
 | **Tested on a phone** | US998 on T-Mobile: the migrate zip installs and ImsStack registers (IPsec sec-agree, reg-event) once 0004 stops the startup crash. With 0005/0006 calls go out, ring and are answered; with ImsMedia 0002 (the media service no longer dies at the first call) outbound calls work end to end. Incoming calls were refused by joan's `ro.telephony.block_binder_thread_on_incoming_calls=false`, which the installer now flips; not yet confirmed |

@@ -88,6 +88,11 @@ put "$ROOT/permissions/android.hardware.telephony.ims.xml" "$S/etc/permissions/a
 put "$P/default-permissions-com.android.imsstack.xml" "$S/etc/default-permissions/com.android.imsstack.xml" 644
 put "$P/sysconfig-com.android.imsstack.xml" "$S/etc/sysconfig/com.android.imsstack.xml" 644
 put "$P/sysconfig-com.google.android.iwlan.xml" "$S/etc/sysconfig/com.google.android.iwlan.xml" 644
+# The zip's addon.d script and its APN inputs: an official nightly flashed
+# over this ROM keeps the stack, as it does over a zip install.
+put "$HERE/zip/addon.d/60-aosp-ims.sh" "$S/addon.d/60-aosp-ims.sh" 644
+put "$ROOT/scripts/merge-viettel-apns.sh" "$S/etc/aosp-ims/merge-viettel-apns.sh" 644
+put "$ROOT/apn/viettel-45204.xml" "$S/etc/aosp-ims/viettel-45204.xml" 644
 # The zip's uninstaller removes the IMS feature file only with this marker.
 echo joan > "$S/etc/permissions/android.hardware.telephony.ims.xml.joan-added"
 chmod 644 "$S/etc/permissions/android.hardware.telephony.ims.xml.joan-added"
@@ -105,6 +110,10 @@ echo "   $OLDVER -> $NEWVER"
 sed -i 's/^ro.telephony.block_binder_thread_on_incoming_calls=false$/ro.telephony.block_binder_thread_on_incoming_calls=true/' "$S/build.prop"
 grep -q '^ro.telephony.block_binder_thread_on_incoming_calls=true$' "$S/build.prop" \
     || { echo "build.prop: incoming-call property not enabled"; exit 1; }
+# The zip's record of that flip: the uninstall zip flips it back by it, and
+# the addon.d script flips an official update's build.prop again by it.
+echo "ro.telephony.block_binder_thread_on_incoming_calls=false" > "$R/incoming-calls.flipped"
+put "$R/incoming-calls.flipped" "$S/etc/aosp-ims-incoming-calls.flipped" 644
 # LineageOS tells a system update by ro.build.version.incremental alone: on
 # joan every partition's fingerprint is LG's stock one, the same in every
 # build, so LineageOS keys PackageManager's upgrade scan and package cache,
@@ -119,7 +128,8 @@ INC=$(sed -n 's/^ro.build.version.incremental=//p' "$S/build.prop")
 ADDED=$(cat "$APK/ImsStack.apk" "$APK/Iwlan.apk" "$APK/QualifiedNetworksService.apk" \
     "$APK/ImsStackPhoneOverlay.apk" "$APK/ImsStackFrameworkOverlay.apk" "$P"/*.xml \
     "$ROOT/permissions/android.hardware.telephony.ims.xml" "$ROOT/apn/viettel-45204.xml" \
-    "$ROOT/scripts/merge-viettel-apns.sh" "$HERE/tools/repack-rom.sh" | sha256sum | cut -c1-8)
+    "$ROOT/scripts/merge-viettel-apns.sh" "$HERE/zip/addon.d/60-aosp-ims.sh" \
+    "$HERE/tools/repack-rom.sh" | sha256sum | cut -c1-8)
 NEWINC=$INC.aospims.$ADDED
 sed -i -e "s/^ro.build.version.incremental=.*/ro.build.version.incremental=$NEWINC/" \
        -e "s/^ro.system.build.version.incremental=.*/ro.system.build.version.incremental=$NEWINC/" \
@@ -186,5 +196,5 @@ with zipfile.ZipFile(ota) as src, zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED
                   if n.endswith('.br') else zipfile.ZIP_DEFLATED)
 print(f'{out}: {os.path.getsize(out)} bytes')
 EOF
-rm -f "$R"/*.new.dat.br "$R"/*.transfer.list "$R"/apns-*.xml "$R/apns-mark"
+rm -f "$R"/*.new.dat.br "$R"/*.transfer.list "$R"/apns-*.xml "$R/apns-mark" "$R/incoming-calls.flipped"
 sha256sum "$R/$NAME" | tee "$R/$NAME.sha256"

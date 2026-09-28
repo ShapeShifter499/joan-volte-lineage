@@ -144,7 +144,9 @@ jobs:
 
       - name: Installer end-to-end tests
         run: |
-          sudo env "PATH=$PATH" aosp-ims/tests/run-e2e-install.sh | tee "$RUNNER_TEMP/e2e.log"
+          . aosp-ims/upstream.lock
+          sudo env "PATH=$PATH" "E2E_OTA=$WORK/rom/$(basename "$LINEAGE_OTA_URL")" \
+              aosp-ims/tests/run-e2e-install.sh | tee "$RUNNER_TEMP/e2e.log"
           grep -q 'all passed' "$RUNNER_TEMP/e2e.log"
 
       - name: Repack the LineageOS ROM

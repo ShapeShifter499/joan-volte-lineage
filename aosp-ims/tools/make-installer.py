@@ -66,14 +66,17 @@ INSTALL = [
   esac
   fk=$(df -k "$1" 2>/dev/null | tail -1 | tr -s " " | cut -d" " -f4)
 ''', 1),
-    # Space: the sysconfig file is installed too.
+    # Space: the sysconfig file is installed too, and the addon.d script
+    # with the two files its APN step needs.
     ('  "$TMP/etc/default-permissions/com.android.imsstack.xml")\n',
      '  "$TMP/etc/default-permissions/com.android.imsstack.xml" \\\n'
      '  "$TMP/etc/sysconfig/com.android.imsstack.xml" \\\n'
      '  "$TMP/app/Iwlan.apk" "$TMP/app/QualifiedNetworksService.apk" \\\n'
      '  "$TMP/etc/permissions/com.google.android.iwlan.xml" \\\n'
      '  "$TMP/etc/permissions/com.android.telephony.qns.xml" \\\n'
-     '  "$TMP/etc/sysconfig/com.google.android.iwlan.xml")\n', 1),
+     '  "$TMP/etc/sysconfig/com.google.android.iwlan.xml" \\\n'
+     '  "$TMP/addon.d/60-aosp-ims.sh" "$TMP/scripts/merge-viettel-apns.sh" \\\n'
+     '  "$TMP/apn/viettel-45204.xml")\n', 1),
     # After the allowlist: power-save and data-saver exemptions, so an
     # incoming call reaches the stack while the phone sleeps.
     ('ui_print "Installing ImsService priv-app"\n',
@@ -132,7 +135,35 @@ done
     ('rm -f "$SYS/priv-app/ImsStack/"*.joan-new \\\n',
      'rm -f "$SYS/priv-app/ImsStack/"*.joan-new \\\n'
      '      "$SYS/priv-app/Iwlan/"*.joan-new "$SYS/priv-app/QualifiedNetworksService/"*.joan-new \\\n'
-     '      "$SYS/etc/sysconfig/"*.joan-new \\\n', 1),
+     '      "$SYS/etc/sysconfig/"*.joan-new \\\n'
+     '      "$SYS/etc/aosp-ims/"*.joan-new "$SYS/addon.d/"*.joan-new \\\n', 1),
+    # A LineageOS update rewrites system and product, everything above; its
+    # backuptool runs /system/addon.d scripts before and after. This one
+    # puts the stack back and makes the build.prop and APN-list edits again
+    # on the update's own files (zip/addon.d/60-aosp-ims.sh), with the APN
+    # merge's two inputs kept in /system/etc/aosp-ims. Optional: without it
+    # an update removes the stack and the zip has to be flashed again.
+    ('# --- Make PackageManager read what was just installed ---------------------\n',
+     '''# --- Kept across LineageOS updates (addon.d) -----------------------------
+if [ -f "$TMP/addon.d/60-aosp-ims.sh" ]; then
+  mkdir -p "$SYS/etc/aosp-ims" "$SYS/addon.d" 2>/dev/null
+  chmod 755 "$SYS/etc/aosp-ims" 2>/dev/null || true
+  chcon u:object_r:system_file:s0 "$SYS/etc/aosp-ims" 2>/dev/null || true
+  for f in scripts/merge-viettel-apns.sh apn/viettel-45204.xml; do
+    try_copy_file "$TMP/$f" "$SYS/etc/aosp-ims/${f##*/}" 644 u:object_r:system_file:s0 \\
+      || warn "$CF_ERR"
+  done
+  if try_copy_file "$TMP/addon.d/60-aosp-ims.sh" "$SYS/addon.d/60-aosp-ims.sh" 644 \\
+      u:object_r:system_file:s0; then
+    ui_print "  addon.d: kept across LineageOS updates"
+  else
+    warn "$CF_ERR"
+    warn "  a LineageOS update will remove the stack; flash this zip again after one"
+  fi
+fi
+
+# --- Make PackageManager read what was just installed ---------------------
+''', 1),
     ('  "$PRODMNT/overlay/ImsStackPhoneOverlay.apk" "$PRODMNT/overlay/ImsStackFrameworkOverlay.apk"\n',
      '  "$PRODMNT/overlay/ImsStackPhoneOverlay.apk" "$PRODMNT/overlay/ImsStackFrameworkOverlay.apk" \\\n'
      '  "$SYS/priv-app/Iwlan/Iwlan.apk" "$SYS/priv-app/Iwlan" \\\n'
@@ -187,6 +218,8 @@ UNINSTALL = [
      'rm -f "$SYS/etc/sysconfig/com.android.imsstack.xml"\n', 1),
     ('rm -f "$SYS/etc/default-permissions/org.joan.ims.xml"\n',
      'rm -f "$SYS/etc/default-permissions/com.android.imsstack.xml"\n'
+     'rm -f "$SYS/addon.d/60-aosp-ims.sh"\n'
+     'rm -rf "$SYS/etc/aosp-ims"\n'
      'rm -rf "$SYS/priv-app/Iwlan" "$SYS/priv-app/QualifiedNetworksService"\n'
      'rm -f "$SYS/etc/permissions/com.google.android.iwlan.xml" \\\n'
      '      "$SYS/etc/permissions/com.android.telephony.qns.xml" \\\n'

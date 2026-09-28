@@ -52,8 +52,9 @@ TWRP on this device generally does not.
   ROM. It is the official 2026-09-20 nightly with the IMS stack built in.
   - Recovery warns that the signature can't be verified (only LineageOS
     can sign with its key); choose to install anyway.
-  - It reports itself as `UNOFFICIAL`, so the updater won't replace it
-    with an official nightly (which would drop the IMS stack).
+  - It reports itself as `UNOFFICIAL`, so the updater won't offer official
+    nightlies. An official nightly flashed over it by hand keeps the IMS
+    stack (addon.d), and the updater then works as usual.
   - It has its own build number, so LineageOS treats flashing it as a
     system update even over the official 2026-09-20 nightly, without a
     wipe: the calling permissions are granted at first boot.
@@ -66,6 +67,11 @@ TWRP on this device generally does not.
 - **`aosp-ims-17.0.0_r1-a15-alpha1-uninstall.zip`**: puts the ROM back as
   it was. It also works on the ROM above.
 - **`SHA256SUMS`**: check a download with `sha256sum -c SHA256SUMS --ignore-missing`.
+
+## LineageOS updates
+
+The stack stays through LineageOS's own updates. Its `addon.d` script
+puts it back after each nightly, so there is no need to re-flash the zip.
 
 ## After flashing: permissions
 

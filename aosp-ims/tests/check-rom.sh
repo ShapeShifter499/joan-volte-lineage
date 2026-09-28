@@ -7,7 +7,8 @@
 #   partition to that first; a longer image would not fit);
 # - each image decompresses to that size and is clean ext4;
 # - every file the IMS stack adds is present, root-owned, mode 644 and
-#   labelled system_file, as the rest of the image is;
+#   labelled system_file, as the rest of the image is, the addon.d script
+#   that carries it over an official update among them;
 # - the version says UNOFFICIAL, so the updater never offers an official
 #   nightly over it;
 # - the build number (ro.build.version.incremental) is the ROM's own, so
@@ -64,9 +65,20 @@ for f in priv-app/ImsStack/ImsStack.apk priv-app/Iwlan/Iwlan.apk \
          etc/permissions/com.android.imsstack.xml etc/permissions/com.google.android.iwlan.xml \
          etc/permissions/com.android.telephony.qns.xml etc/permissions/android.hardware.telephony.ims.xml \
          etc/default-permissions/com.android.imsstack.xml etc/sysconfig/com.android.imsstack.xml \
-         etc/sysconfig/com.google.android.iwlan.xml; do
+         etc/sysconfig/com.google.android.iwlan.xml addon.d/60-aosp-ims.sh \
+         etc/aosp-ims/merge-viettel-apns.sh etc/aosp-ims/viettel-45204.xml \
+         etc/aosp-ims-incoming-calls.flipped; do
     check system "/system/$f"
 done
+# The addon.d script that keeps the stack across an official update, and
+# the record of the build.prop flip it redoes on that update's build.prop.
+debugfs -R "cat /system/addon.d/60-aosp-ims.sh" "$T/system.img" 2>/dev/null > "$T/addon.sh"
+cmp -s "$T/addon.sh" "$(dirname "$0")/../zip/addon.d/60-aosp-ims.sh" \
+    && ok "system: addon.d script is the zip's" || bad "system: addon.d script differs from the zip's"
+[ "$(debugfs -R "cat /system/etc/aosp-ims-incoming-calls.flipped" "$T/system.img" 2>/dev/null)" \
+    = "ro.telephony.block_binder_thread_on_incoming_calls=false" ] \
+    && ok "system: incoming-call flip recorded as the zip records it" \
+    || bad "system: no record of the incoming-call flip"
 for f in overlay/ImsStackPhoneOverlay.apk overlay/ImsStackFrameworkOverlay.apk etc/apns-conf.xml \
          etc/apns-conf.xml.joan-orig etc/apns-conf.xml.joan-merged; do
     check product "/$f"
