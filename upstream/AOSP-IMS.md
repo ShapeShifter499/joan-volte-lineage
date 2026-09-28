@@ -234,6 +234,15 @@ Checked against the `android15-qpr2-release` sources and the LineageOS
   its own privileged-permission allowlist.
 - Android 17's ImsMedia keeps every module Android 15's defines, so
   nothing else in the tree loses a dependency when it is replaced.
+- ImsStack's own allowlist covers the 10 permissions its manifests
+  request (the debuggable one included) that are privileged at the
+  nightly's protection levels, so an enforcing build boots
+  (`aosp-ims/tools/check-privapp.py`, run by `build-apk.sh`); ImsMedia
+  requests none. `ACCESS_LOCAL_NETWORK`, which only the debuggable
+  manifest requests, does not exist in Android 15 and is ignored. Every
+  permission the device patch grants by default is a runtime permission
+  there, and the ten resources it overlays exist in the nightly's
+  framework-res and TeleService.
 - The LineageOS manifest carries ImsMedia from AOSP (so the local
   manifest can replace it), IWLAN as LineageOS's fork, and no ImsStack or
   standalone QNS.

@@ -141,4 +141,11 @@ sign "$OUT/ImsStackFrameworkOverlay-unsigned.apk" "$OUT/ImsStackFrameworkOverlay
 #    framework-res protection levels.
 python3 "$HERE/tools/check-privapp.py" "$BT/aapt2" "$OUT/ImsStack.apk" \
     "$WORK/rom/framework-res.apk" "$HERE/permissions/privapp-permissions-com.android.imsstack.xml"
+#    The same for a LineageOS tree build, which merges ImsStack's own
+#    manifests (the debuggable one on userdebug) and installs its upstream
+#    allowlist.
+M=$S/ImsStack/java
+python3 "$HERE/tools/check-privapp.py" "$BT/aapt2" \
+    "$M/AndroidManifest.xml,$M/AndroidManifest-lib.xml,$M/AndroidManifest-debuggable.xml" \
+    "$WORK/rom/framework-res.apk" "$M/privapp-permissions_com.android.imsstack.xml"
 ls -la "$OUT"/*.apk | grep -v -e unsigned -e aligned
