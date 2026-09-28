@@ -1,0 +1,90 @@
+From faaceb3248dab40fe0781b7312c67fe27929e03f Mon Sep 17 00:00:00 2001
+From: Lance <Gero3977@gmail.com>
+Date: Mon, 28 Sep 2026 13:41:43 -0700
+Subject: [PATCH] ImsStack: bind a connecting socket before connect(), keeping
+ errno
+
+0010 bound a connect-only socket in Connect()'s IPv4 EINPROGRESS path,
+after connect() had already sent the SYN. The bind goes through JNI to
+Network.bindSocket(), whose getpeername() check fails with ENOTCONN on
+a socket still in SYN-SENT: that is its success path, but it leaves
+errno at ENOTCONN. Connect() then read errno again, saw 107 instead of
+EINPROGRESS, and failed the connection. Every IPv4 TCP connect failed
+this way; IPv6 (T-Mobile's IMS) never took that path, so the bench did
+not see it.
+
+Tester log (Digi Mobil Romania, 2026-09-28): the initial REGISTER is
+1833 bytes, over the TCP threshold, so the stack switched to TCP; every
+attempt died with "SocketError: ... error=107 (Transport endpoint is not
+connected), code-line=Connect" before a byte left, 20 in a row, and the
+UI showed Reg FAILURE_INTERNAL every ~14 s.
+
+Bind in Connect() before connect(), for both address families, so the
+SYN takes the IMS network; and have osSocket_SetNetworkForSocket()
+restore the caller's errno, since Bind()'s callers read it too.
+
+Signed-off-by: Lance <Gero3977@gmail.com>
+Assisted-by: Claude-Code:claude-opus-5-5
+---
+ .../platform/os/android/network/OsSocket.cpp  | 24 +++++++++++++++----
+ 1 file changed, 20 insertions(+), 4 deletions(-)
+
+diff --git a/native/libimsstack/platform/os/android/network/OsSocket.cpp b/native/libimsstack/platform/os/android/network/OsSocket.cpp
+index 0adb3cb..823a673 100644
+--- a/native/libimsstack/platform/os/android/network/OsSocket.cpp
++++ b/native/libimsstack/platform/os/android/network/OsSocket.cpp
+@@ -101,6 +101,9 @@ static void osSocket_GetAddressNPort(IN const struct sockaddr* pstSockAddr, IN I
+     }
+ }
+ 
++static void osSocket_BindSocketToNetwork(
++        IN IMS_SINT32 nSlotId, IN IMS_SOCKET hSocket, IN IMS_CONNECTION hConnection);
++
+ // NETWORK_INTERFACE_FOR_SOCKET
+ static void osSocket_SetNetworkForSocket(
+         IN IMS_SINT32 nSlotId, IN IMS_SOCKET hSocket, IN IMS_CONNECTION hConnection)
+@@ -110,6 +113,19 @@ static void osSocket_SetNetworkForSocket(
+         return;
+     }
+ 
++    // The bind goes through JNI to Network.bindSocket(), whose getpeername()
++    // leaves errno at ENOTCONN on the success path. Callers read errno after
++    // this, so hand theirs back.
++    const int nSavedErrno = errno;
++
++    osSocket_BindSocketToNetwork(nSlotId, hSocket, hConnection);
++
++    errno = nSavedErrno;
++}
++
++static void osSocket_BindSocketToNetwork(
++        IN IMS_SINT32 nSlotId, IN IMS_SOCKET hSocket, IN IMS_CONNECTION hConnection)
++{
+     ImsNetworkConnectionState* pState = ImsNetworkConnectionState::GetInstance();
+     const ImsNetworkConnection* pNc = pState->LookupHandle(hConnection);
+ 
+@@ -736,6 +752,10 @@ PROTECTED VIRTUAL ISocket::SOCKET_RESULT OsSocket::Connect(
+ 
+     IMS_SINT32 nConnectResult = SOCKET_ERROR;
+ 
++    // NETWORK_INTERFACE_FOR_SOCKET: a socket that never Bind()s must still
++    // reach the right network, so bind it before connect() sends the SYN.
++    osSocket_SetNetworkForSocket(m_piOwnerThread->GetSlotId(), m_hSocket, GetNetworkConnection());
++
+     // IPv4 address format
+     if (m_eAddressFamily == ADDRESS_FAMILY_INET)
+     {
+@@ -798,10 +818,6 @@ PROTECTED VIRTUAL ISocket::SOCKET_RESULT OsSocket::Connect(
+             else if ((nError == EINPROGRESS) || (nError == EWOULDBLOCK))
+             {
+                 // 4 Set Event Writable
+-                // NETWORK_INTERFACE_FOR_SOCKET: a socket that never Bind()s
+-                // must still reach the right network before its SYN leaves.
+-                osSocket_SetNetworkForSocket(
+-                        m_piOwnerThread->GetSlotId(), m_hSocket, GetNetworkConnection());
+             }
+ 
+             SetSocketConnected(IMS_FALSE);
+-- 
+2.55.0
+
