@@ -85,6 +85,8 @@ func kit(t *testing.T, debuggable bool, edit func(android.MockFS)) android.Fixtu
 	}
 	return android.GroupFixturePreparers(
 		java.PrepareForIntegrationTestWithJava,
+		// product_variables (debuggable) only apply with the variable mutator.
+		android.PrepareForTestWithVariables,
 		android.PrepareForTestWithLicenses,
 		android.PrepareForTestWithLicenseDefaultModules,
 		codegen.PrepareForTestWithAconfigBuildComponents,
