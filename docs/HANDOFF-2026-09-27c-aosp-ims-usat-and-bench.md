@@ -40,6 +40,12 @@ and 2 are done.
   vendor.xml region (after the Pixel blocks) and `check-carrier-config.py`
   (which also checks the two sources never overlap). The device patches
   were regenerated for the region's new header line only.
+- **AOSP 17's CarrierConfig changes** (`tools/import-aosp-carrierconfig.py`,
+  `carrier/aosp17-carrierconfig-ims.xml`, 74 blocks, 11 carriers): the
+  IMS keys Android 17's CarrierConfig assets set differently from Android
+  15's, as the bottom layer (`--base`) under the Pixel data (`--imported`)
+  and LG's (`--fill`). CI regenerates it from pinned commits
+  (`tools/regen-aosp-carrierconfig.sh --check`).
 - **No release is published.** The user asked for bench zips first.
   Publishing = edit a line of `aosp-ims/RELEASE` and push (CI builds from
   scratch and publishes); only do it when the user says so.

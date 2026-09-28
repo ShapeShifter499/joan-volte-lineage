@@ -128,6 +128,17 @@ brings it along, for every SIM:
   provisioning, lock the VoLTE toggle or turn Wi-Fi calling on by default,
   and never EVS (ImsMedia has no EVS codec; ImsStack 0007 also drops it
   from any other config).
+- **What AOSP 17's own CarrierConfig changed**: Android 17's
+  CarrierConfig app ships newer carrier assets than LineageOS 22.2's
+  (Android 15's). The IMS keys they set differently are carried over as
+  a layer under the Pixel data (`tools/import-aosp-carrierconfig.py`,
+  `carrier/aosp17-carrierconfig-ims.xml`, regenerated and compared in CI
+  by `tools/regen-aosp-carrierconfig.sh`): 11 carriers, among them TIM
+  (Ut, no IPsec), ALIV (USSD over IMS, conference factory), netplus.ch
+  (Ut and BSF servers), Brisanet, OXIO, Madar and Pivotel, and Verizon's
+  and Xfinity's hold in IMS calls where the Pixel data does not decide
+  it. Keyed by carrier id and PLMN as Android 15's carrier database
+  assigns them (by PLMN for carriers it does not know yet).
 - **LG's own settings where the Pixel data has nothing**: of the 82
   PLMNs joan's LG profiles cover and the Pixel data has no block for,
   the 38 where LG's V30 settings differ from ImsStack's defaults get

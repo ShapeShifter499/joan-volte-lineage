@@ -32,6 +32,20 @@ LINEAGE_SCRIPTS_COMMIT=e81615b64084478eae6af876908e77371bd08660
 LINEAGE_APN_URL=https://github.com/LineageOS/android_vendor_apn
 LINEAGE_APN_COMMIT=6e73ba90cc9438d1aefb4c323289b281b006a59a
 
+# carrier/aosp17-carrierconfig-ims.xml is the IMS part of what AOSP 17's
+# CarrierConfig assets changed since Android 15
+# (tools/import-aosp-carrierconfig.py, from tools/regen-aosp-carrierconfig.sh,
+# which CI runs to check the file is current): both asset sets, both
+# carrier id lists, and Android 15's CarrierConfigManager for defaults.
+AOSP_CARRIERCONFIG_URL=https://android.googlesource.com/platform/packages/apps/CarrierConfig
+AOSP_CARRIERCONFIG_A15_COMMIT=e800ce78fcbd63511853022c105ab3fc557b8756
+AOSP_CARRIERCONFIG_A17_COMMIT=c9f82c3de8293731d4230758dc258916c12335a6
+AOSP_TELEPHONYPROVIDER_URL=https://android.googlesource.com/platform/packages/providers/TelephonyProvider
+AOSP_TELEPHONYPROVIDER_A15_COMMIT=4b3aa80a7ee5858981c17065e197119aebecadd8
+AOSP_TELEPHONYPROVIDER_A17_COMMIT=013b803626164c026025897b7dec45521c2cccab
+AOSP_FRAMEWORKS_BASE_URL=https://android.googlesource.com/platform/frameworks/base
+AOSP_FRAMEWORKS_BASE_A15_COMMIT=396d32905ded85c082232bc510b525c9e372e585
+
 # Android 15 QPR2, what LineageOS 22.2 is built on (BP1A.250505.005):
 # platform headers come from this branch, libc++ headers from the clang
 # release Soong used for it (build/soong cc/config/global.go).

@@ -16,11 +16,14 @@ after the carrier's own config, so the region is ordered:
 
 1. ePDG addresses from CarrierImsGate's table, by Android carrier id and
    PLMN through joan's maps, as the gate resolves a SIM. First, so that
-2. the imported per-carrier IMS config (--imported, repeatable, in the
-   order given: LineageOS's Pixel carrier settings,
-   tools/import-carrier-settings.py, then LG's settings for the PLMNs the
-   Pixel data lacks, tools/import-lg-ims.py) wins where it has an address
-   of its own;
+2. the imported per-carrier IMS config wins where it has an address of
+   its own. In layers, each repeatable, each file in the order given:
+   --base, what AOSP 17's own CarrierConfig assets changed
+   (tools/import-aosp-carrierconfig.py), under
+   --imported, LineageOS's Pixel carrier settings
+   (tools/import-carrier-settings.py), then
+   --fill, LG's settings for the PLMNs the Pixel data lacks
+   (tools/import-lg-ims.py);
 3. last, for every SIM: VoLTE and Wi-Fi calling offered, and the VoLTE
    toggle visible, editable and able to turn IMS off. The same rules
    CarrierImsGate applies at run time in the zip.
@@ -31,7 +34,8 @@ every SIM and simply stay on LTE where the network has nothing.
 
 Usage:
   make-carrier-config.py <carrier-id-map.json> <carrier-plmn-map.json>
-      <CarrierImsGate.java> <carrier_list.textpb> [--imported <file>]...
+      <CarrierImsGate.java> <carrier_list.textpb>
+      [--base <file>]... [--imported <file>]... [--fill <file>]...
       [--splice <vendor.xml> | --full <base vendor.xml> | --assets <dir>]
 
 Prints the region; --splice rewrites the given vendor.xml in place
@@ -146,9 +150,9 @@ def render_block(attrs, comment, values):
 def render(ids, plmns, epdg, carriers, imported=()):
     lines = [BEGIN,
              '    <!-- AOSP IMS stack (ImsStack). 1: ePDG addresses by carrier id and PLMN.',
-             '         2: per-carrier IMS config imported from the Pixel carrier settings',
-             '            LineageOS converts for Pixels, then from LG\'s own settings for',
-             '            the PLMNs those lack (when present).',
+             '         2: per-carrier IMS config (when present): what AOSP 17\'s CarrierConfig',
+             '            changed, under the Pixel carrier settings LineageOS converts, then',
+             '            LG\'s own settings for the PLMNs those lack.',
              '         3: for every SIM, VoLTE and Wi-Fi calling offered, VoLTE toggle kept. -->']
     for attrs, comment, values in epdg_blocks(ids, plmns, epdg, carriers):
         lines += render_block(attrs, comment, values)
@@ -192,24 +196,27 @@ def write_assets(imported, out_dir):
           f'{sum(len(b) for b in by_plmn.values())} blocks')
 
 
+LAYERS = ('--base', '--imported', '--fill')
+
+
 def take_imported(argv):
-    """(argv without the --imported pairs, [their files, in order])."""
-    rest, files = [], []
+    """(argv without the layer options, {layer: [files]}, [all files in region order])."""
+    rest, layers = [], {flag: [] for flag in LAYERS}
     i = 0
     while i < len(argv):
-        if argv[i] == '--imported':
+        if argv[i] in LAYERS:
             if i + 1 >= len(argv):
-                raise SystemExit('--imported needs a file')
-            files.append(argv[i + 1])
+                raise SystemExit(f'{argv[i]} needs a file')
+            layers[argv[i]].append(argv[i + 1])
             i += 2
         else:
             rest.append(argv[i])
             i += 1
-    return rest, files
+    return rest, layers, [f for flag in LAYERS for f in layers[flag]]
 
 
 def main(argv):
-    argv, imported = take_imported(argv)
+    argv, _, imported = take_imported(argv)
     opts = {}
     for flag in ('--splice', '--full', '--assets'):
         if flag in argv:

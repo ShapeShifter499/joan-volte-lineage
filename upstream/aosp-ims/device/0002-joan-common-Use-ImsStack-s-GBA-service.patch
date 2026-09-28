@@ -1,4 +1,4 @@
-From 912a798eaa8f0b19f92a4fa89ea7dd8a9e48eab5 Mon Sep 17 00:00:00 2001
+From 254d14b3c158c62ad6ddb314a9a7be645eec28ee Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Mon, 28 Sep 2026 02:05:44 +0000
 Subject: [PATCH] joan-common: Use ImsStack's GBA service

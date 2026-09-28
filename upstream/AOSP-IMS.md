@@ -137,7 +137,14 @@ region between `aosp-ims-begin`/`aosp-ims-end` markers:
 1. ePDG addresses for T-Mobile (and its MVNOs such as MetroPCS), AT&T
    and Verizon, whose ePDGs are not at the 3GPP default name (from the
    device patch).
-2. The per-carrier IMS config LineageOS ships for Pixels: the Pixel
+2. The IMS keys AOSP 17's own CarrierConfig assets set differently from
+   this tree's (Android 15's): 74 blocks for 11 carriers, keyed by carrier
+   id and PLMN as Android 15's carrier database assigns them
+   (`aosp-ims/carrier/aosp17-carrierconfig-ims.xml`, from
+   `aosp-ims/tools/import-aosp-carrierconfig.py`; CI regenerates it from
+   the commits pinned in `upstream.lock` and compares). First, as the
+   asset they stand for lies under everything else. Then
+   the per-carrier IMS config LineageOS ships for Pixels: the Pixel
    CarrierSettings converted with LineageOS's own
    `carriersettings-extractor`, IMS keys only, 1361 blocks for 576
    carriers (`aosp-ims/carrier/lineage-pixel-ims.xml`, added by
@@ -166,8 +173,9 @@ python3 aosp-ims/tools/make-carrier-config.py \
     ims-service/assets/carrier-plmn-map.json \
     aosp-ims/zip/java/com/android/imsstack/joan/CarrierImsGate.java \
     <tree>/packages/providers/TelephonyProvider/assets/latest_carrier_id/carrier_list.textpb \
+    --base aosp-ims/carrier/aosp17-carrierconfig-ims.xml \
     --imported aosp-ims/carrier/lineage-pixel-ims.xml \
-    --imported aosp-ims/carrier/lg-ims.xml \
+    --fill aosp-ims/carrier/lg-ims.xml \
     --splice <tree>/device/lge/joan-common/overlay/packages/apps/CarrierConfig/res/xml/vendor.xml
 ```
 

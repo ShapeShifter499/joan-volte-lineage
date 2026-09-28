@@ -114,13 +114,17 @@ jobs:
       - name: The kit's build files under Android 15's Soong
         run: aosp-ims/tests/check-soong.sh --verify-stubs
 
+      - name: AOSP 17's CarrierConfig changes, regenerated from the pinned sources
+        run: aosp-ims/tools/regen-aosp-carrierconfig.sh --check
+
       - name: Carrier config matches the gate and the device patch
         run: |
           python3 aosp-ims/tests/check-carrier-config.py \
               ims-service/assets/carrier-id-map.json ims-service/assets/carrier-plmn-map.json \
               aosp-ims/zip/java/com/android/imsstack/joan/CarrierImsGate.java \
               "$WORK/aosp15/telephonyprovider/assets/latest_carrier_id/carrier_list.textpb" \
-              --imported aosp-ims/carrier/lineage-pixel-ims.xml --imported aosp-ims/carrier/lg-ims.xml \
+              --base aosp-ims/carrier/aosp17-carrierconfig-ims.xml \
+              --imported aosp-ims/carrier/lineage-pixel-ims.xml --fill aosp-ims/carrier/lg-ims.xml \
               --patch upstream/aosp-ims/device/0001-joan-common-Add-the-AOSP-IMS-stack.patch
 
       - name: IMS APNs added to LineageOS's own list

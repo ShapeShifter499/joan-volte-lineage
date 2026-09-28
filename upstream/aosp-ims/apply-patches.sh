@@ -5,12 +5,13 @@
 #    flashable zip is built from) onto the Android 17 ImsStack and ImsMedia
 #    that local_manifests/aosp-ims.xml syncs;
 # 2. the device change, device/0001-*.patch, onto device/lge/joan-common;
-# 3. the per-carrier IMS config LineageOS converts from Pixel carrier
-#    settings (aosp-ims/carrier/lineage-pixel-ims.xml), then LG's own IMS
-#    settings for the networks the Pixel data lacks
-#    (aosp-ims/carrier/lg-ims.xml), spliced into joan-common's
-#    CarrierConfig vendor.xml as a commit of its own. It is 7 MB of
-#    generated XML, so it is not in the patch;
+# 3. the per-carrier IMS config: what AOSP 17's CarrierConfig assets
+#    changed (aosp-ims/carrier/aosp17-carrierconfig-ims.xml), under the
+#    config LineageOS converts from Pixel carrier settings
+#    (aosp-ims/carrier/lineage-pixel-ims.xml), then LG's own IMS settings
+#    for the networks the Pixel data lacks (aosp-ims/carrier/lg-ims.xml),
+#    spliced into joan-common's CarrierConfig vendor.xml as a commit of
+#    its own. It is 7 MB of generated XML, so it is not in the patch;
 # 4. the IMS, XCAP and emergency APNs LineageOS's list lacks, from the same
 #    Pixel data (aosp-ims/carrier/lineage-pixel-apns.xml), as
 #    vendor/apn/aosp-ims.xml in a commit of its own. vendor/apn serves every
@@ -64,15 +65,19 @@ python3 "$KIT/aosp-ims/tools/make-carrier-config.py" \
     "$KIT/ims-service/assets/carrier-plmn-map.json" \
     "$KIT/aosp-ims/zip/java/com/android/imsstack/joan/CarrierImsGate.java" \
     "$TREE/packages/providers/TelephonyProvider/assets/latest_carrier_id/carrier_list.textpb" \
+    --base "$KIT/aosp-ims/carrier/aosp17-carrierconfig-ims.xml" \
     --imported "$KIT/aosp-ims/carrier/lineage-pixel-ims.xml" \
-    --imported "$KIT/aosp-ims/carrier/lg-ims.xml" --splice "$DEV/$VX"
+    --fill "$KIT/aosp-ims/carrier/lg-ims.xml" --splice "$DEV/$VX"
 if git -C "$DEV" diff --quiet -- "$VX"; then
     echo "device/lge/joan-common: per-carrier IMS config already in place"
 else
     git -C "$DEV" commit -q -F - -- "$VX" <<'EOF'
 joan-common: Import per-carrier IMS config
 
-The IMS settings LineageOS ships for Pixels, which it converts from the
+The IMS keys AOSP 17's CarrierConfig assets set differently from this
+tree's (Android 15's), per carrier id: carriers added since, and changes
+such as TIM's Ut and IPsec or Verizon's hold in IMS calls. Over them, the
+IMS settings LineageOS ships for Pixels, which it converts from the
 Pixel's CarrierSettings with lineage/scripts/carriersettings-extractor:
 SIP, SMS over IMS, Ut/XCAP, emergency, video, RTT, ePDG and QNS settings
 for some 570 carriers, filtered to the keys the AOSP IMS stack reads.
