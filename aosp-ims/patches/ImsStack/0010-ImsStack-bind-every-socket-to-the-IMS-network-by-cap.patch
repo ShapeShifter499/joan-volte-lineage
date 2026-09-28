@@ -1,0 +1,84 @@
+From 590ef7094d8205473a31c642d9866713a4407e0c Mon Sep 17 00:00:00 2001
+From: Fulgor Nymvale <fulgor@nym-skyforge>
+Date: Mon, 28 Sep 2026 08:31:53 -0700
+Subject: [PATCH] ImsStack: bind every socket to the IMS network, by capability
+ fallback
+
+The native socket layer bound sockets to a network only through the
+data-connection registry, which this configuration never populates, and
+only from Bind(); a connecting socket that skipped Bind() was never
+bound either. Every socket the stack opened ran unbound, and on cellular
+that still worked only because the carrier backbone happens to route the
+core-internal SIP space from any bearer - over an ePDG tunnel the
+default network is Wi-Fi, and unbound SIP handed core-internal
+addresses to the home router, where the dialog died in SYN-SENT with no
+IPsec counters moving.
+
+When the registry has no entry, call the Java BindSocket with the IMS
+apn type directly: the Java side resolves the network by capability,
+independent of connection state. Also bind in Connect()'s
+nonblocking-progress path so a connect-only socket is covered.
+
+Assisted-by: ZCode:GLM-5.3-Flash
+Signed-off-by: Lance <Gero3977@gmail.com>
+---
+ .../platform/os/android/network/OsSocket.cpp  | 30 ++++++++++++++++---
+ 1 file changed, 26 insertions(+), 4 deletions(-)
+
+diff --git a/native/libimsstack/platform/os/android/network/OsSocket.cpp b/native/libimsstack/platform/os/android/network/OsSocket.cpp
+index 86e2f00..0adb3cb 100644
+--- a/native/libimsstack/platform/os/android/network/OsSocket.cpp
++++ b/native/libimsstack/platform/os/android/network/OsSocket.cpp
+@@ -113,16 +113,34 @@ static void osSocket_SetNetworkForSocket(
+     ImsNetworkConnectionState* pState = ImsNetworkConnectionState::GetInstance();
+     const ImsNetworkConnection* pNc = pState->LookupHandle(hConnection);
+ 
+-    if (pNc == IMS_NULL)
++    if (pNc != IMS_NULL)
+     {
++        if (PlatformContext::GetInstance()->GetSystem()->BindSocket(
++                    pNc->GetApnType(), hSocket, nSlotId) != 1)
++        {
++            IMS_TRACE_D("BindSocket failed: slotId=%d, apnType=%d, sockFd=%d", nSlotId,
++                    pNc->GetApnType(), hSocket);
++        }
+         return;
+     }
+ 
++    // No connection in the registry (the data-connection layer is idle on
++    // this configuration). An unbound socket routes by the default
++    // network, which on Wi-Fi sending hands core-internal SIP addresses
++    // to the home router and the dialog dies in SYN-SENT. Bind to the
++    // IMS network by capability instead: the Java side resolves the
++    // network independently of any connection state. 1 == TYPE_IMS
++    // (dcmif DcConstants); emergency dialogs carry their own EIMS
++    // capability and resolve the same way.
+     if (PlatformContext::GetInstance()->GetSystem()->BindSocket(
+-                pNc->GetApnType(), hSocket, nSlotId) != 1)
++                1 /* TYPE_IMS */, hSocket, nSlotId) != 1)
+     {
+-        IMS_TRACE_D("BindSocket failed: slotId=%d, apnType=%d, sockFd=%d", nSlotId,
+-                pNc->GetApnType(), hSocket);
++        IMS_TRACE_D("BindSocket fallback failed: slotId=%d, sockFd=%d, apn=%d", nSlotId, hSocket, 1);
++    }
++    else
++    {
++        IMS_TRACE_D("BindSocket fallback by capability: slotId=%d, sockFd=%d, apn=%d", nSlotId,
++                hSocket, 1);
+     }
+ }
+ 
+@@ -780,6 +798,10 @@ PROTECTED VIRTUAL ISocket::SOCKET_RESULT OsSocket::Connect(
+             else if ((nError == EINPROGRESS) || (nError == EWOULDBLOCK))
+             {
+                 // 4 Set Event Writable
++                // NETWORK_INTERFACE_FOR_SOCKET: a socket that never Bind()s
++                // must still reach the right network before its SYN leaves.
++                osSocket_SetNetworkForSocket(
++                        m_piOwnerThread->GetSlotId(), m_hSocket, GetNetworkConnection());
+             }
+ 
+             SetSocketConnected(IMS_FALSE);
+-- 
+2.55.0
+
