@@ -94,10 +94,14 @@ and 2 are done.
    build's `vendor/apn/aosp-ims.xml`.
 4. Build the source-tree integration in a real LineageOS tree. Short of
    that: `tests/check-soong.sh` (in CI) runs Android 15's own Soong over
-   the kit's ImsStack and ImsMedia `Android.bp` files and passes, every
-   module they use from the tree is defined in Android 15
-   (`--verify-stubs`), and the ten resources the device patch overlays
-   exist in the nightly's framework-res and TeleService.
+   the kit's ImsStack and ImsMedia `Android.bp` files and passes (user and
+   userdebug, product variables applied), every module they use from the
+   tree is defined in Android 15 (`--verify-stubs`), the ten resources
+   the device patch overlays exist in the nightly's framework-res and
+   TeleService, ImsStack's upstream privapp allowlist covers what its
+   manifests request at Android 15's protection levels (`build-apk.sh`),
+   and the zip's native compile flags match Soong's per module except
+   Soong's hardening sanitizers.
 5. ~~From the port audit~~: done. GBA service (ImsStack 0008, device
    patch 0002), the IMS/XCAP/emergency APNs LineageOS lacks (ImsApnGate,
    vendor/apn/aosp-ims.xml), IWLAN flags at the Android 17 release values.
