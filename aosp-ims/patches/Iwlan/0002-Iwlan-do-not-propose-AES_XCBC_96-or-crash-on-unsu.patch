@@ -1,0 +1,139 @@
+From 7bb7b8eaaed6fa0470c1bfb01afb14bbca7a2e97 Mon Sep 17 00:00:00 2001
+From: Fulgor Nymvale <fulgor@nym-skyforge>
+Date: Mon, 28 Sep 2026 07:19:49 -0700
+Subject: [PATCH] Iwlan: do not propose AES_XCBC_96 or crash on unsupported
+ algorithms
+
+Android 15's IKE library defines INTEGRITY_ALGORITHM_AES_XCBC_96 but its
+SaProposal builder rejects the algorithm ("Unsupported integrity
+algorithm 5" - sessions support it only from Android 17 on). The
+constant inlines with 15's numbering at compile time, so proposing it
+brought the tunnel manager down with an uncaught
+IllegalArgumentException the moment Wi-Fi calling tried to bring up a
+tunnel. Drop it from the valid lists, and skip any algorithm the
+builder refuses instead of crashing: the proposal still carries the
+SHA-2 family the ePDG needs.
+
+Assisted-by: ZCode:GLM-5.3-Flash
+Signed-off-by: Lance <Gero3977@gmail.com>
+---
+ .../android/iwlan/epdg/EpdgChildSaProposal.java | 17 +++++++++++++++--
+ .../android/iwlan/epdg/EpdgIkeSaProposal.java   | 15 +++++++++++++--
+ .../android/iwlan/epdg/EpdgSaProposal.java      |  9 +++++++--
+ 3 files changed, 35 insertions(+), 6 deletions(-)
+
+diff --git a/src/com/google/android/iwlan/epdg/EpdgChildSaProposal.java b/src/com/google/android/iwlan/epdg/EpdgChildSaProposal.java
+index b13f2aa..922dd0d 100644
+--- a/src/com/google/android/iwlan/epdg/EpdgChildSaProposal.java
++++ b/src/com/google/android/iwlan/epdg/EpdgChildSaProposal.java
+@@ -17,9 +17,12 @@
+ package com.google.android.iwlan.epdg;
+ 
+ import android.net.ipsec.ike.ChildSaProposal;
++import android.util.Log;
+ import android.util.Pair;
+ 
+ public class EpdgChildSaProposal extends EpdgSaProposal {
++    private static final String TAG = EpdgChildSaProposal.class.getSimpleName();
++
+     private boolean mAddChildSessionRekeyKePayload = false;
+ 
+     /**
+@@ -76,14 +79,24 @@ public class EpdgChildSaProposal extends EpdgSaProposal {
+         }
+ 
+         for (Pair<Integer, Integer> encrAlgo : encrAlgos) {
+-            saProposalBuilder.addEncryptionAlgorithm(encrAlgo.first, encrAlgo.second);
++            try {
++                saProposalBuilder.addEncryptionAlgorithm(encrAlgo.first, encrAlgo.second);
++            } catch (IllegalArgumentException e) {
++                // Android 15's IKE rejects some algorithms Android 17's
++                // lists carry; skip them rather than lose the tunnel.
++                Log.e(TAG, "skipping encryption algo " + encrAlgo.first + ": " + e);
++            }
+         }
+ 
+         if (!isAead) {
+             int[] integrityAlgos =
+                     (isProposed) ? getIntegrityAlgos() : getSupportedIntegrityAlgos();
+             for (int integrityAlgo : integrityAlgos) {
+-                saProposalBuilder.addIntegrityAlgorithm(integrityAlgo);
++                try {
++                    saProposalBuilder.addIntegrityAlgorithm(integrityAlgo);
++                } catch (IllegalArgumentException e) {
++                    Log.e(TAG, "skipping integrity algo " + integrityAlgo + ": " + e);
++                }
+             }
+         }
+ 
+diff --git a/src/com/google/android/iwlan/epdg/EpdgIkeSaProposal.java b/src/com/google/android/iwlan/epdg/EpdgIkeSaProposal.java
+index f4d6d56..e8e0027 100644
+--- a/src/com/google/android/iwlan/epdg/EpdgIkeSaProposal.java
++++ b/src/com/google/android/iwlan/epdg/EpdgIkeSaProposal.java
+@@ -17,11 +17,14 @@
+ package com.google.android.iwlan.epdg;
+ 
+ import android.net.ipsec.ike.IkeSaProposal;
++import android.util.Log;
+ import android.util.Pair;
+ 
+ import java.util.LinkedHashSet;
+ 
+ public class EpdgIkeSaProposal extends EpdgSaProposal {
++    private static final String TAG = EpdgIkeSaProposal.class.getSimpleName();
++
+     protected final LinkedHashSet<Integer> mProposedPrfAlgos = new LinkedHashSet<>();
+ 
+     /**
+@@ -96,14 +99,22 @@ public class EpdgIkeSaProposal extends EpdgSaProposal {
+         }
+ 
+         for (Pair<Integer, Integer> encrAlgo : encrAlgos) {
+-            saProposalBuilder.addEncryptionAlgorithm(encrAlgo.first, encrAlgo.second);
++            try {
++                saProposalBuilder.addEncryptionAlgorithm(encrAlgo.first, encrAlgo.second);
++            } catch (IllegalArgumentException e) {
++                Log.e(TAG, "skipping encryption algo " + encrAlgo.first + ": " + e);
++            }
+         }
+ 
+         if (!isAead) {
+             int[] integrityAlgos =
+                     (isProposed) ? getIntegrityAlgos() : getSupportedIntegrityAlgos();
+             for (int integrityAlgo : integrityAlgos) {
+-                saProposalBuilder.addIntegrityAlgorithm(integrityAlgo);
++                try {
++                    saProposalBuilder.addIntegrityAlgorithm(integrityAlgo);
++                } catch (IllegalArgumentException e) {
++                    Log.e(TAG, "skipping integrity algo " + integrityAlgo + ": " + e);
++                }
+             }
+         }
+ 
+diff --git a/src/com/google/android/iwlan/epdg/EpdgSaProposal.java b/src/com/google/android/iwlan/epdg/EpdgSaProposal.java
+index 2039c0a..f4bee0f 100644
+--- a/src/com/google/android/iwlan/epdg/EpdgSaProposal.java
++++ b/src/com/google/android/iwlan/epdg/EpdgSaProposal.java
+@@ -83,12 +83,17 @@ abstract class EpdgSaProposal {
+         VALID_INTEGRITY_ALGOS =
+                 Collections.unmodifiableSet(
+                         new LinkedHashSet<Integer>(
++                                // No AES_XCBC_96: the constant exists in
++                                // Android 15's IKE library but its proposal
++                                // builder rejects the algorithm ("Unsupported
++                                // integrity algorithm"), taking the tunnel
++                                // manager down with it; sessions support it
++                                // only from Android 17 on.
+                                 List.of(
+                                         SaProposal.INTEGRITY_ALGORITHM_HMAC_SHA2_512_256,
+                                         SaProposal.INTEGRITY_ALGORITHM_HMAC_SHA2_384_192,
+                                         SaProposal.INTEGRITY_ALGORITHM_HMAC_SHA2_256_128,
+-                                        SaProposal.INTEGRITY_ALGORITHM_HMAC_SHA1_96,
+-                                        SaProposal.INTEGRITY_ALGORITHM_AES_XCBC_96)));
++                                        SaProposal.INTEGRITY_ALGORITHM_HMAC_SHA1_96)));
+ 
+         VALID_AEAD_ALGOS =
+                 Collections.unmodifiableSet(
+-- 
+2.55.0
+
