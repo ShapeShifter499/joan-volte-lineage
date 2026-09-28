@@ -88,6 +88,11 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: false
+
       - name: Host tools
         run: |
           sudo apt-get update -q
@@ -105,6 +110,9 @@ jobs:
         env:
           VERSION_NAME: ${{ steps.meta.outputs.version }}
         run: aosp-ims/tools/build-all.sh
+
+      - name: The kit's build files under Android 15's Soong
+        run: aosp-ims/tests/check-soong.sh --verify-stubs
 
       - name: Carrier config matches the gate and the device patch
         run: |

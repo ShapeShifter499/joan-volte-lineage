@@ -14,8 +14,8 @@ a device has one MMTEL `ImsService`.
 - The source-tree integration below has not been built in a LineageOS
   tree: a full tree does not fit in the environment this was written in.
   It was checked piece by piece against the Android 15 sources (see
-  "What was checked"). Expect to fix small build errors on the first
-  build, and please report them.
+  "What was checked"), including Android 15's own Soong reading the
+  build files it adds. Please report any build error on the first build.
 
 ## What goes into the tree
 
@@ -208,12 +208,24 @@ Checked against the `android15-qpr2-release` sources and the LineageOS
   produces trees identical to the ones the zip is built from; a second
   run skips all of them.
 - The device patch applies to `lineage-22.2` of `joan-common`.
-- Every module the Android 17 `Android.bp` files depend on exists in
-  Android 15: `android.hardware.radio.ims.media-V2-java`,
-  `modules-utils-handlerexecutor`, `keepanno-annotations`,
-  `TelephonyStatsLib` (QNS), `framework-annotations-lib`,
-  `libphonenumber`. The Android 17 files use `select()` and aconfig
-  `container`, both supported by Android 15's Soong.
+- Android 15's Soong reads ImsStack's and ImsMedia's Android 17
+  `Android.bp` files, as patched, without an error: every module type,
+  property, `select()` and product variable, in user and userdebug
+  builds, tests included (Soong resolves test modules in every build).
+  `aosp-ims/tests/check-soong.sh` runs `build/soong` from
+  `android15-qpr2-release` over them, and fails on a property it does
+  not know (its own control case); CI runs it.
+- Every one of the 51 modules those files use from the rest of the tree
+  is defined in Android 15 (`check-soong.sh --verify-stubs`), among them
+  `android.hardware.radio.ims.media-V2-java` (version 2 is frozen there),
+  `libaconfig_storage_read_api_cc`, `keepanno-annotations` and
+  `libphonenumber`. The modules the device patch adds exist: `ImsStack`,
+  `ImsMediaService` and `preinstalled-packages-imsmedia.xml` from the
+  synced projects, `Iwlan` in LineageOS's fork and
+  `QualifiedNetworksService` in `packages/modules/Telephony`, each with
+  its own privileged-permission allowlist.
+- Android 17's ImsMedia keeps every module Android 15's defines, so
+  nothing else in the tree loses a dependency when it is replaced.
 - The LineageOS manifest carries ImsMedia from AOSP (so the local
   manifest can replace it), IWLAN as LineageOS's fork, and no ImsStack or
   standalone QNS.

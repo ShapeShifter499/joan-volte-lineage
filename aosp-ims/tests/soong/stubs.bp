@@ -1,0 +1,61 @@
+// Stand-ins for the modules ImsStack's and ImsMedia's Android.bp files use
+// from the rest of an Android 15 tree. Each is defined at
+// android15-qpr2-release where its comment says (the "check-soong.sh
+// --verify-stubs" list); the test only needs its name and kind.
+
+// Java
+java_library { name: "telephony-common", srcs: ["a.java"] }  // frameworks/opt/telephony
+java_library { name: "ims-common", srcs: ["a.java"] }  // frameworks/opt/net/ims
+java_library { name: "framework-annotations-lib", srcs: ["a.java"], sdk_version: "core_current" }  // frameworks/base (used by Android 15's ImsMedia)
+java_library { name: "libphonenumber", srcs: ["a.java"], sdk_version: "core_current" }  // external/libphonenumber
+java_library { name: "androidx.annotation_annotation", srcs: ["a.java"], sdk_version: "core_current" }  // prebuilts/sdk (used by Android 15's ImsMedia)
+java_library { name: "android-support-annotations", srcs: ["a.java"], sdk_version: "core_current" }  // (used by Android 15's ImsMedia)
+java_library { name: "keepanno-annotations", srcs: ["a.java"], sdk_version: "core_current" }  // (used by Android 15's ImsMedia)
+java_library { name: "android.hardware.radio.ims.media-V2-java", srcs: ["a.java"], sdk_version: "module_current" }  // hardware/interfaces/radio/aidl, version 2 frozen
+java_library { name: "libprotobuf-java-lite", srcs: ["a.java"], sdk_version: "core_current" }  // external/protobuf
+
+// Native
+cc_library { name: "libaconfig_storage_read_api_cc" }  // build/make/tools/aconfig/aconfig_storage_read_api
+cc_library { name: "server_configurable_flags" }  // system/server_configurable_flags/libflags
+cc_library { name: "libbase" }  // system/libbase
+cc_library { name: "liblog" }  // system/logging (used by Android 15's ImsMedia)
+cc_library { name: "libbinder" }  // frameworks/native (used by Android 15's ImsMedia)
+cc_library { name: "libcutils" }  // system/core (used by Android 15's ImsMedia)
+cc_library { name: "libutils" }  // system/core (used by Android 15's ImsMedia)
+cc_library { name: "libnativehelper" }  // libnativehelper
+cc_library { name: "libxml2" }  // external/libxml2
+cc_library { name: "libz" }  // external/zlib
+cc_library { name: "libcrypto" }  // external/boringssl
+cc_library { name: "libssl" }  // external/boringssl
+cc_library { name: "libaaudio" }  // (used by Android 15's ImsMedia)
+cc_library { name: "libandroid" }  // (used by Android 15's ImsMedia)
+cc_library { name: "libandroid_runtime" }  // (used by Android 15's ImsMedia)
+cc_library { name: "libcamera2ndk" }  // (used by Android 15's ImsMedia)
+cc_library { name: "libjnigraphics" }  // (used by Android 15's ImsMedia)
+cc_library { name: "libmediandk" }  // (used by Android 15's ImsMedia)
+cc_library { name: "libmediautils" }  // (used by Android 15's ImsMedia)
+cc_library { name: "libnativewindow" }  // (used by Android 15's ImsMedia)
+cc_library { name: "framework-permission-aidl-cpp" }  // (used by Android 15's ImsMedia)
+
+// Tests (Soong resolves them in every build, built or not)
+java_library { name: "androidx.test.core", srcs: ["a.java"], sdk_version: "current" }  // (used by Android 15's ImsMedia)
+java_library { name: "androidx.test.ext.junit", srcs: ["a.java"], sdk_version: "current" }  // (used by Android 15's ImsMedia)
+java_library { name: "androidx.test.rules", srcs: ["a.java"], sdk_version: "current" }  // (used by Android 15's ImsMedia)
+java_library { name: "com.google.android.material_material", srcs: ["a.java"], sdk_version: "current" }  // (used by Android 15's ImsMedia)
+java_library { name: "mockito-target", srcs: ["a.java"], sdk_version: "current" }  // external/dexmaker
+java_library { name: "mockito-target-minus-junit4", srcs: ["a.java"], sdk_version: "current" }  // external/dexmaker
+java_library { name: "mockito-target-extended-minus-junit4", srcs: ["a.java"], sdk_version: "current" }  // external/dexmaker
+java_library { name: "platform-test-annotations", srcs: ["a.java"], sdk_version: "current" }  // (used by Android 15's ImsMedia)
+java_library { name: "testables", srcs: ["a.java"], sdk_version: "current" }  // (used by Android 15's ImsMedia)
+java_library { name: "testng", srcs: ["a.java"], sdk_version: "current" }  // (used by Android 15's ImsMedia)
+java_library { name: "truth", srcs: ["a.java"], sdk_version: "current" }  // (used by Android 15's ImsMedia)
+java_library { name: "junit", srcs: ["a.java"], sdk_version: "current" }  // external/junit
+java_library { name: "frameworks-base-testutils", srcs: ["a.java"], sdk_version: "current" }  // frameworks/base/tests/utils/testutils
+java_library { name: "android.test.base.stubs.system", srcs: ["a.java"], sdk_version: "current" }  // frameworks/base/test-base (java_sdk_library)
+java_library { name: "android.test.mock.stubs.system", srcs: ["a.java"], sdk_version: "current" }  // frameworks/base/test-mock (java_sdk_library)
+java_library { name: "android.test.runner.stubs.system", srcs: ["a.java"], sdk_version: "current" }  // frameworks/base/test-runner (java_sdk_library)
+cc_library { name: "libdexmakerjvmtiagent" }  // external/dexmaker
+cc_library { name: "libstaticjvmtiagent" }  // external/dexmaker
+cc_library_static { name: "libgtest" }  // external/googletest
+cc_library_static { name: "libgtest_main" }  // external/googletest (used by Android 15's ImsMedia)
+cc_library_static { name: "libgmock" }  // external/googletest (used by Android 15's ImsMedia)

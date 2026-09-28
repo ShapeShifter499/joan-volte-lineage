@@ -30,6 +30,7 @@ remains is on-device verification and joan's own hardware limits.
 | aconfig flags | ImsStack and ImsMedia read none (Java or native; the native flag libraries are declared but unused). IWLAN reads three | Built with the Android 17 release's values (`cp1a` inherits `bp3a`): `iwlan_silent_restart` on, the two trunk-only flags off |
 | Phone process (`imsphone`, `ims`) | Mostly launched-flag cleanups; new features (CRS, video ringback, deregistration throttle time) and call-merge fixes inside the phone process | Nothing ImsStack depends on |
 | Native libraries | Full upstream `libimsstack` and `libimsmedia` graphs, linked against the ROM's `/system/lib64` with `--no-undefined`; only these two are loaded | Every symbol resolves on this ROM |
+| Build files (`Android.bp`, the source-build kit) | Android 15's Soong (`android15-qpr2-release`) reads ImsStack's and ImsMedia's Android 17 files, patched, with no error in user or userdebug; every one of the 51 modules they take from the rest of the tree is defined in Android 15; Android 17's ImsMedia keeps every module Android 15's defines | A LineageOS 22.2 tree gets past Soong's analysis (`tests/check-soong.sh`, in CI) |
 | Manifests (ImsStack merged, IWLAN, QNS) | All 51 permissions requested and every component's permission are defined on the ROM | Every binding and request can succeed |
 | Reflection | None in ImsStack or ImsMedia | No hidden run-time lookups |
 | Permission and sysconfig files | Ours list upstream's names; the zip adds `WRITE_APN_SETTINGS` for its APN gate | Same grants as upstream |
@@ -109,5 +110,8 @@ modem-side IMS traffic priority.
   calls, SMS over IMS, Wi-Fi calling and handover, emergency calls, Ut
   (now with GBA), conference, video, RTT, dual SIM, other carriers and
   models, the APN gate on a phone.
-- The source-build kit has not been compiled in a LineageOS tree.
+- The source-build kit has not been compiled in a full LineageOS tree:
+  its build files pass Android 15's Soong and its sources compile and
+  link against the ROM (the zip build), but no tree has run the two
+  together.
 - ImsStack's own unit tests (instrumentation tests) have not run.

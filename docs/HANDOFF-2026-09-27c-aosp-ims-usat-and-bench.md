@@ -83,10 +83,14 @@ and 2 are done.
    US998 (unlocked), H932 (T-Mobile), H931, H933, LS998, V300K/L/S and
    VS996, all on the one joan build. The zips check no model; the ROM
    keeps the nightly's own device assert. Documented in both READMEs.
-3. IMS APNs: ~100 carriers have IMS APNs with custom names that
-   LineageOS lacks (Android 15's default `ims` profile covers the rest).
-   The zip's APN merge is Viettel-only.
-4. Build the source-tree integration in a real LineageOS tree.
+3. ~~IMS APNs~~: done (item 5): the zip's `ImsApnGate` and the source
+   build's `vendor/apn/aosp-ims.xml`.
+4. Build the source-tree integration in a real LineageOS tree. Short of
+   that: `tests/check-soong.sh` (in CI) runs Android 15's own Soong over
+   the kit's ImsStack and ImsMedia `Android.bp` files and passes, every
+   module they use from the tree is defined in Android 15
+   (`--verify-stubs`), and the ten resources the device patch overlays
+   exist in the nightly's framework-res and TeleService.
 5. ~~From the port audit~~: done. GBA service (ImsStack 0008, device
    patch 0002), the IMS/XCAP/emergency APNs LineageOS lacks (ImsApnGate,
    vendor/apn/aosp-ims.xml), IWLAN flags at the Android 17 release values.
