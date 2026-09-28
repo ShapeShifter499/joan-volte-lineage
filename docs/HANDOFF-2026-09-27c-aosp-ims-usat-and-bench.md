@@ -120,10 +120,17 @@ branch, verified against the sources:
   (Android 15 falls back to `READ_PRIVILEGED_PHONE_STATE`, which the zip
   holds).
 
+**Bench 6** (sent 09-28, built from this branch at 9768009): the v2 fixes
+above plus the GBA service, APN gate and the three carrier-data layers.
+What to look for: an incoming call rings (`ImsStackNotify` in the log
+if the framework still refuses one), outbound calls keep working, and
+`getprop ro.telephony.block_binder_thread_on_incoming_calls` is `true`
+after the flash (`/system/etc/aosp-ims-incoming-calls.flipped` exists).
+
 ## Still to do
 
-1. Confirm an incoming call on the bench; then the alpha1 release when
-   the user agrees.
+1. Confirm an incoming call on the bench (bench 6); then the alpha1
+   release when the user agrees.
 2. ~~Every V30 model~~: done. The LineageOS wiki lists H930, H930DS,
    US998 (unlocked), H932 (T-Mobile), H931, H933, LS998, V300K/L/S and
    VS996, all on the one joan build. The zips check no model; the ROM
