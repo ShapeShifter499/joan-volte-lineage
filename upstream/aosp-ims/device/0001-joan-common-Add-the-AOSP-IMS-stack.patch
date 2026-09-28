@@ -105,7 +105,7 @@ diff --git a/overlay/packages/apps/CarrierConfig/res/xml/vendor.xml b/overlay/pa
 index d28cf9e..34afa27 100644
 --- a/overlay/packages/apps/CarrierConfig/res/xml/vendor.xml
 +++ b/overlay/packages/apps/CarrierConfig/res/xml/vendor.xml
-@@ -618,4 +618,571 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.-->
+@@ -618,4 +618,572 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.-->
          <boolean name="config_enable_mms_with_mobile_data_off" value="true" />
      </carrier_config>
  
@@ -674,6 +674,7 @@ index d28cf9e..34afa27 100644
 +        <boolean name="hide_enhanced_4g_lte_bool" value="false" />
 +        <boolean name="editable_enhanced_4g_lte_bool" value="true" />
 +        <boolean name="carrier_allow_turnoff_ims_bool" value="true" />
++        <int name="ims.reg_default_wait_time_int" value="5" />
 +    </carrier_config>
 +    <!-- aosp-ims-end -->
  </carrier_config_list>
