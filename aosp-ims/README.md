@@ -179,7 +179,7 @@ once the ROM has its own. A source build gets them as
 identities: no SIM's APNs change level or lose a row, and the list still
 validates against LineageOS's schema.
 
-## Status (2026-09-27)
+## Status (2026-09-28)
 
 | Step | State |
 |---|---|
@@ -189,8 +189,8 @@ validates against LineageOS's schema.
 | Single-APK packaging, overlays, permission files | done |
 | Flashable zips (fresh, migrate, uninstall) | done; 164 end-to-end installer checks pass |
 | Repacked LineageOS 22.2 ROM | done; `tests/check-rom.sh` passes |
-| Source-tree integration (`upstream/AOSP-IMS.md`) | written and checked piece by piece; not yet built in a tree |
-| **Tested on a phone** | US998 on T-Mobile: the migrate zip installs and ImsStack registers (IPsec sec-agree, reg-event) once 0004 stops the startup crash. Calls failed on USAT call control until 0005; not yet re-tested |
+| Source-tree integration (`upstream/AOSP-IMS.md`) | written and checked piece by piece, its build files by Android 15's own Soong (`tests/check-soong.sh`, in CI); not yet built in a tree |
+| **Tested on a phone** | US998 on T-Mobile: the migrate zip installs and ImsStack registers (IPsec sec-agree, reg-event) once 0004 stops the startup crash. With 0005/0006 calls go out, ring and are answered, then the phone hangs up ~0.2 s later; the fix under test is the microphone grant (bench 4/5) |
 
 ## What the backport changes
 
