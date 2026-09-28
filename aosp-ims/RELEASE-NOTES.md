@@ -1,110 +1,102 @@
-**Unofficial alpha.** Bench results so far (US998 on T-Mobile): the
-migrate zip installs, ImsStack registers with IPsec, and outbound calls
-work end to end (after fixes for the SIM's call control check, see Known
-limits, and for ImsMedia's media service, which died as the first call's
-media started). Incoming calls were refused by a joan device-tree
-property that told the framework to ignore them; the installer now turns
-it on (`ro.telephony.block_binder_thread_on_incoming_calls=true`, and the
-`-uninstall` zip turns it back off). An incoming call has not been
-confirmed yet. It is built entirely from
-source by this repository's `aosp-ims` workflow and passes its installer,
-carrier-config and ROM checks. Keep a way back: the `-uninstall` zip, or
-the official LineageOS nightly.
+**Unofficial alpha.** VoLTE and Wi-Fi calling for the LG V30 on
+LineageOS 22.2, using AOSP's own IMS stack from Android 17. It has been
+tested on one phone and one carrier (a US998 on T-Mobile US) and nowhere
+else yet. Keep a way back: the `-uninstall` zip, or the official
+LineageOS nightly. **Something wrong? See
+[How to log a problem](https://github.com/ShapeShifter499/joan-volte-lineage/blob/claude/aosp-ims-a15-backport/aosp-ims/HOW-TO-LOG.md)**
+(also attached below as `HOW-TO-LOG.md`).
+
+## What works so far
+
+Tested on a US998 on T-Mobile US:
+
+| | |
+|---|---|
+| VoLTE registration (with IPsec) | works |
+| Outgoing VoLTE calls, audio both ways | works |
+| Incoming VoLTE calls | ring and answer; not re-checked since the last media fixes |
+| Wi-Fi calling: registration over the carrier's tunnel | works |
+| Outgoing Wi-Fi calls, audio both ways | works (1 min 45 s call, clean hang-up) |
+| SMS over IMS, video calling, RTT, call forwarding/waiting settings, conference calls | built in, not tested yet |
+| Emergency calls over IMS | built in, **not tested, and must not be tested by dialling**: see Known limits |
+
+New in this build, not yet tested on a phone: carriers whose IMS runs
+over IPv4 (Digi Mobil Romania among them) could never register with the
+earlier bench builds. Every registration going over TCP failed before
+anything was sent. Fixed (ImsStack 0014).
 
 ## What this is
 
-VoLTE and Wi-Fi calling for the LG V30 (joan) on LineageOS 22.2, using
-AOSP's own IMS stack from Android 17, backported to Android 15. It
-replaces joan's IMS stack.
-
-It is for every V30 model LineageOS supports, all on the one joan build:
-H930, H930DS, US998, H932, H931, H933, LS998, V300K, V300L, V300S and
-VS996 (tested so far: US998 on T-Mobile).
+It replaces joan's own IMS app with the IMS stack Google wrote for
+Android 17, backported to Android 15 (LineageOS 22.2):
 
 | Part | What it does |
 |---|---|
-| ImsStack + ImsMedia (`com.android.imsstack`) | IMS registration, calls and SMS; call audio on Android |
+| ImsStack + ImsMedia (`com.android.imsstack`) | IMS registration, calls and SMS; call audio |
 | IWLAN (`com.google.android.iwlan`) | The IPsec tunnel to the carrier's ePDG, for Wi-Fi calling |
 | QNS (`com.android.telephony.qns`) | Moves IMS between LTE and Wi-Fi |
 
-It does VoLTE, Wi-Fi calling, SMS over IMS, video calling (ViLTE), RTT,
-emergency calls over IMS, call forwarding/waiting/barring over Ut/XCAP
-(with a GBA service of its own for the carriers whose XCAP servers ask
-for GBA: LineageOS has none), and conference calls, where the carrier
-offers them.
+For every V30 model LineageOS supports, all on the one joan build: H930,
+H930DS, US998, H932, H931, H933, LS998, V300K, V300L, V300S and VS996.
 
-VoLTE and Wi-Fi calling are offered for every carrier: Wi-Fi calling
-works where the carrier's ePDG accepts the SIM, and IMS stays on LTE
-elsewhere. Each carrier's IMS settings (SIP, SMS over IMS, Ut, emergency,
-video, RTT, ePDG) come from the carrier data LineageOS ships for Pixels,
-1361 entries for 576 carriers, applied on top of whatever carrier config
-your ROM already has. The same data supplies the IMS, XCAP (Ut) and
-emergency APNs your ROM's APN list lacks for your SIM (Verizon's MVNOs,
-among others), added on the phone and taken back if the ROM later
-brings its own.
+VoLTE and Wi-Fi calling are offered for every carrier. Each carrier's IMS
+settings come from the carrier data LineageOS ships for Pixels (1361
+entries for 576 carriers), applied on top of your ROM's own carrier
+config, plus LG's settings for networks that data lacks. Some carriers
+only allow VoLTE on phone models they have certified; that is the
+network's decision, not the phone's.
 
 ## Which file
 
-Flash with **LineageOS recovery**. It maps joan's dynamic partitions;
-TWRP on this device generally does not.
+Flash with **LineageOS recovery** (*Apply update* > *Apply from ADB*).
+It maps joan's dynamic partitions; TWRP on this device generally does
+not. Recovery warns that the signature can't be verified (only LineageOS
+can sign with its key): choose *Yes* to install anyway.
 
 - **`lineage-22.2-20260920-UNOFFICIAL-AOSPIMS-alpha1-joan.zip`**: the whole
-  ROM. It is the official 2026-09-20 nightly with the IMS stack built in.
-  - Recovery warns that the signature can't be verified (only LineageOS
-    can sign with its key); choose to install anyway.
-  - It reports itself as `UNOFFICIAL`, so the updater won't offer official
-    nightlies. An official nightly flashed over it by hand keeps the IMS
-    stack (addon.d), and the updater then works as usual.
-  - It has its own build number, so LineageOS treats flashing it as a
-    system update even over the official 2026-09-20 nightly, without a
-    wipe: the calling permissions are granted at first boot.
+  ROM, the official 2026-09-20 nightly with the IMS stack built in. It
+  reports itself as `UNOFFICIAL`, so the updater won't offer official
+  nightlies over it. It has its own build number, so flashing it over the
+  official 2026-09-20 nightly without a wipe counts as a system update
+  and the calling permissions are granted at first boot.
 - **`aosp-ims-17.0.0_r1-a15-alpha1-fresh.zip`**: for a phone on LineageOS
   22.2, or a ROM based on it, that never had joan's IMS zip. It refuses a
-  phone that has joan, and changes nothing.
+  phone that has joan, and then changes nothing.
 - **`aosp-ims-17.0.0_r1-a15-alpha1-migrate-from-joan.zip`**: for a phone
-  running joan's IMS (alpha67 or earlier). It removes joan's stack, then
-  installs this one.
+  running joan's IMS (any version). It removes joan's stack, then installs
+  this one.
 - **`aosp-ims-17.0.0_r1-a15-alpha1-uninstall.zip`**: puts the ROM back as
   it was. It also works on the ROM above.
 - **`SHA256SUMS`**: check a download with `sha256sum -c SHA256SUMS --ignore-missing`.
 
-## LineageOS updates
+Bench testers: this is the same code as bench 10.
 
-The stack stays through LineageOS's own updates. Its `addon.d` script
-puts it back after each nightly, so there is no need to re-flash the zip.
+**LineageOS updates** keep the stack: its `addon.d` script puts it back
+after each nightly, so there is no need to re-flash.
 
 ## After flashing: permissions
 
 These apps are not signed with the ROM's platform key (only LineageOS
 has it), so Android does not hand them every permission by itself.
 
-**Calls: the microphone.** Flashed together with a ROM install or update,
-or as the ROM above, the microphone, camera, location and phone
-permissions are granted at first boot. Flashed onto a ROM that has
+**Calls need the microphone.** Flashed with a ROM install or update, or
+as the ROM above, it is granted at first boot. Flashed onto a ROM that has
 already booted, **Calling permissions** appears in the app drawer: open
-it and allow them. It goes away once the microphone is allowed; no
-reboot needed. (Or Settings > Apps > ImsStack > Permissions, with system
-apps shown.)
+it and allow what it asks. It goes away once the microphone is allowed;
+no reboot needed.
 
-**Wi-Fi calling: one adb step**, whichever file you flashed. IWLAN needs
-an app-op for its IPsec tunnel that has no setting on the phone. Once,
-after the first boot, with USB debugging on:
+**Wi-Fi calling needs one adb step**, whichever file you flashed: IWLAN's
+tunnel needs an app-op that has no setting on the phone. Once, with USB
+debugging on:
 
 ```
-sh grant-permissions.sh
+sh grant-permissions.sh        # macOS/Linux
+grant-permissions.bat          # Windows (adb on your PATH)
 ```
 
-The script is attached here, inside the zips at `scripts/`, and at
-`aosp-ims/zip/grant-permissions.sh` in the repository. On Windows use
-`grant-permissions.bat` (in the repository at
-`aosp-ims/zip/grant-permissions.bat`; run it from a Command Prompt with
-the phone connected — it needs adb on your PATH). An on-device variant
-also ships in the zips: `grant-on-device.sh` — copy it to the phone
-(anywhere), open a terminal app or run it over adb, and it grants the
-same set; run over `adb shell` it can set everything including the
-IWLAN app-op, run from a phone terminal app it can only do what its
-uid allows. It also grants everything above. Without any of these,
-run the commands directly:
+Both are attached below and are inside the zips at `scripts/`.
+`grant-on-device.sh` does the same from `adb shell` on the phone. They run
+the commands below, which you can also paste yourself:
 
 ```
 adb shell pm grant com.android.imsstack android.permission.RECORD_AUDIO
@@ -120,63 +112,63 @@ adb shell pm grant com.google.android.iwlan android.permission.ACCESS_FINE_LOCAT
 adb shell pm grant com.android.telephony.qns android.permission.READ_PHONE_STATE
 ```
 
-- Without `RECORD_AUDIO`, calls can't open the microphone.
-- Without the IWLAN app-op, Wi-Fi calling can't build its tunnel.
-- Location is used for emergency calls and the network location header.
-
-Reboot afterwards, so IWLAN starts with the app-op in place.
-
-Then turn on **VoLTE** (Settings > Network & internet > SIMs), and
-**Wi-Fi calling** where it is offered.
+Reboot afterwards. Then turn on **VoLTE** (Settings > Network & internet
+> SIMs), and **Wi-Fi calling** where it is offered.
 
 ## Known limits
 
-- **Signature permissions.** Two signature-only permissions ImsStack asks
-  for can't be granted to an app not signed with the ROM's key:
-  `ACCESS_SURFACE_FLINGER` and `INTERACT_ACROSS_USERS_FULL`. Nothing in
-  the stack uses them (video goes to the surfaces the dialer provides),
-  so this costs nothing.
-- **Emergency calls.** The listener ImsStack uses to see outgoing
-  emergency calls needs a permission only the ROM's own key can grant, so
-  this build detects them from the call state instead (patch 0004). A
-  LineageOS build made from source keeps the original. Android 16's
-  domain-selection emergency-mode callback doesn't exist on Android 15,
-  so ImsStack doesn't see that state either way.
-- **Carrier activation portals.** Wi-Fi calling activation portals open in
-  the browser, not in an in-app tab.
-- **US E911 address.** US carriers need an E911 address on the account
-  for Wi-Fi calling.
+- **Emergency calls.** The stack can place emergency calls over IMS where
+  the network asks for that, but this has not been tested, and must not
+  be tested by dialling emergency services. The listener ImsStack uses to
+  see an outgoing emergency call needs a permission only the ROM's key
+  grants, so this build tracks emergency calls from the call state
+  instead (ImsStack 0004). **Don't rely on this phone as your only way to
+  reach emergency services.**
 - **SIM call control.** On a SIM with call control by USIM (T-Mobile's
-  have it), the phone asks the SIM about every call before placing it.
-  joan's RIL does not pass the SIM's answer back (it reports status
-  words 00 00), which failed every call until patch 0005: the call is now
-  placed as dialled. The SIM therefore can't bar or rewrite a call on
-  this phone; a SIM that does answer is still obeyed.
-- **Video calling** is offered where the carrier's config allows it, and
-  has not been tested yet.
-- **No EVS.** AOSP's media stack has no EVS codec yet, so calls use HD
-  voice (AMR-WB) or AMR, never EVS, even where the carrier offers it
-  (patch 0007).
+  have it), the phone asks the SIM about every call. joan's RIL doesn't
+  pass the SIM's answer back, which failed every call until ImsStack
+  0005: the call is now placed as dialled, so such a SIM can't bar or
+  rewrite a call on this phone. A SIM that does answer is still obeyed.
+- **No EVS.** AOSP's media engine has no EVS codec yet, so calls use HD
+  voice (AMR-WB) or AMR (ImsStack 0007).
+- **Video calling** is offered only where the carrier's config allows it
+  (T-Mobile US does; most carriers don't), and hasn't been tested.
+- **Wi-Fi calling** in the US needs an E911 address on your account, and
+  carrier activation pages open in the browser.
+- **Switching Wi-Fi calling off** while IMS is on Wi-Fi leaves you
+  without VoLTE for 20 seconds or more: joan's modem refuses to take the
+  IMS connection over from Wi-Fi and briefly drops off LTE, so IMS starts
+  again on LTE from scratch. A call made in that gap goes over 3G/2G and
+  makes the gap longer (85 s on the bench). A Wi-Fi call can't move to
+  LTE when you leave Wi-Fi.
+- **If the IMS app keeps crashing.** It restarts by itself after a crash
+  (a call in progress ends), and low memory doesn't kill it. But after 5
+  crashes within a minute, Android's rescue mode steps in; it can end in
+  a reboot and a "factory reset?" prompt. Choose *Try again*, don't
+  reset, then flash the `-uninstall` zip and send logs.
+- Two signature-only permissions ImsStack asks for,
+  `ACCESS_SURFACE_FLINGER` and `INTERACT_ACROSS_USERS_FULL`, can't be
+  granted here. Nothing in the stack uses them.
+
+## If something goes wrong
+
+Follow **[How to log a problem](https://github.com/ShapeShifter499/joan-volte-lineage/blob/claude/aosp-ims-a15-backport/aosp-ims/HOW-TO-LOG.md)**.
+In short, right after the failure:
+
+```
+adb logcat -b all -d > logcat.txt
+adb shell dumpsys activity service com.android.imsstack/.imsservice.ImsService > ims.txt
+```
+
+The logs contain your phone number, IMSI and IMEI: **send them privately**,
+not in a public issue.
 
 ## Building it into LineageOS
 
-A source build needs none of the above workarounds: see
-[`upstream/AOSP-IMS.md`](https://github.com/ShapeShifter499/joan-volte-lineage/blob/claude/aosp-ims-a15-backport/upstream/AOSP-IMS.md)
-for the local manifest, the patches and the `device/lge/joan-common`
-change.
-
-## What to send back
-
-If something fails, send:
-
-- `adb logcat -b all -d > log.txt`, taken right after the failure (for a
-  failed call, `adb logcat -b all -d | grep -iE "call-control|invokeStartFailed|SIPMSG|OnMediaFailed|- Terminate :|libimsmedia|AAudio|ImsStackPermissions"`
-  shows the stack's view of it);
-- the output of `adb shell dumpsys telephony.registry`;
-- the output of `adb shell dumpsys package com.android.imsstack`.
-
-Logs can contain your phone number and SIM identifiers (IMSI); send them
-privately rather than posting them publicly.
+A source build needs none of the permission workarounds: see
+[`upstream/AOSP-IMS.md`](https://github.com/ShapeShifter499/joan-volte-lineage/blob/claude/aosp-ims-a15-backport/upstream/AOSP-IMS.md).
 
 Source, patches and build scripts: `aosp-ims/` on branch
 [`claude/aosp-ims-a15-backport`](https://github.com/ShapeShifter499/joan-volte-lineage/tree/claude/aosp-ims-a15-backport/aosp-ims).
+Everything here is built from source by the repository's `aosp-ims`
+workflow, which also runs the installer, carrier-config and ROM checks.

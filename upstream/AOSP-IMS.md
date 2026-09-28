@@ -8,14 +8,18 @@ a device has one MMTEL `ImsService`.
 **Status.** Alpha.
 - The flashable zip and the repacked ROM (`aosp-ims/README.md`) are built
   from the same patched sources as this and pass the installer tests. On
-  a US998 with a T-Mobile SIM the zip registers with IPsec; calls failed
-  on the SIM's call control until ImsStack 0005 and have not been
-  re-tested yet.
+  a US998 with a T-Mobile SIM they register with IPsec, place and receive
+  VoLTE calls with audio both ways, and register and call over Wi-Fi
+  calling.
 - The source-tree integration below has not been built in a LineageOS
   tree: a full tree does not fit in the environment this was written in.
   It was checked piece by piece against the Android 15 sources (see
   "What was checked"), including Android 15's own Soong reading the
   build files it adds. Please report any build error on the first build.
+- Wi-Fi calling on joan needed IWLAN 0003 in the zip (the tunnel
+  interface's real endpoints, for the 4.4 kernel's VTI). A tree build
+  uses the tree's own IWLAN, which this kit does not patch; check Wi-Fi
+  calls carry traffic (`ipsec` interface counters) on the first build.
 
 ## What goes into the tree
 
@@ -45,12 +49,22 @@ are the backport, the same ones the zip is built from:
 | ImsStack 0004 | Survives a refused outgoing-emergency-call listener (the zip lacks the signature permission) by falling back to the call state and `TelecomManager#isInEmergencyCall`. A platform-signed tree build holds the permission, registers the original listener and never uses the fallback |
 | ImsStack 0005 | USAT call control and MO SMS control with no answer from the SIM: joan's RIL completes the envelope with status words 00 00 and no data, which ImsStack took as a refusal, failing every call on a SIM with call control by USIM. With no answer the call is set up as dialled; a real answer from the SIM still counts. Needed in a tree build too: it is the RIL, not the signing, that drops the answer |
 | ImsStack 0006 | Codes a three-digit MNC in those envelopes' location information as 3GPP TS 24.008 says |
-| ImsStack 0007 | Drops EVS from the codec offer: ImsMedia has no EVS codec yet (its encoder and decoder are TODOs), so an EVS call would be silent. Remove this patch once ImsMedia gains one |
-| ImsStack 0008 | Adds `ImsStackGbaService`, a GBA_ME service for platforms with none (LineageOS): Ut/XCAP authenticates with GBA, Android's default GBA mode is GBA_ME for every carrier, and without a service in `config_gba_package` every XCAP server that asks for GBA refuses. The device patch 0002 selects it |
-| ImsStack 0009 | Synchronizes `MediaManagerHelper.close()`, which raced when the media service died mid-call |
-| ImsStack 0010 | Logs why the framework refused an incoming call before the stack answers 480 |
+| ImsStack 0007 (EVS) | Drops EVS from the codec offer: ImsMedia has no EVS codec yet (its encoder and decoder are TODOs), so an EVS call would be silent. Remove this patch once ImsMedia gains one |
+| ImsStack 0008 (GBA) | Adds `ImsStackGbaService`, a GBA_ME service for platforms with none (LineageOS): Ut/XCAP authenticates with GBA, Android's default GBA mode is GBA_ME for every carrier, and without a service in `config_gba_package` every XCAP server that asks for GBA refuses. The device patch 0002 selects it |
+| ImsStack 0007 (teardown) | Synchronizes `MediaManagerHelper.close()`, which raced when the media service died mid-call |
+| ImsStack 0008 (logging) | Logs why the framework refused an incoming call before the stack answers 480 |
+| ImsStack 0009 | Swaps an inverted codec bitrate range instead of crashing call setup |
+| ImsStack 0010 | Binds every socket to the IMS network, by capability when the data-connection registry has no entry |
+| ImsStack 0011 | Reports the WLAN registration's RAT (IWLAN) when IMS runs over Wi-Fi |
+| ImsStack 0012 | Resolves the network to bind by live capability, not a cached one |
+| ImsStack 0013 | Reports IWLAN only while the IMS APN itself runs over WLAN |
+| ImsStack 0014 | Binds a connecting socket before `connect()` and keeps `errno`: 0010's later bind failed every IPv4 TCP connection. Needed in a tree build too |
 | ImsMedia 0001 | Lets ImsMedia run inside the caller's own package (the zip's single APK). A separate `ImsMediaService`, as here, is bound as before |
 | ImsMedia 0002 | Declares `JNIImsMediaService.setTestMode`, which the pinned ImsMedia's native JNI table registers and its Java class lacked: the media service died at library load on the first call. Needed in a tree build too |
+| ImsMedia 0003 | Defers the native open when a session opens with no RTP config yet (incoming calls open at ring time), and runs it with the first modify |
+| ImsMedia 0004 | Logs the socket monitor and receive path |
+| ImsMedia 0005 | Sets thread priority through the kernel instead of the `scheduling_policy` service, whose lookup the zip's SELinux domain is denied (it blocked the downlink forever). In a tree build ImsMedia runs as `radio`, where the lookup is allowed; the patch is harmless there |
+| ImsMedia 0006 | Drops media-quality thresholds that arrive with no native session (crashed the media service at call teardown) |
 
 ## Steps
 
