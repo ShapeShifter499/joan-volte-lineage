@@ -28,11 +28,15 @@ and 2 are done.
   phone. Wi-Fi calling still needs adb once (IWLAN's app-op).
 - Installer free-space check uses statfs (toybox df overstated it).
 - Local checks at handoff: `tests/UsatCheck.java` 20 cases,
-  `check-carrier-config.py` 2866 SIM identities, e2e installer 164/164,
-  `check-rom.sh` all passed, plus `ApnPlanCheck` (9081 checks),
-  `GbaCheck` (24, against a local BSF) and `check-apns.py` (2714 SIM
-  identities). The 0001-0008 series applies to a clean `1e3981c` and
-  gives the work tree's exact tree.
+  `check-carrier-config.py` 2866 SIM identities (three layers, 1473
+  imported blocks), e2e installer 164/164, `check-rom.sh` all passed,
+  plus `ApnPlanCheck` (9081 checks), `GbaCheck` (24, against a local
+  BSF), `check-apns.py` (2714 SIM identities), `check-soong.sh
+  --verify-stubs` (3 Soong fixture tests, 51 stand-ins found in Android
+  15), `regen-aosp-carrierconfig.sh --check`, and both privapp allowlist
+  checks. The 0001-0008 series applies to a clean `1e3981c` and gives the
+  work tree's exact tree; `apply-patches.sh` on a synthetic tree is
+  idempotent and splices 1553 region blocks.
 - **LG's settings for networks the Pixel data lacks**
   (`tools/import-lg-ims.py`, `carrier/lg-ims.xml`, 38 PLMNs): IPsec off,
   USSD over IMS, conference factory URI, each rule re-checked against
