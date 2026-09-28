@@ -111,8 +111,9 @@ Then turn on **VoLTE** (Settings > Network & internet > SIMs), and
 
 - **Signature permissions.** Two signature-only permissions ImsStack asks
   for can't be granted to an app not signed with the ROM's key:
-  `ACCESS_SURFACE_FLINGER` and `INTERACT_ACROSS_USERS_FULL`. Their
-  features (video surfaces, work profiles) may misbehave.
+  `ACCESS_SURFACE_FLINGER` and `INTERACT_ACROSS_USERS_FULL`. Nothing in
+  the stack uses them (video goes to the surfaces the dialer provides),
+  so this costs nothing.
 - **Emergency calls.** The listener ImsStack uses to see outgoing
   emergency calls needs a permission only the ROM's own key can grant, so
   this build detects them from the call state instead (patch 0004). A

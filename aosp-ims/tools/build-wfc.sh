@@ -69,7 +69,10 @@ build() {
     ls -la "$APK/$name.apk"
 }
 
-python3 "$HERE/tools/aconfig-stub.py" "$S/Iwlan/flags/main.aconfig" "$OUT/iwlan-flags"
+# The Android 17 release's values (build/release cp1a, inheriting bp3a):
+# iwlan_silent_restart is ENABLED; the other two are only in trunk_staging.
+python3 "$HERE/tools/aconfig-stub.py" "$S/Iwlan/flags/main.aconfig" "$OUT/iwlan-flags" \
+    --enable iwlan_silent_restart
 build Iwlan "$S/Iwlan" "$OUT/iwlan-flags" "$HERE/stubs/wfc/com/google" \
     "$S/modules-utils/java"
 build QualifiedNetworksService "$S/Qns" "$HERE/stubs/wfc/com/android" \

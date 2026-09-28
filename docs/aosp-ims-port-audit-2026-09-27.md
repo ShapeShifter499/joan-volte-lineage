@@ -1,58 +1,81 @@
-# AOSP IMS backport: is the port to Android 15 complete? (2026-09-27)
+# AOSP IMS backport: is the port to Android 15 complete? (2026-09-27, updated 09-28)
 
 A check of everything at the boundary between Android 17's IMS modules
 (ImsStack, ImsMedia, IWLAN, QNS) and LineageOS 22.2 (Android 15 QPR2),
 done by diffing the sources, not by reading release notes. Sources:
-`frameworks/base` and `frameworks/opt/telephony` at `android15-qpr2-release`
-and `android-17.0.0_r1`, `system/sepolicy` and `build/release` at the same,
-the modules at the commits in `aosp-ims/upstream.lock`, and the 2026-09-20
-joan nightly (TeleService resources, vendor VINTF manifest).
+`frameworks/base`, `frameworks/opt/telephony`, `packages/services/Telephony`
+and `packages/providers/TelephonyProvider` at `android15-qpr2-release` and
+`android-17.0.0_r1`, `system/sepolicy` and `build/release` at the same,
+the modules at the commits in `aosp-ims/upstream.lock`, LineageOS's
+`vendor/apn` and `android` manifest (lineage-22.2), and the 2026-09-20
+joan nightly (TeleService resources, product APN list, vendor VINTF
+manifest).
 
 ## Verdict
 
-At the Android version boundary the port is complete: nothing ImsStack
-needs from Android 16 or 17 is missing, apart from the two small losses
-below. What remains is on-device verification, one platform service
-LineageOS lacks (GBA), and joan's own hardware limits.
+At the Android version boundary the port is complete: every Android 16/17
+API ImsStack uses has an Android 15 translation or is shown to change
+nothing on LineageOS 22.2, and the flags match the Android 17 release.
+The two platform pieces the stack needs and LineageOS lacks, a GBA
+service and the carriers' IMS APNs, are now supplied (below). What
+remains is on-device verification and joan's own hardware limits.
 
 ## What was checked
 
 | Boundary | Android 15 vs 17 | Effect on the backport |
 |---|---|---|
 | Binder interfaces between the phone process and ImsStack (`android/telephony/ims/aidl`, 29 files) | Identical except one new callback, `IImsRegistrationCallback.onDeregisteredWithTime` | ImsStack never uses it (it is how Android 17 passes a deregistration throttle time to apps) |
-| Java IMS API (all 81 classes in `android.telephony.ims`) | Additions only: video ringback / CRS / low-battery call extras, a P-CSCF field in `ImsRegistrationAttributes`, an `onDeregistered` overload | ImsStack uses none of them. It is compiled against the ROM's own framework jars, so any Android 16/17-only call fails the build; the four it has are shimmed by ImsStack 0001 |
+| Java IMS API (all 81 classes in `android.telephony.ims`) | Additions only: video ringback / CRS / low-battery call extras, a P-CSCF field in `ImsRegistrationAttributes`, an `onDeregistered` overload | ImsStack uses none of them. It is compiled against the ROM's own framework jars, so any Android 16/17-only call fails the build; the four it has are below |
 | Carrier config defaults | ImsStack reads 220 `CarrierConfigManager` keys: 194 have a framework default, the same in both; 26 have none in either | No behavior drift from defaults |
-| aconfig flags | ImsStack and ImsMedia read none (Java or native; the native flag libraries are declared but unused). IWLAN reads three | Android 17's release (`cp1a` inherits `bp3a`) enables `iwlan_silent_restart`; ours is off. It only enables a restart hook that nothing on Android 15 calls. The other two are off in both |
+| aconfig flags | ImsStack and ImsMedia read none (Java or native; the native flag libraries are declared but unused). IWLAN reads three | Built with the Android 17 release's values (`cp1a` inherits `bp3a`): `iwlan_silent_restart` on, the two trunk-only flags off |
 | Phone process (`imsphone`, `ims`) | Mostly launched-flag cleanups; new features (CRS, video ringback, deregistration throttle time) and call-merge fixes inside the phone process | Nothing ImsStack depends on |
-| Native libraries | Full upstream `libimsstack` and `libimsmedia` graphs, linked against the ROM's `/system/lib64` with `--no-undefined` | Every symbol resolves on this ROM |
+| Native libraries | Full upstream `libimsstack` and `libimsmedia` graphs, linked against the ROM's `/system/lib64` with `--no-undefined`; only these two are loaded | Every symbol resolves on this ROM |
+| Manifests (ImsStack merged, IWLAN, QNS) | All 51 permissions requested and every component's permission are defined on the ROM | Every binding and request can succeed |
 | Reflection | None in ImsStack or ImsMedia | No hidden run-time lookups |
-| Permission and sysconfig files | Ours list exactly upstream's names | Same grants as upstream |
+| Permission and sysconfig files | Ours list upstream's names; the zip adds `WRITE_APN_SETTINGS` for its APN gate | Same grants as upstream |
 | SELinux | Android 17 has no ImsStack-specific policy (runs as `platform_app`) | Nothing to port |
 
-## The four shims in ImsStack 0001
+## The four Android 16/17 APIs (ImsStack 0001)
 
-| API (release) | Shim | Loss on joan |
+| API (release) | Android 15 translation | Effect on joan |
 |---|---|---|
-| `TelephonyManager#requestUiccIari` (17) | No IARIs | RCS only |
-| `BarringInfo#getCellIdentity` (17) | Read back from the parcel | None |
-| `TelephonyManager#EXTRA_SETUP_EVENT_LIST` (17) | Local constant | **Real, small:** Android 15's `CatService` never broadcasts the SIM's SET UP EVENT LIST, so ImsStack cannot send the IMS registration event download (TS 31.111) to SIM applets. Closable in a source build by backporting Android 17's `CatService#broadcastSetupEventList` (about 20 lines behind `supportImsRegistrationEventDownload`); not in the zip |
-| `DomainSelectionEmergencyModeListener` (16) | Not registered | None: the ROM leaves domain selection off (`config_domain_selection_service_component_name` is empty), so it would never fire |
+| `BarringInfo#getCellIdentity` (17) | Read back from the parcel, where `BarringInfo` writes it first | None |
+| `TelephonyManager#EXTRA_SETUP_EVENT_LIST` (17) | Local constant; Android 15's contract kept | None. Android 17's `CatService` accepts a SIM's SET UP EVENT LIST with the IMS registration event and forwards it to the IMS app; Android 15's declines that event ("beyond terminal capability"), so the SIM never expects it. ImsStack sends the event only under `ims.usat_reg_event_download_policy_int` 1-3; its default is 0 (never) and no carrier data sets it. Backporting 17's acceptance would promise the SIM an event nothing sends |
+| `TelephonyManager#requestUiccIari` (17) | No IARIs | None: the IARIs only feed that same policy (3) |
+| `DomainSelectionEmergencyModeListener` (16) | Not registered | None: the ROM leaves domain selection off (`config_domain_selection_service_component_name` is empty) and joan's HIDL radio has no emergency mode, so it would never fire |
 
-## Missing on the platform, not version-specific
+## Platform pieces LineageOS lacks, now supplied
 
-- **GBA.** ImsStack's Ut/XCAP (call forwarding, waiting and barring
-  settings over IMS) authenticates through
-  `TelephonyManager#bootstrapAuthenticationRequest`, which needs a
-  `GbaService`. AOSP ships only the API; LineageOS has none
-  (`config_gba_package` is empty). Carriers whose XCAP server asks for
-  GBA will fail those settings. Fix: a small `GbaService` app (GBA_ME,
-  3GPP TS 33.220 / 24.109, AKA through `getIccAuthentication`), usable by
-  both the zip and a source build.
-- **Upstream placeholders.** `imsstack-prebuilt` is an empty library in
-  AOSP, `imsstack-carrier-config-ext` is optional and not public, and the
-  per-carrier public config assets are empty. The carrier data comes from
+- **GBA** (ImsStack 0008, device patch 0002, the zip's phone overlay).
+  Ut/XCAP authenticates with GBA through
+  `TelephonyManager#bootstrapAuthenticationRequest`; Android 15's
+  `gba_mode_int` defaults to GBA_ME for every carrier and no carrier data
+  overrides it; the request goes to the `GbaService` in TeleService's
+  `config_gba_package`, which is empty on LineageOS, and AOSP ships none.
+  `ImsStackGbaService` does GBA_ME with the carrier's BSF (TS 24.109,
+  TS 33.220), checked on the host against a BSF of the test's own.
+- **IMS, XCAP and emergency APNs** (`ImsApnGate` in the zip,
+  `vendor/apn/aosp-ims.xml` in a source build). LineageOS's list has IMS
+  APNs for about 200 networks, the Pixel data it converts for about 1400.
+  Android 15 falls back to "ims" and "sos" by itself; the rest (Verizon's
+  MVNOs, every XCAP APN) are added only for a type the SIM lacks and at
+  the level its APNs already come from.
+
+## Carried as upstream has them
+
+- **EVS**: ImsMedia's encoder and decoder are TODOs (ImsStack 0007 stops
+  offering it).
+- **SIP delegates (RCS single registration)**: commented out in
+  `ImsService#getImsServiceCapabilities` upstream, so no
+  `android.hardware.telephony.ims.singlereg` feature is declared.
+- **Upstream placeholders**: `imsstack-prebuilt` is empty in AOSP,
+  `imsstack-carrier-config-ext` is optional and not public, and the
+  per-carrier public config assets are empty; the carrier data comes from
   LineageOS instead (`aosp-ims/carrier/`).
-- **EVS.** ImsMedia's encoder and decoder are TODOs upstream (ImsStack 0007).
+- **Limited admin SMS (Verizon PCO 0xFF00)**: the PCO receiver is not in
+  any carrier config's signal list, and the feature is off
+  (`imssms.support_limited_admin_sms_mode_bool` false everywhere), so
+  registration never waits for it.
 
 ## joan's hardware
 
@@ -68,18 +91,23 @@ modem-side IMS traffic priority.
 
 ## Zip-only compromises (a platform-signed source build has none)
 
-The signature permissions `ACCESS_SURFACE_FLINGER` (video surfaces),
-`INTERACT_ACROSS_USERS_FULL` (work profiles), `READ_ACTIVE_EMERGENCY_SESSION`
-(ImsStack 0004 falls back) and `MANAGE_IPSEC_TUNNELS` (adb app-op for
-IWLAN); ImsMedia inside ImsStack's uid instead of `android.uid.phone`;
-`priv_app` instead of `platform_app`; runtime grants on a booted ROM
-("Calling permissions").
+- `READ_ACTIVE_EMERGENCY_SESSION`: ImsStack 0004 falls back to the call
+  state.
+- `MANAGE_IPSEC_TUNNELS`: IWLAN gets the app-op over adb instead.
+- `ACCESS_SURFACE_FLINGER`, `INTERACT_ACROSS_USERS_FULL`: requested but
+  unused. ImsMedia draws video into the surfaces the dialer hands it
+  (`ANativeWindow`), and neither app makes a cross-user call.
+- ImsMedia runs inside ImsStack's uid instead of `android.uid.phone`, as
+  `priv_app` instead of `platform_app`; the uid's persistent main process
+  gives it the microphone capability while in the background.
+- Runtime grants on a ROM that has already booted: "Calling permissions".
 
 ## Not yet verified
 
 - On the bench (US998, T-Mobile): IPsec registration and outgoing call
   signalling work; call media is pending (bench 4). Untested: incoming
-  calls, SMS over IMS, Wi-Fi calling and handover, emergency calls, Ut,
-  conference, video, RTT, dual SIM, other carriers and models.
+  calls, SMS over IMS, Wi-Fi calling and handover, emergency calls, Ut
+  (now with GBA), conference, video, RTT, dual SIM, other carriers and
+  models, the APN gate on a phone.
 - The source-build kit has not been compiled in a LineageOS tree.
 - ImsStack's own unit tests (instrumentation tests) have not run.

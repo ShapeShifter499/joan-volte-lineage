@@ -121,7 +121,7 @@ permission steps.
 | Kind | Handled by |
 |---|---|
 | Privileged permissions | Each module's own allowlist, installed next to it on `system_ext` by its `Android.bp`: `privapp_permissions_com.android.imsstack`, `privapp-permlist_com.google.android.iwlan.xml`, `privapp-permissions_com.android.telephony.qns`. ImsMedia requests none. |
-| Signature permissions | The platform key: `ACCESS_SURFACE_FLINGER`, `INTERACT_ACROSS_USERS_FULL` (ImsStack), `MANAGE_IPSEC_TUNNELS` (IWLAN), `USE_IMSMEDIA`. These are what the zip has to do without. |
+| Signature permissions | The platform key: `ACCESS_SURFACE_FLINGER`, `INTERACT_ACROSS_USERS_FULL` (ImsStack; requested, though nothing in the stack uses either), `MANAGE_IPSEC_TUNNELS` (IWLAN), `USE_IMSMEDIA`. These are what the zip has to do without. |
 | Runtime permissions | `default-permissions-ims.xml` from the device patch, granted on first boot and after each system update: microphone and camera for ImsMedia, phone state and location for ImsStack, IWLAN and QNS. |
 | Hidden APIs | Platform-signed apps are exempt from the hidden API policy. |
 | User types | `sysconfig_com.android.imsstack` and `preinstalled-packages-imsmedia.xml` install both for the system user. |

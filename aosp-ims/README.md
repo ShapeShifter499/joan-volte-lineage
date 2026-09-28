@@ -220,9 +220,11 @@ pinned in `upstream.lock`.
   calling available on the device; IWLAN and QNS as the WLAN data,
   network and qualified-networks services.
 - **What it cannot have.** `ACCESS_SURFACE_FLINGER` and
-  `INTERACT_ACROSS_USERS_FULL` are signature-only: video surfaces and
-  work profiles may misbehave. `MANAGE_IPSEC_TUNNELS` comes from the adb
-  app-op instead.
+  `INTERACT_ACROSS_USERS_FULL` are signature-only, but nothing uses
+  them: ImsMedia draws video into the surfaces the dialer hands it
+  (`ANativeWindow`, no SurfaceFlinger calls), and neither app makes a
+  cross-user call. `MANAGE_IPSEC_TUNNELS` comes from the adb app-op
+  instead.
 
 ## How it builds
 
