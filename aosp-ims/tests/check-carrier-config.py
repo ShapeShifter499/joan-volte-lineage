@@ -63,7 +63,9 @@ def parse_blocks(text):
         vals = {}
         for el in cc:
             name = el.get('name')
-            if el.tag == 'boolean':
+            if el.tag == 'int':
+                vals[el.get('name')] = int(el.get('value'))
+            elif el.tag == 'boolean':
                 vals[name] = el.get('value') == 'true'
             elif el.tag == 'string':
                 vals[name] = el.text or ''

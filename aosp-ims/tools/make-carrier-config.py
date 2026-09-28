@@ -61,8 +61,16 @@ KEY_EPDG_PRIORITY = 'iwlan.epdg_address_priority_int_array'
 EPDG_ADDRESS_STATIC, EPDG_ADDRESS_PLMN = 0, 1
 
 # The last block, for every SIM.
+# ims.reg_default_wait_time_int: a failed registration refresh retries
+# after this many seconds. With no value the default is a minutes-long
+# P-CSCF penalty box, which turns LineageOS 22.2's ePDG tunnel
+# teardown/rebuild cycle (new network id under the stack) into a long
+# unregistered gap - the refresh socket dies with errno 113 against the
+# gone network and the stack sits out the box. Retrying in seconds
+# rides out the cycle; the rebuilt tunnel is up well inside a minute.
 EVERY_SIM = [(KEY_VOLTE, True), (KEY_WFC, True), (KEY_HIDE_4G, False),
-             (KEY_EDITABLE_4G, True), (KEY_ALLOW_TURNOFF_IMS, True)]
+             (KEY_EDITABLE_4G, True), (KEY_ALLOW_TURNOFF_IMS, True),
+             ('ims.reg_default_wait_time_int', 5)]
 
 
 def operator_of(profile):
@@ -137,6 +145,8 @@ def render_block(attrs, comment, values):
     for key, value in values:
         if isinstance(value, bool):
             lines.append(f'        <boolean name="{key}" value="{str(value).lower()}" />')
+        elif isinstance(value, int):
+            lines.append(f'        <int name="{key}" value="{value}" />')
         elif isinstance(value, list):
             lines.append(f'        <int-array name="{key}" num="{len(value)}">')
             lines += [f'            <item value="{v}" />' for v in value]
