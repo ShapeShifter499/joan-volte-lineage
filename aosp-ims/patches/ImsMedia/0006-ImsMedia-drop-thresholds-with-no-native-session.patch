@@ -1,0 +1,37 @@
+From c4fa6f30bf1992d44f17ba44d40ea875dea6dcba Mon Sep 17 00:00:00 2001
+From: Fulgor Nymvale <fulgor@nym-skyforge>
+Date: Mon, 28 Sep 2026 06:56:04 -0700
+Subject: [PATCH] Drop media-quality thresholds that arrive with no native
+ session
+
+A threshold delivered to an AudioSession whose native session is gone
+(closed, or the framework raced the close) crashed the service with a
+NullPointerException, taking the media path away from every later call.
+The deferred-open parking only covered the pre-open window. Drop the
+message with a warning instead; thresholds only matter once a session
+exists.
+
+Assisted-by: ZCode:GLM-5.3-Flash
+Signed-off-by: Lance <Gero3977@gmail.com>
+---
+ service/src/com/android/telephony/imsmedia/AudioSession.java | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/service/src/com/android/telephony/imsmedia/AudioSession.java b/service/src/com/android/telephony/imsmedia/AudioSession.java
+index 74a85b5..762d0ed 100644
+--- a/service/src/com/android/telephony/imsmedia/AudioSession.java
++++ b/service/src/com/android/telephony/imsmedia/AudioSession.java
+@@ -537,6 +537,10 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+             // The native open is deferred; apply the threshold when it runs.
+             Log.i(TAG, "setMediaQualityThreshold before native open: parking");
+             mDeferredCalls.add(() -> mLocalSession.setMediaQualityThreshold(threshold));
++        } else if (mLocalSession == null) {
++            // No session at all (closed, or the framework raced the close):
++            // drop the threshold instead of crashing the service.
++            Log.w(TAG, "setMediaQualityThreshold with no native session: dropped");
+         } else {
+             mLocalSession.setMediaQualityThreshold(threshold);
+         }
+-- 
+2.55.0
+

@@ -1,0 +1,63 @@
+From 012228b5f00de5263d99ace76ba713ffa509c16c Mon Sep 17 00:00:00 2001
+From: Fulgor Nymvale <fulgor@nym-skyforge>
+Date: Mon, 28 Sep 2026 06:56:28 -0700
+Subject: [PATCH] ImsStack: swap an inverted codec range instead of crashing
+ call setup
+
+updateMediaProfileFromMediaInfoForAudioCodecAttributes built Range
+objects straight from the MediaInfo codec fields; Range throws when
+lower exceeds upper, and one degenerate fill (media service unreachable
+at that moment) crashed the stack in onCallInitiating - every outbound
+dial after it died instantly. Swap an inverted range and log it.
+
+Assisted-by: ZCode:GLM-5.3-Flash
+Signed-off-by: Lance <Gero3977@gmail.com>
+---
+ .../imsservice/mmtel/ImsCallMediaUtils.java   | 31 ++++++++++++++++---
+ 1 file changed, 27 insertions(+), 4 deletions(-)
+
+diff --git a/java/src/com/android/imsstack/imsservice/mmtel/ImsCallMediaUtils.java b/java/src/com/android/imsstack/imsservice/mmtel/ImsCallMediaUtils.java
+index aed2e25..d30057b 100644
+--- a/java/src/com/android/imsstack/imsservice/mmtel/ImsCallMediaUtils.java
++++ b/java/src/com/android/imsstack/imsservice/mmtel/ImsCallMediaUtils.java
+@@ -497,10 +497,33 @@ public class ImsCallMediaUtils {
+             return;
+         }
+ 
+-        Range<Float> bitrateRange = new Range<>(fromAttributes.mBitrateStartKbps,
+-                fromAttributes.mBitrateEndKbps);
+-        Range<Float> bandwidthRange = new Range<>(fromAttributes.mBandwidthStartKhz,
+-                fromAttributes.mBandwidthEndKhz);
++        // Range throws when lower exceeds upper, which takes the whole stack
++        // down at call setup. The MediaInfo is filled from the negotiated
++        // codec state, and while the media service is unreachable the fields
++        // can arrive degenerate (e.g. start set, end zero). Swap an inverted
++        // range rather than crash the call that carries it.
++        float bStart = fromAttributes.mBitrateStartKbps;
++        float bEnd = fromAttributes.mBitrateEndKbps;
++        if (bStart > bEnd)
++        {
++            android.util.Log.w("ImsStackMedia", "inverted bitrate range " + bStart + ">" + bEnd
++                    + "; swapping");
++            float t = bStart;
++            bStart = bEnd;
++            bEnd = t;
++        }
++        float wStart = fromAttributes.mBandwidthStartKhz;
++        float wEnd = fromAttributes.mBandwidthEndKhz;
++        if (wStart > wEnd)
++        {
++            android.util.Log.w("ImsStackMedia", "inverted bandwidth range " + wStart + ">" + wEnd
++                    + "; swapping");
++            float t = wStart;
++            wStart = wEnd;
++            wEnd = t;
++        }
++        Range<Float> bitrateRange = new Range<>(bStart, bEnd);
++        Range<Float> bandwidthRange = new Range<>(wStart, wEnd);
+ 
+         android.telephony.ims.AudioCodecAttributes toAttributes =
+                 new android.telephony.ims.AudioCodecAttributes(fromAttributes.mBitrateKbps,
+-- 
+2.55.0
+
