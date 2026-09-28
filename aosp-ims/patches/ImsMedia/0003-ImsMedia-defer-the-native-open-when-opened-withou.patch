@@ -1,0 +1,181 @@
+From 586a51bc25e34cd2df9937abe0abf3d3a1ef0b17 Mon Sep 17 00:00:00 2001
+From: Fulgor Nymvale <fulgor@nym-skyforge>
+Date: Mon, 28 Sep 2026 01:23:38 -0700
+Subject: [PATCH] Defer the native open when AudioSession opens without a
+ config
+
+The ImsMedia API contract lets a caller open a session before the remote
+SDP exists (null RtpConfig) and update it later with modifySession - and
+the joan stack does exactly that on MT: open at ring time, modify at
+answer. The service ignored the contract: it handed an empty config to
+the native engine, whose graphs cannot be created from it, and the open
+eventually failed RESULT_NOT_READY after the caller had already given up
+waiting. Answer a config-less open with success immediately (the session
+exists, it carries no media yet), then run the native open with the
+first modifySession's config and report its result as the modify
+response.
+
+Also parks the framework calls that touch the native session while the
+open is deferred (media-quality thresholds arrive before the native open
+completes and crashed the service on null), replaying them once the
+native session exists.
+
+Assisted-by: ZCode:GLM-5.3-Flash
+Signed-off-by: Lance <Gero3977@gmail.com>
+---
+ .../telephony/imsmedia/AudioSession.java      | 88 ++++++++++++++++++-
+ 1 file changed, 86 insertions(+), 2 deletions(-)
+
+diff --git a/service/src/com/android/telephony/imsmedia/AudioSession.java b/service/src/com/android/telephony/imsmedia/AudioSession.java
+index d53565b..74a85b5 100644
+--- a/service/src/com/android/telephony/imsmedia/AudioSession.java
++++ b/service/src/com/android/telephony/imsmedia/AudioSession.java
+@@ -89,6 +89,21 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+     private AudioService mAudioService;
+     private AudioListener mAudioListener;
+     private AudioLocalSession mLocalSession;
++    // A config-less openSession (the API contract allows opening before the
++    // remote SDP exists and updating via modifySession) is answered
++    // immediately with success and parked here; the native engine cannot
++    // create a graph from an empty config. The first modifySession then
++    // runs the native open with the real config, and its result is reported
++    // as the modify response, matching the caller's protocol.
++    private Utils.OpenSessionParams mDeferredOpen;
++    // True while the parked session's native open is in flight; its
++    // EVENT_OPEN_SESSION_* must be reported as modify responses.
++    private boolean mDeferredModifyPending;
++    private AudioConfig mLastDeferredConfig;
++    // Framework calls that arrive between the config-less open and the
++    // native open (media-quality thresholds, DTMF...) are parked with the
++    // deferred parameters and replayed once the native session exists.
++    private final java.util.ArrayList<Runnable> mDeferredCalls = new java.util.ArrayList<>();
+ 
+     AudioSession(final int sessionId, final IImsAudioSessionCallback callback) {
+         mSessionId = sessionId;
+@@ -303,10 +318,29 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+                     handleAdjustDelay((int) msg.obj);
+                     break;
+                 case EVENT_OPEN_SESSION_SUCCESS:
+-                    handleOpenSuccess(msg.obj);
++                    if (mDeferredModifyPending) {
++                        mDeferredModifyPending = false;
++                        Log.i(TAG, "deferred open succeeded; reporting as modify response");
++                        handleOpenSuccess(msg.obj);
++                        if (mLastDeferredConfig != null) {
++                            handleModifySessionResponse(mLastDeferredConfig,
++                                    ImsMediaSession.RESULT_SUCCESS);
++                        }
++                    } else {
++                        handleOpenSuccess(msg.obj);
++                    }
+                     break;
+                 case EVENT_OPEN_SESSION_FAILURE:
+-                    handleOpenFailure((int)msg.obj);
++                    if (mDeferredModifyPending) {
++                        mDeferredModifyPending = false;
++                        Log.e(TAG, "deferred open failed: "
++                                + msg.obj + "; reporting as modify response");
++                        if (mLastDeferredConfig != null) {
++                            handleModifySessionResponse(mLastDeferredConfig, (int) msg.obj);
++                        }
++                    } else {
++                        handleOpenFailure((int)msg.obj);
++                    }
+                     break;
+                 case EVENT_SESSION_CLOSED:
+                     handleSessionClosed();
+@@ -349,6 +383,21 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+     private void handleOpenSession(OpenSessionParams sessionParams) {
+         if (isAudioOffload()) {
+             mOffloadService.openSession(mSessionId, sessionParams);
++        } else if (sessionParams.getRtpConfig() == null) {
++            // Opening before the remote SDP exists: answer success at once
++            // (the session exists; it carries no media yet) and run the
++            // native open when the first modifySession brings a config.
++            // Opening into the engine with an empty config fails
++            // (RESULT_NOT_READY), which used to tear the call down.
++            Log.i(TAG, "openSession without RtpConfig: deferring native open"
++                    + " to the first modifySession");
++            mAudioListener.setMediaCallback(sessionParams.getCallback());
++            mDeferredOpen = sessionParams;
++            try {
++                mCallback.onOpenSessionSuccess(this);
++            } catch (RemoteException e) {
++                Log.e(TAG, "Failed to notify deferred openSuccess", e);
++            }
+         } else {
+             mAudioListener.setMediaCallback(sessionParams.getCallback());
+             int result = mAudioService.openSession(mSessionId, sessionParams);
+@@ -359,6 +408,10 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+     }
+ 
+     private void handleCloseSession() {
++        mDeferredOpen = null;
++        mDeferredModifyPending = false;
++        mLastDeferredConfig = null;
++        mDeferredCalls.clear();
+         if (isAudioOffload()) {
+             mOffloadService.closeSession(mSessionId);
+         } else {
+@@ -373,6 +426,24 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+             } catch (RemoteException e) {
+                 Log.e(TAG, "Exception occurred in modifySession", e);
+             }
++        } else if (mDeferredOpen != null) {
++            // First config since a config-less open: this modify becomes the
++            // native open, so the graph is created with a usable config. The
++            // caller already received the open success; the native open's
++            // result is reported as this modify's response.
++            OpenSessionParams params = mDeferredOpen;
++            mDeferredOpen = null;
++            mLastDeferredConfig = config;
++            mDeferredModifyPending = true;
++            Log.i(TAG, "deferred open: opening natively with the first RtpConfig");
++            mAudioListener.setMediaCallback(params.getCallback());
++            int result = mAudioService.openSession(mSessionId,
++                    new OpenSessionParams(params.getRtpFd(), params.getRtcpFd(),
++                            config, params.getCallback()));
++            if (result != ImsMediaSession.RESULT_SUCCESS) {
++                mDeferredModifyPending = false;
++                handleModifySessionResponse(config, result);
++            }
+         } else {
+             mLocalSession.modifySession(config);
+         }
+@@ -403,6 +474,10 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+     }
+ 
+     private void handleSendDtmf(char digit, int duration) {
++        if (mLocalSession == null && mDeferredOpen != null) {
++            mDeferredCalls.add(() -> mLocalSession.sendDtmf(digit, duration));
++            return;
++        }
+         if (isAudioOffload()) {
+             try {
+                 mHalSession.sendDtmf(digit, duration);
+@@ -458,6 +533,10 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+             } catch (RemoteException e) {
+                 Log.e(TAG, "Exception occurred in HAL setMediaQualityThreshold", e);
+             }
++        } else if (mLocalSession == null && mDeferredOpen != null) {
++            // The native open is deferred; apply the threshold when it runs.
++            Log.i(TAG, "setMediaQualityThreshold before native open: parking");
++            mDeferredCalls.add(() -> mLocalSession.setMediaQualityThreshold(threshold));
+         } else {
+             mLocalSession.setMediaQualityThreshold(threshold);
+         }
+@@ -498,6 +577,11 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+         } catch (RemoteException e) {
+             Log.e(TAG, "Failed to notify openSuccess", e);
+         }
++
++        for (Runnable r : mDeferredCalls) {
++            r.run();
++        }
++        mDeferredCalls.clear();
+     }
+ 
+     private void handleOpenFailure(int error) {
+-- 
+2.55.0
+
