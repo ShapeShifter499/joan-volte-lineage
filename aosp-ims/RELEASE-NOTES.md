@@ -98,9 +98,13 @@ The script is attached here, inside the zips, and at
 `aosp-ims/zip/grant-permissions.sh` in the repository. On Windows use
 `grant-permissions.bat` (in the repository at
 `aosp-ims/zip/grant-permissions.bat`; run it from a Command Prompt with
-the phone connected — it needs adb on your PATH). It also grants
-everything above. Without `sh` (macOS/Linux) or the batch file
-(Windows), run its commands directly:
+the phone connected — it needs adb on your PATH). An on-device variant
+also ships in the zips: `grant-on-device.sh` — copy it to the phone
+(anywhere), open a terminal app or run it over adb, and it grants the
+same set; run over `adb shell` it can set everything including the
+IWLAN app-op, run from a phone terminal app it can only do what its
+uid allows. It also grants everything above. Without any of these,
+run the commands directly:
 
 ```
 adb shell pm grant com.android.imsstack android.permission.RECORD_AUDIO
