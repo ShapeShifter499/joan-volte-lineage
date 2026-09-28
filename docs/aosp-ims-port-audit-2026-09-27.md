@@ -8,9 +8,15 @@ done by diffing the sources, not by reading release notes. Sources:
 `build/soong` at `android15-qpr2-release` and `android-17.0.0_r1`,
 `system/sepolicy` and `build/release` at the same,
 the modules at the commits in `aosp-ims/upstream.lock`, LineageOS's
-`vendor/apn` and `android` manifest (lineage-22.2), and the 2026-09-20
-joan nightly (TeleService resources, product APN list, vendor VINTF
-manifest).
+`vendor/apn`, `vendor/lineage` and `android` manifest (lineage-22.2), its
+forks of frameworks/base, frameworks/opt/telephony, TeleService,
+TelephonyProvider and IWLAN at the 2026-09-20 nightly's commits, and that
+nightly itself (TeleService resources, product APN list, vendor VINTF
+manifest, build properties). The Android 15 sources are
+`android-15.0.0_r32`, the tag LineageOS 22.2 builds its unforked projects
+from: frameworks/base, frameworks/opt/telephony, frameworks/opt/net/ims,
+TeleService, CarrierConfig and TelephonyProvider at
+`android15-qpr2-release` are that tag's trees exactly.
 
 ## Verdict
 
@@ -20,8 +26,12 @@ nothing on LineageOS 22.2, the flags match the Android 17 release, and
 the IMS settings Android 17's own carrier data changed are carried over.
 The two platform pieces the stack needs and LineageOS lacks, a GBA
 service and the carriers' IMS APNs, are now supplied (below), and the
-source-build kit passes Android 15's own Soong. What remains is
-on-device verification and joan's own hardware limits.
+source-build kit passes Android 15's own Soong. LineageOS's own changes
+on the IMS path were reviewed file by file against AOSP (62 files; CI
+holds them to the review). Two LineageOS-only switches matter: the
+incoming-call property, set, and the build number that LineageOS alone
+uses to tell a system update, which the repacked ROM now changes. What
+remains is on-device verification and joan's own hardware limits.
 
 ## What was checked
 
@@ -40,6 +50,7 @@ on-device verification and joan's own hardware limits.
 | Reflection | None in ImsStack or ImsMedia | No hidden run-time lookups |
 | Permission and sysconfig files | Ours list upstream's names; the zip adds `WRITE_APN_SETTINGS` for its APN gate | Same grants as upstream |
 | SELinux | Android 17 has no ImsStack-specific policy (runs as `platform_app`) | Nothing to port |
+| LineageOS 22.2's own changes (its forks, against `android-15.0.0_r32`: frameworks/base's telephony, location, permission, package-manager, audio and network-policy code, frameworks/opt/telephony, TeleService, TelephonyProvider, IWLAN) | 62 files differ. The IMS API classes, the IMS radio path, the carrier id list and the APN table are AOSP's; CarrierConfigManager only adds 5G icon keys. Two properties in `ImsPhoneCallTracker` are LineageOS-only (below, and ringback's, which joan leaves at AOSP's behaviour). LineageOS keys system-update detection (PackageManager's upgrade scan and package cache, default permission grants, TeleService's carrier config cache) on `ro.build.version.incremental`, because joan's fingerprints are LG's stock one. TeleService refuses carrier-config overrides from the shell. Its network policy denies apps without restricted-network access once, on upgrade from an older LineageOS. `vendor/lineage` gives Shannon's and MediaTek's IMS apps location | The incoming-call switch and the build number are handled (below). The zip's carrier gate overrides from a system app, not persistently, so the shell rule and the cache don't touch it. ImsStack and IWLAN hold `CONNECTIVITY_USE_RESTRICTED_NETWORKS`. ImsStack gets location from its default-permissions file, `LOCATION_BYPASS` and `allow-ignore-location-settings`, installed where Android 15 honours them. `tests/check-lineage-forks.py` (in CI) holds every changed file and property to the review in `tests/lineage-forks.txt`, and checks the rest is still unforked |
 
 ## The four Android 16/17 APIs (ImsStack 0001)
 
@@ -94,6 +105,29 @@ on-device verification and joan's own hardware limits.
   answer. ImsMedia 0002 declares it; outbound calls then work end to end.
   ImsStack 0009 closes the teardown race that death exposed, and 0010
   logs a refused incoming call.
+
+## Found in LineageOS's own changes
+
+- **The build number is joan's only update signal.** On joan every
+  partition's fingerprint is LG's stock one, in every LineageOS build, so
+  LineageOS keys system-update detection on `ro.build.version.incremental`
+  (`PackagePartitions`, PackageManager's `Settings`, the default permission
+  grants and TeleService's `CarrierConfigLoader`). The repacked ROM kept
+  its nightly's number, so flashed over that nightly without a wipe it
+  booted as no update: no default permissions for ImsStack (the
+  microphone, which the README promised at first boot), and a package
+  cache still free to use the manifest an earlier IMS zip left at the
+  same path. `tools/repack-rom.sh` now gives the ROM its own number, the
+  nightly's plus `.aospims.` and a hash of what it adds, and
+  `tests/check-rom.sh` checks it. The zip already copes another way: it
+  re-dates what it installs so the cache is refreshed, and the "Calling
+  permissions" entry grants at run time. A tree build gets a new number
+  with every build.
+- **Nothing else in the call path.** With the incoming-call property
+  true, `onIncomingCall` waits for `processIncomingCall`, which returns no
+  listener only without an `ImsManager` or when `takeCall` throws. Android
+  15's `takeCall` refuses a session that is no longer alive, and
+  ImsStack's incoming session starts IDLE, which counts as alive.
 
 ## Carried as upstream has them
 

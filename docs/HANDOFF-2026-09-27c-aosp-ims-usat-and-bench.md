@@ -24,8 +24,10 @@ and 2 are done.
   an app-drawer entry, enabled by ImsStack at startup only while
   RECORD_AUDIO is missing, that asks for the runtime permissions with
   Android's dialogs. A zip flashed onto a booted ROM never gets the
-  default grants (they apply on a fingerprint change only). Untested on a
-  phone. Wi-Fi calling still needs adb once (IWLAN's app-op).
+  default grants (LineageOS applies them only when
+  `ro.build.version.incremental` changes: see "LineageOS's own changes"
+  below). Untested on a phone. Wi-Fi calling still needs adb once
+  (IWLAN's app-op).
 - Installer free-space check uses statfs (toybox df overstated it).
 - Local checks at handoff: `tests/UsatCheck.java` 20 cases,
   `check-carrier-config.py` 2866 SIM identities (three layers, 1473
@@ -126,6 +128,39 @@ What to look for: an incoming call rings (`ImsStackNotify` in the log
 if the framework still refuses one), outbound calls keep working, and
 `getprop ro.telephony.block_binder_thread_on_incoming_calls` is `true`
 after the flash (`/system/etc/aosp-ims-incoming-calls.flipped` exists).
+
+## LineageOS's own changes (09-28)
+
+Every LineageOS fork on the IMS path was diffed file by file against
+`android-15.0.0_r32`, the tag LineageOS 22.2 builds its unforked projects
+from: frameworks/base's telephony, location, permission, package-manager,
+audio and network-policy code, frameworks/opt/telephony, TeleService,
+TelephonyProvider, IWLAN. 62 files differ; each is in
+`aosp-ims/tests/lineage-forks.txt` with its diff hash and verdict, and
+`tests/check-lineage-forks.py` (CI) fails on anything new. `--list`
+prints a fresh review after moving the `LINEAGE_*` pins in
+`upstream.lock`, and `--heads` shows what LineageOS changed since. The
+AOSP sources used everywhere else are that tag's trees exactly.
+- One real gap, fixed: on joan every fingerprint is LG's stock one, so
+  LineageOS tells a system update by `ro.build.version.incremental` alone
+  (PackageManager's upgrade scan and package cache, default permission
+  grants, TeleService's carrier config cache). The repacked ROM kept the
+  nightly's number. Dirty-flashed over that nightly it booted as no
+  update: no default permissions for ImsStack, despite the README's
+  promise. `repack-rom.sh` now sets `<nightly>.aospims.<hash of what it
+  adds>` (in `ro.build.version.incremental`,
+  `ro.system.build.version.incremental` and `ro.build.display.id`), and
+  `check-rom.sh` checks it. Checked locally: a repack gives
+  `e507d26f2f.aospims.b4e3d4ce` and passes; the official props fail the
+  check.
+- LineageOS's other `ImsPhoneCallTracker` switch,
+  `ro.telephony.handle_audio_direction_changes_between_call_state_changes`,
+  is unset on joan (AOSP's ringback behaviour); `check-rom.sh` checks it
+  stays so.
+- Nothing else in the incoming path returns "no listener" for a live
+  call: `processIncomingCall` does so only without an `ImsManager` or when
+  `takeCall` throws, and ImsStack's incoming session starts IDLE, which
+  Android 15 counts as alive.
 
 ## Still to do
 
