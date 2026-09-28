@@ -5,4 +5,7 @@
     <!-- ... and for RCS capability exchange (presence, SIP OPTIONS), which
          ImsStack's RcsFeature provides. -->
     <string name="config_ims_rcs_package" translatable="false">com.android.imsstack</string>
+    <!-- ... and for GBA, which Ut/XCAP authenticates with: the platform has
+         no GBA service of its own (ImsStack 0008). -->
+    <string name="config_gba_package" translatable="false">com.android.imsstack</string>
 </resources>

@@ -64,11 +64,14 @@ javac -J-Xmx4g -encoding UTF-8 -nowarn -proc:none -source 21 -target 21 \
 # The annotation stubs exist only to compile; the platform owns those names.
 rm -rf "$OUT/classes/android/annotation" "$OUT/classes/com/android/internal"
 # USAT call control and MO SMS control decisions (ImsStack 0005, 0006),
-# and the APNs ImsApnGate adds.
-javac -d "$OUT/check" -cp "$OUT/classes" "$HERE/tests/UsatCheck.java" "$HERE/tests/ApnPlanCheck.java"
+# the APNs ImsApnGate adds, and the GBA_ME client (ImsStack 0008) against a
+# local BSF.
+javac -d "$OUT/check" -cp "$OUT/classes" "$HERE/tests/UsatCheck.java" "$HERE/tests/ApnPlanCheck.java" \
+    "$HERE/tests/GbaCheck.java"
 java -cp "$OUT/check:$OUT/classes:$ML/android.jar" UsatCheck
 java -cp "$OUT/check:$OUT/classes" com.android.imsstack.joan.ApnPlanCheck \
     "$HERE/carrier/lineage-pixel-apns.xml"
+java -cp "$OUT/check:$OUT/classes" com.android.imsstack.gba.GbaCheck
 
 # 3. Dex. The framework is library, not program: it is on the device.
 LIBS=()

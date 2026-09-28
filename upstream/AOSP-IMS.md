@@ -46,6 +46,7 @@ are the backport, the same ones the zip is built from:
 | ImsStack 0005 | USAT call control and MO SMS control with no answer from the SIM: joan's RIL completes the envelope with status words 00 00 and no data, which ImsStack took as a refusal, failing every call on a SIM with call control by USIM. With no answer the call is set up as dialled; a real answer from the SIM still counts. Needed in a tree build too: it is the RIL, not the signing, that drops the answer |
 | ImsStack 0006 | Codes a three-digit MNC in those envelopes' location information as 3GPP TS 24.008 says |
 | ImsStack 0007 | Drops EVS from the codec offer: ImsMedia has no EVS codec yet (its encoder and decoder are TODOs), so an EVS call would be silent. Remove this patch once ImsMedia gains one |
+| ImsStack 0008 | Adds `ImsStackGbaService`, a GBA_ME service for platforms with none (LineageOS): Ut/XCAP authenticates with GBA, Android's default GBA mode is GBA_ME for every carrier, and without a service in `config_gba_package` every XCAP server that asks for GBA refuses. The device patch 0002 selects it |
 | ImsMedia 0001 | Lets ImsMedia run inside the caller's own package (the zip's single APK). A separate `ImsMediaService`, as here, is bound as before |
 
 ## Steps
@@ -72,7 +73,8 @@ From the top of a LineageOS 22.2 tree that already builds joan:
    - the backport patches (above) to `packages/modules/ImsStack` and
      `packages/modules/ImsMedia`;
    - `upstream/aosp-ims/device/0001-joan-common-Add-the-AOSP-IMS-stack.patch`
-     to `device/lge/joan-common` (made against `lineage-22.2` at 47c4939,
+     and `0002-joan-common-Use-ImsStack-s-GBA-service.patch` to
+     `device/lge/joan-common` (made against `lineage-22.2` at 47c4939,
      2025-02-11);
    - the per-carrier IMS config (below), spliced into joan-common's
      CarrierConfig `vendor.xml` as a commit of its own. It is 7 MB of
@@ -92,7 +94,8 @@ From the top of a LineageOS 22.2 tree that already builds joan:
      needs modem IMS, which this modem does not have);
    - adds a Telephony overlay: `config_ims_mmtel_package` and
      `config_ims_rcs_package` = `com.android.imsstack`, and
-     `config_support_rtt` true;
+     `config_support_rtt` true (0002 adds `config_gba_package` =
+     `com.android.imsstack`);
    - adds the carrier blocks to CarrierConfig's `vendor.xml` (below);
    - adds `system_ext/etc/default-permissions/default-permissions-ims.xml`
      (below).

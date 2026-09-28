@@ -23,8 +23,10 @@ VS996 (tested so far: US998 on T-Mobile).
 | QNS (`com.android.telephony.qns`) | Moves IMS between LTE and Wi-Fi |
 
 It does VoLTE, Wi-Fi calling, SMS over IMS, video calling (ViLTE), RTT,
-emergency calls over IMS, call forwarding/waiting/barring over Ut/XCAP,
-and conference calls, where the carrier offers them.
+emergency calls over IMS, call forwarding/waiting/barring over Ut/XCAP
+(with a GBA service of its own for the carriers whose XCAP servers ask
+for GBA: LineageOS has none), and conference calls, where the carrier
+offers them.
 
 VoLTE and Wi-Fi calling are offered for every carrier: Wi-Fi calling
 works where the carrier's ePDG accepts the SIM, and IMS stays on LTE

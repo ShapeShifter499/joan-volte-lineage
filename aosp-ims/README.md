@@ -169,7 +169,7 @@ validates against LineageOS's schema.
 
 | Step | State |
 |---|---|
-| ImsStack + ImsMedia Java, against LineageOS 22.2's own framework | done: 7 ImsStack patches, 1 ImsMedia |
+| ImsStack + ImsMedia Java, against LineageOS 22.2's own framework | done: 8 ImsStack patches, 1 ImsMedia |
 | `libimsstack.so`, `libimsmedia.so`, linked against the ROM's libraries | done |
 | IWLAN + QNS (Android 17) for the zip | done: 1 patch each |
 | Single-APK packaging, overlays, permission files | done |
@@ -192,6 +192,7 @@ pinned in `upstream.lock`.
 | ImsStack 0005 | USAT call control with no answer from the SIM. joan's RIL completes the CALL CONTROL envelope with status words 00 00 and no data, which no UICC sends; ImsStack took it as a refusal and failed every MO call on a SIM with call control by USIM (T-Mobile's). With no answer there is no verdict: the call is set up as dialled, and an SMS under MO SMS control sent as is. A real answer from the SIM (busy, an error, or result 01 "not allowed") still blocks |
 | ImsStack 0006 | The location information in those envelopes coded a three-digit MNC in dialling order (310-260 as `13 20 06`); it is now coded as 3GPP TS 24.008 says (`13 00 62`) |
 | ImsStack 0007 | Never offers EVS. ImsMedia's EVS encoder and decoder are still TODOs, so an EVS call would carry no audio; the Pixel-derived config offers EVS for hundreds of carriers. The codec offer keeps AMR-WB and AMR whatever the config says |
+| ImsStack 0008 | ImsStack is also the device's GBA service (`ImsStackGbaService`, selected by the phone's `config_gba_package`). Ut/XCAP authenticates with GBA, which Android asks for by default for every carrier, and neither AOSP nor LineageOS ships a GBA service, so XCAP servers that ask for it refused call forwarding, waiting and barring settings. GBA_ME: HTTP digest AKA with the carrier's BSF (TS 24.109), AKA on the ISIM or USIM, Ks_NAF per TS 33.220 |
 | ImsMedia 0001 | `ImsMediaManager` binds the ImsMedia service in its own package when that package has one (the zip's single APK) |
 | Iwlan 0001 | No physical-network reporting in `DataCallResponse` (Android 16 API) |
 | QNS 0001 | Wi-Fi calling activation without androidx: the activity is a plain `Activity`, and carrier portals open in the browser |
