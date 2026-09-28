@@ -120,6 +120,9 @@ jobs:
       - name: AOSP 17's CarrierConfig changes, regenerated from the pinned sources
         run: aosp-ims/tools/regen-aosp-carrierconfig.sh --check
 
+      - name: LineageOS 22.2's own changes on the IMS path, as reviewed
+        run: python3 aosp-ims/tests/check-lineage-forks.py
+
       - name: Carrier config matches the gate and the device patch
         run: |
           python3 aosp-ims/tests/check-carrier-config.py \

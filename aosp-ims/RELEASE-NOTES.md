@@ -54,6 +54,9 @@ TWRP on this device generally does not.
     can sign with its key); choose to install anyway.
   - It reports itself as `UNOFFICIAL`, so the updater won't replace it
     with an official nightly (which would drop the IMS stack).
+  - It has its own build number, so LineageOS treats flashing it as a
+    system update even over the official 2026-09-20 nightly, without a
+    wipe: the calling permissions are granted at first boot.
 - **`aosp-ims-17.0.0_r1-a15-alpha1-fresh.zip`**: for a phone on LineageOS
   22.2, or a ROM based on it, that never had joan's IMS zip. It refuses a
   phone that has joan, and changes nothing.

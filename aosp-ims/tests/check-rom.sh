@@ -10,6 +10,8 @@
 #   labelled system_file, as the rest of the image is;
 # - the version says UNOFFICIAL, so the updater never offers an official
 #   nightly over it;
+# - the build number (ro.build.version.incremental) is the ROM's own, so
+#   LineageOS treats flashing it over the nightly as a system update;
 # - with an apk directory, the apps in the image are the ones built.
 #
 # Usage: check-rom.sh <rom.zip> [<out/apk dir>]
@@ -77,6 +79,12 @@ grep -q 'joan-viettel-45204-begin' "$T/apns.xml" \
     | grep -c '^ro.telephony.block_binder_thread_on_incoming_calls=true$')" = "1" ] \
     && ok "system: framework incoming-call handling enabled" \
     || bad "system: framework incoming-call handling not enabled"
+# LineageOS's other ImsPhoneCallTracker switch (tests/lineage-forks.txt):
+# false would stop ringback following the call's audio direction.
+debugfs -R "cat /system/build.prop" "$T/system.img" 2>/dev/null \
+    | grep -q '^ro.telephony.handle_audio_direction_changes_between_call_state_changes=false$' \
+    && bad "system: ringback ignores audio-direction changes (LineageOS switch set false)" \
+    || ok "system: ringback follows the call's audio direction, as in AOSP"
 # As the uninstall zip will see them: the backup is the ROM's own list, and
 # the marker is the checksum of the live one (else it re-bases).
 if ! grep -q 'joan-viettel' "$T/apns-orig.xml" && [ "$(wc -c < "$T/apns-orig.xml")" -gt 200 ]; then
@@ -96,6 +104,14 @@ case $ver in
     *-UNOFFICIAL-*) ok "version $ver" ;;
     *) bad "version '$ver' is not marked UNOFFICIAL" ;;
 esac
+inc=$(sed -n 's/^ro.build.version.incremental=//p' <<< "$prop")
+disp=$(sed -n 's/^ro.build.display.id=//p' <<< "$prop")
+if [[ $inc =~ ^[0-9A-Za-z._-]+\.aospims\.[0-9a-f]{8}$ && $disp == *" $inc" ]] \
+    && grep -qxF "ro.system.build.version.incremental=$inc" <<< "$prop"; then
+    ok "build number $inc, the ROM's own"
+else
+    bad "build number '$inc' is the nightly's or not rewritten everywhere"
+fi
 
 if [ -n "$APK" ]; then
     for a in ImsStack Iwlan QualifiedNetworksService; do

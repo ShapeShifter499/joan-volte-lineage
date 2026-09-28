@@ -270,6 +270,15 @@ Checked against the `android15-qpr2-release` sources and the LineageOS
 - The LineageOS manifest carries ImsMedia from AOSP (so the local
   manifest can replace it), IWLAN as LineageOS's fork, and no ImsStack or
   standalone QNS.
+- LineageOS's own changes on the IMS path, in its forks of frameworks/base,
+  frameworks/opt/telephony, TeleService, TelephonyProvider and IWLAN
+  against `android-15.0.0_r32`, were reviewed file by file
+  (`aosp-ims/tests/lineage-forks.txt`; `check-lineage-forks.py` holds the
+  pinned forks to it in CI). Only `ro.telephony.block_binder_thread_on_incoming_calls`
+  needs the tree's help (patch 0003). A tree build changes
+  `ro.build.version.incremental`, which LineageOS on joan uses to tell a
+  system update, with every build, so default permissions are granted
+  and caches rebuilt on the first boot of each one.
 - Android 15 has no IWLAN "legacy mode" any more: binding QNS is all it
   takes for IMS to move to Wi-Fi.
 - The kernel has the IPsec pieces IWLAN needs (`CONFIG_NET_IPVTI`,

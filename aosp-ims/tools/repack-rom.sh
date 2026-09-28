@@ -13,6 +13,9 @@
 #   ro.lineage.releasetype becomes UNOFFICIAL: the ROM says what it is,
 #   and LineageOS's updater stops offering official nightlies, which would
 #   silently remove the IMS stack.
+# - It gets its own build number (ro.build.version.incremental), so that
+#   LineageOS treats flashing it as a system update even over the nightly
+#   it came from (see the build.prop step).
 # - The zip is not signed with LineageOS's key (only LineageOS has it):
 #   LineageOS recovery warns that signature verification failed and asks
 #   before installing.
@@ -102,6 +105,30 @@ echo "   $OLDVER -> $NEWVER"
 sed -i 's/^ro.telephony.block_binder_thread_on_incoming_calls=false$/ro.telephony.block_binder_thread_on_incoming_calls=true/' "$S/build.prop"
 grep -q '^ro.telephony.block_binder_thread_on_incoming_calls=true$' "$S/build.prop" \
     || { echo "build.prop: incoming-call property not enabled"; exit 1; }
+# LineageOS tells a system update by ro.build.version.incremental alone: on
+# joan every partition's fingerprint is LG's stock one, the same in every
+# build, so LineageOS keys PackageManager's upgrade scan and package cache,
+# the default-permission grants and TeleService's carrier config cache on
+# the incremental instead. Dirty-flashed over the nightly it came from, a
+# ROM with that nightly's incremental boots as no update at all: ImsStack
+# gets no default permissions (the microphone), and the package cache may
+# keep the manifest an earlier IMS zip left at the same path. So the ROM
+# gets its own build number, from the files it adds.
+INC=$(sed -n 's/^ro.build.version.incremental=//p' "$S/build.prop")
+[ -n "$INC" ] || { echo "build.prop: no ro.build.version.incremental"; exit 1; }
+ADDED=$(cat "$APK/ImsStack.apk" "$APK/Iwlan.apk" "$APK/QualifiedNetworksService.apk" \
+    "$APK/ImsStackPhoneOverlay.apk" "$APK/ImsStackFrameworkOverlay.apk" "$P"/*.xml \
+    "$ROOT/permissions/android.hardware.telephony.ims.xml" "$ROOT/apn/viettel-45204.xml" \
+    "$ROOT/scripts/merge-viettel-apns.sh" "$HERE/tools/repack-rom.sh" | sha256sum | cut -c1-8)
+NEWINC=$INC.aospims.$ADDED
+sed -i -e "s/^ro.build.version.incremental=.*/ro.build.version.incremental=$NEWINC/" \
+       -e "s/^ro.system.build.version.incremental=.*/ro.system.build.version.incremental=$NEWINC/" \
+       -e "s/^\(ro.build.display.id=.*\) $INC\$/\1 $NEWINC/" "$S/build.prop"
+[ "$(grep -c -e "^ro.build.version.incremental=$NEWINC\$" \
+             -e "^ro.system.build.version.incremental=$NEWINC\$" \
+             -e "^ro.build.display.id=.* $NEWINC\$" "$S/build.prop")" = 3 ] \
+    || { echo "build.prop: build number not rewritten"; exit 1; }
+echo "   build number $INC -> $NEWINC"
 umount "$R/mnt"
 e2fsck -fn "$R/system.img" >/dev/null
 

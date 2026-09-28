@@ -96,7 +96,8 @@ it), so:
 - **Calls** need ImsStack's runtime permissions, the microphone above
   all: ImsMedia, in ImsStack's package, records the call. The
   default-permissions file grants them on the first boot after a ROM
-  install or update, so the repacked ROM, and a zip flashed in the same
+  install or update, so the repacked ROM (an update even over its own
+  nightly: see [The ROM](#the-rom)), and a zip flashed in the same
   recovery session as a ROM update, need nothing more. A zip flashed
   onto a ROM that has already booted gets them from **Calling
   permissions** in the app drawer. ImsStack puts it there while the
@@ -206,7 +207,8 @@ validates against LineageOS's schema.
 
 | Step | State |
 |---|---|
-| ImsStack + ImsMedia Java, against LineageOS 22.2's own framework | done: 8 ImsStack patches, 1 ImsMedia |
+| ImsStack + ImsMedia Java, against LineageOS 22.2's own framework | done: 10 ImsStack patches, 2 ImsMedia |
+| LineageOS 22.2's own changes on the IMS path | reviewed, 62 files and 3 properties; `tests/check-lineage-forks.py` (in CI) |
 | `libimsstack.so`, `libimsmedia.so`, linked against the ROM's libraries | done |
 | IWLAN + QNS (Android 17) for the zip | done: 1 patch each |
 | Single-APK packaging, overlays, permission files | done |
@@ -316,6 +318,37 @@ UNOFFICIAL, and writes a block OTA recovery flashes the same way. The
 images are written whole, at exactly the partition sizes the OTA's
 dynamic-partition ops declare. Only LineageOS can sign with its key, so
 recovery warns that verification failed and asks before installing.
+
+It also gives the ROM its own build number: `ro.build.version.incremental`
+becomes the nightly's plus `.aospims.` and a hash of what the repack adds
+(Settings > About shows it). On joan, LineageOS tells a system update by
+that number alone, because every partition's fingerprint is LG's stock
+one in every build. PackageManager's upgrade scan and package cache, the
+default permission grants and TeleService's carrier config cache all key
+on it. So flashing the ROM over the nightly it came from, without a
+wipe, is still an update: ImsStack gets its permissions at first boot,
+and the package cache can't keep an older IMS zip's manifest.
+
+### LineageOS's own changes
+
+LineageOS builds most of Android 15 from AOSP's `android-15.0.0_r32` and
+forks a few projects. `tests/check-lineage-forks.py` (in CI) diffs the
+forks on the IMS path against that tag at the commits `upstream.lock`
+pins: frameworks/base's telephony, location, permission,
+package-manager, audio and network-policy code, frameworks/opt/telephony,
+TeleService, TelephonyProvider and IWLAN. Every file that differs must be
+in `tests/lineage-forks.txt` with the reviewed diff's hash and what it
+means for this stack, and so must every system property LineageOS's added
+code reads. It also checks that CarrierConfig, `frameworks/opt/net/ims`,
+ImsMedia and the Telephony module are still AOSP's in LineageOS's manifest.
+The review found three properties that matter:
+
+- `ro.telephony.block_binder_thread_on_incoming_calls`, set true above;
+- `ro.build.version.incremental`, handled as above;
+- `ro.telephony.handle_audio_direction_changes_between_call_state_changes`,
+  which joan leaves at AOSP's behaviour.
+
+`--heads` shows what LineageOS has changed since the review.
 
 ### Releasing
 

@@ -1,0 +1,84 @@
+# LineageOS 22.2's own changes on the IMS path, as reviewed (2026-09-28), at
+# the commits upstream.lock pins, against AOSP's android-15.0.0_r32.
+# tests/check-lineage-forks.py fails on any change not listed here with the
+# same diff (sha256, 12 hex), and on any property LineageOS's added code
+# names that is not listed.
+#
+# <fork> <path> <diff sha256> <what it changes; what it means for the stack>
+
+# frameworks/base
+frameworks/base core/java/android/content/pm/PackagePartitions.java 8e088d8e230a The package-cache and upgrade key digests ro.build.version.incremental instead of ro.build.fingerprint (joan's fingerprints are LG's stock one in every build). See the property below
+frameworks/base core/res/res/values/config.xml 7514fa803740 A comment and an array type for a display cutout override. None
+frameworks/base services/core/java/com/android/server/audio/AudioService.java b5fc163ea05f Dock headset volume no longer fixed; HDMI-CEC volume control. None (call audio goes through MODE_IN_COMMUNICATION as in AOSP)
+frameworks/base services/core/java/com/android/server/location/gnss/GnssLocationProvider.java 22d83ce4d84e PSDS/XTRA downloads follow the assisted-GPS setting; the SIM identity goes to SUPL only in an emergency, which the phone process flags for IMS emergency calls too. None
+frameworks/base services/core/java/com/android/server/location/provider/LocationProviderManager.java 30f65017b839 Location PendingIntents may not start activities (security fix). None: ImsStack's location requests use listeners, and its settings bypass (LOCATION_BYPASS, allow-ignore-location-settings) is AOSP's
+frameworks/base services/core/java/com/android/server/net/NetworkPolicyManagerService.java acf576ec4bf9 Per-app network access (POLICY_REJECT_*), and a one-time migration that denies apps without restricted-network access. None: ImsStack and IWLAN hold CONNECTIVITY_USE_RESTRICTED_NETWORKS, QNS has no INTERNET; data-saver and power-save exemptions unchanged
+frameworks/base services/core/java/com/android/server/pm/PackageManagerService.java 53a4a405f149 Upgrade and default-grant bookkeeping on ro.build.version.incremental; reset-permissions option; NVIDIA app profiles. See the property below
+frameworks/base services/core/java/com/android/server/pm/Settings.java b8fe9e754b52 Records ro.build.version.incremental as the build seen; a shared-user app id fix. See the property below
+frameworks/base services/core/java/com/android/server/pm/permission/LegacyPermissionManagerService.java ebdbbd39fb2c The reset-permissions option. None
+frameworks/base services/core/java/com/android/server/pm/permission/PermissionManagerService.java 37c685a9ae91 The reset-permissions option. None
+frameworks/base services/core/java/com/android/server/pm/permission/PermissionManagerServiceImpl.java 33b2bf533867 Default permission grants rerun when ro.build.version.incremental changes, not the fingerprint; the reset-permissions option. See the property below
+frameworks/base services/core/java/com/android/server/pm/permission/PermissionManagerServiceInterface.java 67d3d080fb26 The reset-permissions option. None
+frameworks/base services/core/java/com/android/server/pm/permission/PermissionManagerServiceInternal.java 714e2e281756 The reset-permissions option. None
+frameworks/base services/core/java/com/android/server/pm/permission/PermissionManagerServiceLoggingDecorator.java a752ce2aaa0b The reset-permissions option. None
+frameworks/base services/core/java/com/android/server/pm/permission/PermissionManagerServiceTestingShim.java 7e4fbe25be6a The reset-permissions option. None
+frameworks/base services/core/java/com/android/server/pm/permission/PermissionManagerServiceTracingDecorator.java c8ebb94a9b8b The reset-permissions option. None
+frameworks/base telephony/common/com/android/internal/telephony/TelephonyPermissions.java 7acf6c2de8c7 isShell(); a null destination in the SMS user check. None
+frameworks/base telephony/common/com/google/android/mms/pdu/PduParser.java a33aebaef06c MMS PDU parsing fix. None
+frameworks/base telephony/java/android/telephony/CarrierConfigManager.java 96da58b45186 Adds eight 5G Ultra Wideband icon keys; no IMS key or default changes. None
+frameworks/base telephony/java/android/telephony/TelephonyManager.java 5248b9454556 getModemService(), used by TeleService's override check. None
+
+# frameworks/opt/telephony
+frameworks/opt/telephony src/java/com/android/internal/telephony/CarrierServiceStateTracker.java a1a817175e0d A receiver exported. None
+frameworks/opt/telephony src/java/com/android/internal/telephony/GsmCdmaPhone.java 6c7099a85a56 In-call MMI codes skipped when dialing with a callback. None
+frameworks/opt/telephony src/java/com/android/internal/telephony/IccSmsInterfaceManager.java 0d9193f693c9 A helper made public for SmsController. None
+frameworks/opt/telephony src/java/com/android/internal/telephony/RadioMessagingProxy.java 99354c2ec7a7 The radio's IMS SMS gets the right technology for 3GPP2. None: that is the modem's IMS SMS; ImsStack's SMS goes through ImsSmsImplBase
+frameworks/opt/telephony src/java/com/android/internal/telephony/SmsController.java fc39ffc35b8c Stored-message sends check the user's subscription. None
+frameworks/opt/telephony src/java/com/android/internal/telephony/SmsController_fixed_methods.txt 22e571ea5b6d Lint list for SmsController. None
+frameworks/opt/telephony src/java/com/android/internal/telephony/cat/CommandParamsFactory.java 5f901be84463 SIM toolkit LAUNCH BROWSER refused while the device is locked. None (ImsStack's USAT call control is untouched)
+frameworks/opt/telephony src/java/com/android/internal/telephony/cat/ResultException.java 8bdc16ca95b8 The result code that refusal uses. None
+frameworks/opt/telephony src/java/com/android/internal/telephony/data/PhoneSwitcher.java 210e13602887 Falls back to the old data-allow radio command when DDS switching is unavailable. None (IMS data setup is AOSP's)
+frameworks/opt/telephony src/java/com/android/internal/telephony/euicc/EuiccCardController.java 6d950cd513d1 eSIM null checks for legacy devices. None
+frameworks/opt/telephony src/java/com/android/internal/telephony/ims/ImsConfigCompatAdapter.java b2a4f556cbd8 Runs pre-Q vendor ImsServices' config inline. None: ImsStack is a current ImsService, never adapted
+frameworks/opt/telephony src/java/com/android/internal/telephony/ims/ImsRegistrationCompatAdapter.java b7b2082a358a Runs pre-Q vendor ImsServices' registration inline. None: as above
+frameworks/opt/telephony src/java/com/android/internal/telephony/ims/MmTelFeatureCompatAdapter.java 8d0251046b58 Runs pre-Q vendor ImsServices' MMTEL inline. None: as above
+frameworks/opt/telephony src/java/com/android/internal/telephony/imsphone/ImsPhone.java fa477bc67934 In-call MMI codes skipped when dialing with a callback. None
+frameworks/opt/telephony src/java/com/android/internal/telephony/imsphone/ImsPhoneCallTracker.java 14d9ad578963 Two LineageOS-only properties for Qualcomm's modem IMS: incoming calls get no listener unless ro.telephony.block_binder_thread_on_incoming_calls, and ringback ignores audio-direction changes within a call state when ro.telephony.handle_audio_direction_changes_between_call_state_changes is false. See the properties below
+frameworks/opt/telephony src/java/com/android/internal/telephony/uicc/SIMRecords.java eb1d934a1c5f Bounds checks on EF_CFIS/EF_CFF. None
+frameworks/opt/telephony src/java/com/android/internal/telephony/uicc/UiccProfile.java 671ec4c80f80 The SIM reads as loaded once its ready applications' records are, not all applications'. None (IMS sees the SIM ready as soon as or sooner than in AOSP)
+frameworks/opt/telephony src/java/com/android/internal/telephony/util/NotificationChannelController.java 2603f0553efe Voicemail notification sound from its channel only. None
+frameworks/opt/telephony src/java/com/android/internal/telephony/util/VoicemailNotificationSettingsUtil.java ca1eb8f7e91d Voicemail notification sound from its channel only. None
+
+# packages/services/Telephony (TeleService)
+packages/services/Telephony AndroidManifest.xml 8e20b6288755 The app icon. None
+packages/services/Telephony res/values/strings.xml 58e210320fcb Strings for the changes below. None
+packages/services/Telephony res/values/styles.xml c9fd3e271679 RadioInfo's toolbar style. None
+packages/services/Telephony src/com/android/phone/CarrierConfigLoader.java ceffca8e139e The config cache is dropped when ro.build.version.incremental changes, not the fingerprint; the shell may not override carrier config (and on user builds persistent overrides need a system app). None: the zip's carrier gate overrides from a system app, not persistently, and overrides are never cached
+packages/services/Telephony src/com/android/phone/CdmaCallForwardOptions.java a04a3cc8fdb6 Contact-picker result permission check. None
+packages/services/Telephony src/com/android/phone/ContactPermissionUtils.java a1ff5b227016 That check. None
+packages/services/Telephony src/com/android/phone/EditPhoneNumberPreference.java 3680ab447190 The contact picker can be turned off. None
+packages/services/Telephony src/com/android/phone/GsmUmtsCallForwardOptions.java bdc3ff3b8691 Contact-picker result permission check. None (call forwarding over Ut is unchanged)
+packages/services/Telephony src/com/android/phone/PhoneInterfaceManager.java 807b74144964 USSD requests check the user's subscription; the shell may not set carrier restrictions; getModemService() not shell-only. None
+packages/services/Telephony src/com/android/phone/satellite/entitlement/SatelliteEntitlementApi.java 8a3217597a0f A parse failure becomes an entitlement error. None
+packages/services/Telephony src/com/android/phone/settings/RadioInfo.java 87ba5b81229f The phone info screen's toolbar. None
+packages/services/Telephony src/com/android/phone/settings/VoicemailSettingsActivity.java f69f63740c79 No contact picker in voicemail settings. None
+packages/services/Telephony src/com/android/phone/settings/fdn/EditFdnContactScreen.java f8e20b0d90db Contact-picker result permission check. None
+
+# packages/providers/TelephonyProvider (carrier ids, APNs, SMS/MMS)
+packages/providers/TelephonyProvider AndroidManifest.xml 0f12d1ed0bea The app icon. None
+packages/providers/TelephonyProvider src/com/android/providers/telephony/MmsProvider.java 082f07bffda8 Query and file-path hardening. None
+packages/providers/TelephonyProvider src/com/android/providers/telephony/MmsSmsDatabaseHelper.java dc8e13b68d70 A database downgrade from an old LineageOS version. None
+packages/providers/TelephonyProvider src/com/android/providers/telephony/MmsSmsProvider.java f899da1db6d9 Query hardening for restricted callers. None
+packages/providers/TelephonyProvider src/com/android/providers/telephony/SQLiteTokenizer.java f2de33a0dec1 Tokenizer for that hardening. None
+packages/providers/TelephonyProvider src/com/android/providers/telephony/SmsProvider.java 0ab66364fbdd Query hardening; strict only for restricted callers. None: SMS over IMS is stored by the phone process as any SMS
+packages/providers/TelephonyProvider src/com/android/providers/telephony/SqlQueryChecker.java 7199eda19a61 Disallowed tokens and functions in query selections. None: the phone process's selections use neither
+packages/providers/TelephonyProvider src/com/android/providers/telephony/TelephonyProvider.java 777c96d5b7f1 SIM-info database upgrade steps merged for LineageOS 17.1's version numbering. None (the carriers table the APN gate writes, and the carrier id list, are AOSP's)
+
+# packages/services/Iwlan
+packages/services/Iwlan AndroidManifest.xml 31e4ae3e35d8 Drops the android.net.ipsec.ike uses-library tag. None: the kit builds IWLAN from Android 17's sources
+packages/services/Iwlan test/AndroidManifest.xml 30ed02d34f92 The same, for its tests. None
+
+# System properties LineageOS's added code reads, and what the kit does.
+property ro.build.version.incremental LineageOS on joan tells a system update by this alone: PackageManager's upgrade scan and package cache, default permission grants and TeleService's carrier config cache key on it. tools/repack-rom.sh gives the repacked ROM its own, so flashing it over the nightly it came from is an update (tests/check-rom.sh checks); the zip re-dates what it installs (stamp_future) and grants through Calling permissions; a tree build gets a new one per build
+property ro.telephony.block_binder_thread_on_incoming_calls False in joan-common's system.prop: onIncomingCall returns no listener and ImsStack answers 480. Set true by device patch 0003, the zip's installer (undone by its uninstaller) and tools/repack-rom.sh; tests/check-rom.sh and the installer tests check it
+property ro.telephony.handle_audio_direction_changes_between_call_state_changes Unset on joan, so ringback follows the call's audio direction as in AOSP; tests/check-rom.sh checks the repacked ROM does not set it false
