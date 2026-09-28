@@ -72,6 +72,8 @@ final class ImsApnGate {
             }
             ApnPlan plan = ApnPlan.plan(forSim(load(ctx, plmn), tm, plmn), device);
             if (plan.insert.isEmpty() && plan.delete.isEmpty()) {
+                Log.i(TAG, "sub " + subId + " " + plmn + ": " + device.size()
+                        + " APNs, nothing to add or remove");
                 return;
             }
             ContentResolver cr = ctx.getContentResolver();

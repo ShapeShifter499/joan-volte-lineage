@@ -29,8 +29,10 @@ and 2 are done.
 - Installer free-space check uses statfs (toybox df overstated it).
 - Local checks at handoff: `tests/UsatCheck.java` 20 cases,
   `check-carrier-config.py` 2866 SIM identities, e2e installer 164/164,
-  `check-rom.sh` all passed. The 0001-0007 series applies to a clean
-  `1e3981c` and gives the work tree's exact tree.
+  `check-rom.sh` all passed, plus `ApnPlanCheck` (9081 checks),
+  `GbaCheck` (24, against a local BSF) and `check-apns.py` (2714 SIM
+  identities). The 0001-0008 series applies to a clean `1e3981c` and
+  gives the work tree's exact tree.
 - **No release is published.** The user asked for bench zips first.
   Publishing = edit a line of `aosp-ims/RELEASE` and push (CI builds from
   scratch and publishes); only do it when the user says so.
@@ -61,6 +63,11 @@ and 2 are done.
   "RECORD_AUDIO|CAMERA"`, grant plus reboot, retest; if it still drops,
   `adb logcat -b all -d | grep -E "OnMediaFailed|- Terminate :|NotifyFailures|invokeTerminated|libimsmedia|AudioSession|AAudio|AudioRecord|Fatal signal|FATAL EXCEPTION|avc: +denied"`.
 - **Bench 4** zips carry 0007 and Calling permissions.
+- **Bench 5** (sent 09-28) adds the APN gate, the GBA service (0008) and
+  IWLAN's release flag values. On T-Mobile the gate should log
+  `nothing to add or remove` (the ROM has T-Mobile's IMS, XCAP and
+  emergency APNs); GBA shows only when call forwarding/waiting settings
+  are opened (`ImsStackGba` in the log).
 - Same log, ~80 s after the calls: the IMS and internet PDNs dropped
   (`LOST_CONNECTION`) and data went out of service, then IMS
   deregistered. Looks like a network or modem event; watch for it
