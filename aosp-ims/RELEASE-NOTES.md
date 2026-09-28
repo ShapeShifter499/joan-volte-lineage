@@ -174,5 +174,5 @@ A source build needs none of the permission workarounds: see
 
 Source, patches and build scripts: `aosp-ims/` on branch
 [`claude/aosp-ims-a15-backport`](https://github.com/ShapeShifter499/joan-volte-lineage/tree/claude/aosp-ims-a15-backport/aosp-ims).
-Everything here is built from source by the repository's `aosp-ims`
-workflow, which also runs the installer, carrier-config and ROM checks.
+Everything here is built from source with the repository's scripts,
+which also run the installer and ROM checks.

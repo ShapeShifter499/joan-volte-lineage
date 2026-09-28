@@ -410,8 +410,12 @@ The review found three properties that matter:
 
 ### Releasing
 
-Edit `RELEASE` (tag, version, ROM suffix, title) and push. The
-`aosp-ims` workflow builds everything from source on a clean runner, runs
-the carrier-config, installer and ROM checks, and publishes a prerelease
-under the tag if it does not exist yet. Any other push to `aosp-ims/`
-runs the same build as a check.
+Releases are built on this machine and uploaded by hand; GitHub builds
+nothing (the `aosp-ims` workflow is disabled and kept only as a record
+of the checks). Edit `RELEASE` (tag, version, ROM suffix, title), then,
+with JDK 21 on the PATH and `VERSION_NAME` set to line 2 of `RELEASE`:
+`tools/build-all.sh`, `sudo tests/run-e2e-install.sh`,
+`sudo tools/repack-rom.sh` (with `ROM_TAG` set to line 3),
+`tests/check-rom.sh`, then `gh release create <tag> --prerelease` with
+`RELEASE-NOTES.md` as the notes and the ROM, the three zips, the grant
+scripts, `HOW-TO-LOG.md` and `SHA256SUMS` as assets.

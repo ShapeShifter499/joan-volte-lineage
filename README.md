@@ -131,7 +131,7 @@ releases are made.
 | `aosp-ims/` | The AOSP IMS backport: patches, carrier data, build scripts, tests, zip sources |
 | `upstream/` | The source-build kit for a LineageOS tree ([`upstream/AOSP-IMS.md`](upstream/AOSP-IMS.md)) |
 | `docs/` | Research notes, audits and handoffs |
-| `.github/workflows/aosp-ims.yml` | Builds everything from source, runs the checks, publishes releases |
+| `.github/workflows/aosp-ims.yml` | The former CI build, disabled: releases are built locally (see `aosp-ims/README.md`, Releasing) |
 | `ims-service/`, `native/`, `scripts/`, … | joan's own stack and the installer and carrier maps the backport reuses |
 
 ## joan's own stack
