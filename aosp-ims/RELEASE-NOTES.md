@@ -1,7 +1,12 @@
 **Unofficial alpha.** Bench results so far (US998 on T-Mobile): the
-migrate zip installs, ImsStack registers with IPsec, and calls ring and
-are answered (after a fix for the SIM's call control check, see Known
-limits); a completed call has not been confirmed yet. It is built entirely from
+migrate zip installs, ImsStack registers with IPsec, and outbound calls
+work end to end (after fixes for the SIM's call control check, see Known
+limits, and for ImsMedia's media service, which died as the first call's
+media started). Incoming calls were refused by a joan device-tree
+property that told the framework to ignore them; the installer now turns
+it on (`ro.telephony.block_binder_thread_on_incoming_calls=true`, and the
+`-uninstall` zip turns it back off). An incoming call has not been
+confirmed yet. It is built entirely from
 source by this repository's `aosp-ims` workflow and passes its installer,
 carrier-config and ROM checks. Keep a way back: the `-uninstall` zip, or
 the official LineageOS nightly.

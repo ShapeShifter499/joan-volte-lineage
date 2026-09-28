@@ -96,6 +96,12 @@ sed -i -e "s/^\(ro.lineage.version=.*\)-NIGHTLY-\(.*\)$/\1-UNOFFICIAL-$ROM_TAG-\
 NEWVER=$(grep '^ro.lineage.version=' "$S/build.prop" | cut -d= -f2)
 [ "$NEWVER" != "$OLDVER" ] || { echo "build.prop version not rewritten"; exit 1; }
 echo "   $OLDVER -> $NEWVER"
+# The AOSP stack delivers MT calls through the framework's ImsPhoneCallTracker,
+# which the joan tree gates off for its modem IMS (see the installer's
+# build.prop step). Flip it in the ROM so no install-time step is needed.
+sed -i 's/^ro.telephony.block_binder_thread_on_incoming_calls=false$/ro.telephony.block_binder_thread_on_incoming_calls=true/' "$S/build.prop"
+grep -q '^ro.telephony.block_binder_thread_on_incoming_calls=true$' "$S/build.prop" \
+    || { echo "build.prop: incoming-call property not enabled"; exit 1; }
 umount "$R/mnt"
 e2fsck -fn "$R/system.img" >/dev/null
 

@@ -94,6 +94,27 @@ if [ -f "$TMP/etc/sysconfig/com.google.android.iwlan.xml" ]; then
 fi
 ui_print "Installing ImsService priv-app (AOSP ImsStack + ImsMedia)"
 ''', 1),
+    # The stack hands incoming calls to the framework's ImsPhoneCallTracker,
+    # which LineageOS gates on ro.telephony.block_binder_thread_on_incoming_
+    # calls; joan's tree sets it false for the modem IMS this replaces, and
+    # with it false the framework returns no listener for any incoming call,
+    # so the stack answers 480 and the phone never rings. Flip that one line
+    # (through copy_file: atomic, mode and label kept) and leave a marker for
+    # the uninstaller, which flips it back. Nothing else in build.prop is
+    # touched, and no copy of it is kept that a ROM update could outdate.
+    ('ui_print "Installing ImsService priv-app (AOSP ImsStack + ImsMedia)"\n',
+     '''ui_print "Installing ImsService priv-app (AOSP ImsStack + ImsMedia)"
+BP="$SYS/build.prop"
+IC=ro.telephony.block_binder_thread_on_incoming_calls
+if [ -f "$BP" ] && grep -q "^$IC=false\$" "$BP"; then
+  sed "s/^$IC=false\$/$IC=true/" "$BP" > "$TMP/build.prop.aosp-ims"
+  copy_file "$TMP/build.prop.aosp-ims" "$BP" 644 u:object_r:system_file:s0
+  echo "$IC=false" > "$SYS/etc/aosp-ims-incoming-calls.flipped"
+  chmod 644 "$SYS/etc/aosp-ims-incoming-calls.flipped" 2>/dev/null || true
+  chcon u:object_r:system_file:s0 "$SYS/etc/aosp-ims-incoming-calls.flipped" 2>/dev/null || true
+  ui_print "  build.prop: framework incoming-call handling on"
+fi
+''', 1),
     # After ImsStack: the VoWiFi apps, IWLAN (ePDG tunnel) and QNS
     # (LTE <-> Wi-Fi transport choice).
     ('copy_file "$TMP/app/ImsStack.apk" "$SYS/priv-app/ImsStack/ImsStack.apk" 644 u:object_r:system_file:s0\n',
@@ -171,6 +192,23 @@ UNINSTALL = [
      '      "$SYS/etc/permissions/com.android.telephony.qns.xml" \\\n'
      '      "$SYS/etc/sysconfig/com.google.android.iwlan.xml" "$SYS/etc/sysconfig/"*.joan-new\n', 1),
     ('JoanIms + leftovers removed', 'ImsStack + leftovers removed', 1),
+    # Undo the incoming-call flip, only where the installer made it, one
+    # line, written beside build.prop and renamed over it.
+    ('ui_print "  /system: ImsStack + leftovers removed (or absent)"\n',
+     '''ui_print "  /system: ImsStack + leftovers removed (or absent)"
+BP="$SYS/build.prop"
+IC=ro.telephony.block_binder_thread_on_incoming_calls
+if [ -f "$SYS/etc/aosp-ims-incoming-calls.flipped" ]; then
+  if grep -q "^$IC=true\$" "$BP" 2>/dev/null \
+      && sed "s/^$IC=true\$/$IC=false/" "$BP" > "$BP.aosp-ims-new" \
+      && chmod 644 "$BP.aosp-ims-new" \
+      && { chcon u:object_r:system_file:s0 "$BP.aosp-ims-new" 2>/dev/null; true; } \
+      && mv -f "$BP.aosp-ims-new" "$BP"; then
+    ui_print "  build.prop: incoming-call handling back to the ROM's setting"
+  fi
+  rm -f "$BP.aosp-ims-new" "$SYS/etc/aosp-ims-incoming-calls.flipped"
+fi
+''', 1),
     ('rm -f "$PRODMNT/overlay/JoanImsPhoneDefault.apk"\n',
      'rm -f "$PRODMNT/overlay/ImsStackPhoneOverlay.apk"\n', 1),
     ('rm -f "$PRODMNT/overlay/JoanFwVolte.apk"\n',

@@ -76,6 +76,25 @@ on-device verification and joan's own hardware limits.
   the 3GPP conference factory by itself, so these only save a round trip
   or reach a carrier-specific conference server.
 
+## Found on the bench (local agent, branch `claude/aosp-ims-a15-backport-v2`)
+
+- **LineageOS's incoming-call switch.** LineageOS 22.2's
+  `ImsPhoneCallTracker` (frameworks/opt/telephony, lineage-22.2) returns
+  no listener from `onIncomingCall` when
+  `ro.telephony.block_binder_thread_on_incoming_calls` is false, a
+  LineageOS-only property for Qualcomm's modem IMS; joan-common's
+  `system.prop` sets it false. ImsStack reads no listener as a refusal
+  and answers 480: no incoming call ever rang. Device patch 0003, the
+  zip's installer (one line, with a marker the uninstaller uses to flip
+  it back) and the repacked ROM set it true. AOSP has no such property.
+- **ImsMedia's JNI table.** The pinned ImsMedia registers
+  `setTestMode (I)V` natively but its `JNIImsMediaService` never declared
+  it, so registration failed at library load and the media service died
+  when the first call's media started, which is the hang-up right after
+  answer. ImsMedia 0002 declares it; outbound calls then work end to end.
+  ImsStack 0009 closes the teardown race that death exposed, and 0010
+  logs a refused incoming call.
+
 ## Carried as upstream has them
 
 - **EVS**: ImsMedia's encoder and decoder are TODOs (ImsStack 0007 stops
@@ -119,9 +138,10 @@ modem-side IMS traffic priority.
 
 ## Not yet verified
 
-- On the bench (US998, T-Mobile): IPsec registration and outgoing call
-  signalling work; call media is pending (bench 4). Untested: incoming
-  calls, SMS over IMS, Wi-Fi calling and handover, emergency calls, Ut
+- On the bench (US998, T-Mobile): IPsec registration and outgoing calls
+  work end to end (with ImsMedia 0002). Incoming calls are unblocked by
+  the property above; an incoming call has not been confirmed yet.
+  Untested: SMS over IMS, Wi-Fi calling and handover, emergency calls, Ut
   (now with GBA), conference, video, RTT, dual SIM, other carriers and
   models, the APN gate on a phone.
 - The source-build kit has not been compiled in a full LineageOS tree:

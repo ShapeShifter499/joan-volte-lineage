@@ -92,10 +92,38 @@ and 2 are done.
 - Bench logs carry the IMSI and phone number. They live in the user's
   `aosp-ims/work/bench-logs/` (git-ignored); never commit or quote them.
 
+## Bench fixes from the local agent (branch `claude/aosp-ims-a15-backport-v2`)
+
+The user's local agent (on the bench phone) found the BYE's cause and a
+second blocker, and pushed fixes to the v2 branch. Brought onto this
+branch, verified against the sources:
+- **ImsMedia 0002**: the pinned ImsMedia registers `setTestMode` in its
+  native JNI table but never declared it in `JNIImsMediaService`, so the
+  media service died at library load when the first call's media
+  started: the BYE right after answer. Outbound calls work end to end
+  with it (bench). **ImsStack 0009** synchronizes the teardown that death
+  raced; **0010** logs a refused incoming call (v2's patch called a
+  `logw` the class lacked; the helper is added so it compiles).
+- **Incoming calls**: LineageOS 22.2's `ImsPhoneCallTracker` returns no
+  listener from `onIncomingCall` while
+  `ro.telephony.block_binder_thread_on_incoming_calls` is false, which
+  joan-common's `system.prop` sets; ImsStack answered 480. Device patch
+  **0003** sets it true; the zips flip that one line and leave a marker
+  (not v2's whole-`build.prop` backup, which a ROM update could make
+  stale), the uninstaller flips it back; `repack-rom.sh` sets it and
+  `check-rom.sh` asserts it (v2 read `/build.prop`; on this image it is
+  `/system/build.prop`). Inbound not yet confirmed on the bench.
+- Left out of v2: `zip/rro-carrierconfig/res/xml/vendor.xml` (a spliced
+  copy of joan-common's vendor.xml with no manifest and no build step;
+  the runtime gate replaced that approach), and the claim that
+  `USE_ICC_AUTH_WITH_DEVICE_IDENTIFIER` breaks GBA on the zip path
+  (Android 15 falls back to `READ_PRIVILEGED_PHONE_STATE`, which the zip
+  holds).
+
 ## Still to do
 
-1. The BYE after answer (above); then the alpha1 release when the user
-   agrees.
+1. Confirm an incoming call on the bench; then the alpha1 release when
+   the user agrees.
 2. ~~Every V30 model~~: done. The LineageOS wiki lists H930, H930DS,
    US998 (unlocked), H932 (T-Mobile), H931, H933, LS998, V300K/L/S and
    VS996, all on the one joan build. The zips check no model; the ROM

@@ -1,0 +1,34 @@
+From 16340ac87d6d2f507152062d5f3923b17b2c0b62 Mon Sep 17 00:00:00 2001
+From: Fulgor Nymvale <fulgor@nym-skyforge>
+Date: Sun, 27 Sep 2026 11:46:45 -0700
+Subject: [PATCH] ImsStack: serialize MediaManagerHelper teardown
+
+Bench: with the media service crashing at open, onDisconnected fired
+into close() from the ImsMediaManager callback pool while another
+caller was inside it, and the check-then-act on sImsMediaManager and
+sMediaHandlerThread lost the race - NullPointerException in
+com.android.imsstack on top of the media failure. close() is
+idempotent; make it synchronized.
+
+Assisted-by: ZCode:GLM-5.3-Flash
+Signed-off-by: Lance <Gero3977@gmail.com>
+---
+ .../com/android/imsstack/enabler/media/MediaManagerHelper.java  | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/java/src/com/android/imsstack/enabler/media/MediaManagerHelper.java b/java/src/com/android/imsstack/enabler/media/MediaManagerHelper.java
+index 8ea1210..6286543 100644
+--- a/java/src/com/android/imsstack/enabler/media/MediaManagerHelper.java
++++ b/java/src/com/android/imsstack/enabler/media/MediaManagerHelper.java
+@@ -167,7 +167,7 @@ public class MediaManagerHelper {
+      * clears the resources
+      */
+     @VisibleForTesting
+-    void close() {
++    synchronized void close() {
+         if (sImsMediaManager != null) {
+             ImsLog.i("ImsMediaManager - close");
+             sImsMediaManager.release();
+-- 
+2.43.0
+

@@ -47,7 +47,10 @@ are the backport, the same ones the zip is built from:
 | ImsStack 0006 | Codes a three-digit MNC in those envelopes' location information as 3GPP TS 24.008 says |
 | ImsStack 0007 | Drops EVS from the codec offer: ImsMedia has no EVS codec yet (its encoder and decoder are TODOs), so an EVS call would be silent. Remove this patch once ImsMedia gains one |
 | ImsStack 0008 | Adds `ImsStackGbaService`, a GBA_ME service for platforms with none (LineageOS): Ut/XCAP authenticates with GBA, Android's default GBA mode is GBA_ME for every carrier, and without a service in `config_gba_package` every XCAP server that asks for GBA refuses. The device patch 0002 selects it |
+| ImsStack 0009 | Synchronizes `MediaManagerHelper.close()`, which raced when the media service died mid-call |
+| ImsStack 0010 | Logs why the framework refused an incoming call before the stack answers 480 |
 | ImsMedia 0001 | Lets ImsMedia run inside the caller's own package (the zip's single APK). A separate `ImsMediaService`, as here, is bound as before |
+| ImsMedia 0002 | Declares `JNIImsMediaService.setTestMode`, which the pinned ImsMedia's native JNI table registers and its Java class lacked: the media service died at library load on the first call. Needed in a tree build too |
 
 ## Steps
 
@@ -72,8 +75,9 @@ From the top of a LineageOS 22.2 tree that already builds joan:
    It applies, in order:
    - the backport patches (above) to `packages/modules/ImsStack` and
      `packages/modules/ImsMedia`;
-   - `upstream/aosp-ims/device/0001-joan-common-Add-the-AOSP-IMS-stack.patch`
-     and `0002-joan-common-Use-ImsStack-s-GBA-service.patch` to
+   - `upstream/aosp-ims/device/0001-joan-common-Add-the-AOSP-IMS-stack.patch`,
+     `0002-joan-common-Use-ImsStack-s-GBA-service.patch` and
+     `0003-joan-common-Turn-on-framework-incoming-call-handling.patch` to
      `device/lge/joan-common` (made against `lineage-22.2` at 47c4939,
      2025-02-11);
    - the per-carrier IMS config (below), spliced into joan-common's
@@ -98,7 +102,13 @@ From the top of a LineageOS 22.2 tree that already builds joan:
      `com.android.imsstack`);
    - adds the carrier blocks to CarrierConfig's `vendor.xml` (below);
    - adds `system_ext/etc/default-permissions/default-permissions-ims.xml`
-     (below).
+     (below);
+   - (0003) sets `ro.telephony.block_binder_thread_on_incoming_calls=true`
+     in `system.prop`. The property is LineageOS's own: its
+     `ImsPhoneCallTracker` answers an incoming call's `onIncomingCall`
+     with no listener when it is false, for the Qualcomm modem IMS joan's
+     tree was written for, and an ImsService like ImsStack reads no
+     listener as a refusal: it answers 480 and the phone never rings.
 
 3. **Build and flash** as usual (`breakfast joan`, `brunch joan`). On a
    phone that had the flashable zip, flash the zip's `-uninstall` first

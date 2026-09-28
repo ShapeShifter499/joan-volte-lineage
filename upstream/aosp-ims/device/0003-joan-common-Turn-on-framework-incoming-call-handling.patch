@@ -1,0 +1,35 @@
+From d2dbfbf5478055bb0a4c5dac2ee40d712b1702b7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 13:22:59 -0700
+Subject: [PATCH] joan-common: Turn on framework incoming-call handling
+
+The tree ships ro.telephony.block_binder_thread_on_incoming_calls=false
+for the modem IMS. The AOSP IMS stack delivers MT calls through the
+framework's ImsPhoneCallTracker instead, and with the property false its
+MmTelFeatureListener.onIncomingCall returns null for every incoming call
+(the legacy-IMS branch of the method has no return), so the stack saw a
+rejection and answered 480 and the phone never rang. Set true, as the
+AOSP-stack device configuration requires.
+
+Assisted-by: ZCode:GLM-5.3-Flash
+Signed-off-by: Lance <Gero3977@gmail.com>
+---
+ system.prop | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/system.prop b/system.prop
+index 407ff83..66d22ac 100644
+--- a/system.prop
++++ b/system.prop
+@@ -73,7 +73,7 @@ persist.delta_time.enable=true
+ ro.opa.eligible_device=true
+ 
+ # Do not block binder thread on incoming calls
+-ro.telephony.block_binder_thread_on_incoming_calls=false
++ro.telephony.block_binder_thread_on_incoming_calls=true
+ 
+ # Disable MTE Async for system server
+ arm64.memtag.process.system_server=off
+-- 
+2.43.0
+

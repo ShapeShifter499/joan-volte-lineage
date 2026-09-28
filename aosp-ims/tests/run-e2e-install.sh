@@ -108,6 +108,8 @@ if [ "${1:-}" = "--inner" ]; then
     check 'grep -q "<permission name=\"android.permission.MODIFY_PHONE_STATE\"" "$S/system/etc/permissions/com.android.imsstack.xml"' "allowlist covers MODIFY_PHONE_STATE"
     check 'no_temps' "no .joan-new temp files left behind"
     check '[ ! -e "$S/system/etc/init/joan-grant.rc" ] && [ ! -e "$S/system/bin/joan-grant.sh" ]' "no boot-time grant on disk"
+    check 'cmp -s "$S/system/build.prop" "$WORK/buildprop-on.txt"' "build.prop: incoming-call handling on, nothing else changed"
+    check '[ -f "$S/system/etc/aosp-ims-incoming-calls.flipped" ]' "build.prop flip recorded for the uninstaller"
   }
   viettel_blocks() { grep -c 'joan-viettel-45204-begin' "$1" 2>/dev/null || true; }
 
@@ -170,6 +172,7 @@ if [ "${1:-}" = "--inner" ]; then
       check 'cmp -s "$P/overlay/ImsStackPhoneOverlay.apk" "$WORK/zip/app/ImsStackPhoneOverlay.apk"' "overlays installed anyway"
       check 'cmp -s "$S/system/priv-app/ImsStack/ImsStack.apk" "$WORK/zip/app/ImsStack.apk"' "apk installed anyway"
       check 'no_temps' "no .joan-new temp files left behind"
+      check 'cmp -s "$S/system/build.prop" "$WORK/buildprop-plain.txt" && [ ! -e "$S/system/etc/aosp-ims-incoming-calls.flipped" ]' "build.prop without the property left alone"
       umount_chk
       ;;
     reflash)
@@ -222,6 +225,8 @@ if [ "${1:-}" = "--inner" ]; then
       check '[ ! -e "$S/system/etc/permissions/android.hardware.telephony.ims.xml" ]' "IMS feature xml removed (it was ours)"
       check '[ ! -e "$P/overlay/ImsStackPhoneOverlay.apk" ] && [ ! -e "$P/overlay/ImsStackFrameworkOverlay.apk" ]' "overlays removed"
       check 'cmp -s "$P/etc/apns-conf.xml" "$WORK/apns-orig.xml"' "APN list restored byte-for-byte"
+      check 'cmp -s "$S/system/build.prop" "$WORK/buildprop-joan.txt"' "build.prop restored byte-for-byte"
+      check '! find "$S" "$P" -name "*aosp-ims*" | grep -q .' "no aosp-ims marker or temp file left"
       check '! find "$S" "$P" -name "*joan*" | grep -q .' "nothing named joan left on either partition"
       umount_chk
       ;;
@@ -237,6 +242,14 @@ rm -rf "$WORK"
 mkdir -p "$WORK/zip/META-INF/com/google/android" "$WORK/zip/app" \
   "$WORK/zip/etc/permissions" "$WORK/zip/etc/default-permissions" "$WORK/zip/etc/sysconfig" \
   "$WORK/zip/apn" "$WORK/zip/scripts" "$WORK/bin"
+
+# build.prop as joan's nightly has it (incoming calls gated off for the
+# modem IMS), as the installer should leave it, and a ROM without the line.
+printf 'ro.system.build.version.sdk=35\nro.build.version.sdk=35\nro.telephony.block_binder_thread_on_incoming_calls=false\n' \
+  > "$WORK/buildprop-joan.txt"
+printf 'ro.system.build.version.sdk=35\nro.build.version.sdk=35\nro.telephony.block_binder_thread_on_incoming_calls=true\n' \
+  > "$WORK/buildprop-on.txt"
+printf 'ro.system.build.version.sdk=35\nro.build.version.sdk=35\n' > "$WORK/buildprop-plain.txt"
 
 # Tool farm.
 for t in cat chmod cut df dmesg head ls lsattr md5sum cksum mkdir mount mv \
@@ -342,7 +355,11 @@ populate() {
   mkdir -p "$s/system/priv-app/Dummy" "$s/system/etc/permissions" \
            "$s/system/etc/init" "$s/system/bin" "$p/overlay" "$p/etc" \
            "$se/bin" "$se/etc/init"
-  printf 'ro.system.build.version.sdk=35\nro.build.version.sdk=35\n' > "$s/system/build.prop"
+  if [ "$sc" = prodtight ]; then
+    cp "$WORK/buildprop-plain.txt" "$s/system/build.prop"   # a ROM without the property
+  else
+    cp "$WORK/buildprop-joan.txt" "$s/system/build.prop"    # joan: incoming calls gated off
+  fi
   head -c 50000 /dev/urandom > "$s/system/priv-app/Dummy/Dummy.apk"
   echo '<permissions/>' > "$s/system/etc/permissions/platform.xml"
   if [ "$sc" = syslist ]; then

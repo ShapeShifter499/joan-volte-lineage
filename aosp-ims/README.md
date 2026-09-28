@@ -29,11 +29,15 @@ have certified; that is decided by the network, not the phone.
 > startup crash. The first calls then failed before any INVITE left the
 > phone: the SIM's call control answer never reached ImsStack (joan's RIL
 > returns status words 00 00), and 0005 sets such a call up as dialled.
-> With it, a call rings and is answered, then the phone hangs up a fifth
-> of a second later; first suspect, the microphone permission, which a
-> zip flashed onto a booted ROM never got (see Permissions). No call has
-> completed yet. Keep a way back: the `-uninstall` zip, or the official
-> nightly.
+> With it, a call rang and was answered, then the phone hung up a fifth
+> of a second later: ImsMedia's media service died as the call's media
+> started (its native JNI table registers a method its Java class never
+> declared). ImsMedia 0002 fixes that, and outbound calls now work end to
+> end. Incoming calls were refused before ringing by a joan device-tree
+> property that tells LineageOS's telephony to ignore them (for the
+> Qualcomm modem IMS); the zips and the ROM now turn it on. An incoming
+> call has not been confirmed yet. Keep a way back: the `-uninstall` zip,
+> or the official nightly.
 
 What the stack does, all of it upstream AOSP code: VoLTE (voice over
 LTE, HD voice codecs), Wi-Fi calling (VoWiFi over IWLAN, with QNS moving
@@ -70,6 +74,14 @@ on this device generally does not).
   stamps, then installs this stack.
 - **`-uninstall`**: removes everything either zip, or the ROM above,
   added. The ROM's own files are left as the nightly shipped them.
+
+Both install zips also set one line of `/system/build.prop`:
+`ro.telephony.block_binder_thread_on_incoming_calls=true`. joan's tree
+ships it false for the Qualcomm modem IMS, and with it false LineageOS's
+telephony hands an IMS stack no incoming call. Only that line changes;
+the zip leaves a marker (`/system/etc/aosp-ims-incoming-calls.flipped`)
+and the `-uninstall` zip sets the line back to false. A ROM without the
+line is left alone. The repacked ROM ships it true.
 
 These use joan's installer v8, the one that flashes across
 LineageOS-based ROMs (alpha67): it checks free space before writing,
@@ -198,10 +210,10 @@ validates against LineageOS's schema.
 | `libimsstack.so`, `libimsmedia.so`, linked against the ROM's libraries | done |
 | IWLAN + QNS (Android 17) for the zip | done: 1 patch each |
 | Single-APK packaging, overlays, permission files | done |
-| Flashable zips (fresh, migrate, uninstall) | done; 164 end-to-end installer checks pass |
+| Flashable zips (fresh, migrate, uninstall) | done; 179 end-to-end installer checks pass |
 | Repacked LineageOS 22.2 ROM | done; `tests/check-rom.sh` passes |
 | Source-tree integration (`upstream/AOSP-IMS.md`) | written and checked piece by piece, its build files by Android 15's own Soong (`tests/check-soong.sh`, in CI); not yet built in a tree |
-| **Tested on a phone** | US998 on T-Mobile: the migrate zip installs and ImsStack registers (IPsec sec-agree, reg-event) once 0004 stops the startup crash. With 0005/0006 calls go out, ring and are answered, then the phone hangs up ~0.2 s later; the fix under test is the microphone grant (bench 4/5) |
+| **Tested on a phone** | US998 on T-Mobile: the migrate zip installs and ImsStack registers (IPsec sec-agree, reg-event) once 0004 stops the startup crash. With 0005/0006 calls go out, ring and are answered; with ImsMedia 0002 (the media service no longer dies at the first call) outbound calls work end to end. Incoming calls were refused by joan's `ro.telephony.block_binder_thread_on_incoming_calls=false`, which the installer now flips; not yet confirmed |
 
 ## What the backport changes
 
@@ -218,7 +230,10 @@ pinned in `upstream.lock`.
 | ImsStack 0006 | The location information in those envelopes coded a three-digit MNC in dialling order (310-260 as `13 20 06`); it is now coded as 3GPP TS 24.008 says (`13 00 62`) |
 | ImsStack 0007 | Never offers EVS. ImsMedia's EVS encoder and decoder are still TODOs, so an EVS call would carry no audio; the Pixel-derived config offers EVS for hundreds of carriers. The codec offer keeps AMR-WB and AMR whatever the config says |
 | ImsStack 0008 | ImsStack is also the device's GBA service (`ImsStackGbaService`, selected by the phone's `config_gba_package`). Ut/XCAP authenticates with GBA, which Android asks for by default for every carrier, and neither AOSP nor LineageOS ships a GBA service, so XCAP servers that ask for it refused call forwarding, waiting and barring settings. GBA_ME: HTTP digest AKA with the carrier's BSF (TS 24.109), AKA on the ISIM or USIM, Ks_NAF per TS 33.220 |
+| ImsStack 0009 | `MediaManagerHelper.close()` is synchronized: when the media service died mid-call, two callers raced its check-then-act teardown into a NullPointerException on top of the media failure (bench) |
+| ImsStack 0010 | Logs why the framework refused an incoming call (the exception, or no listener) before the stack answers 480 (bench instrumentation) |
 | ImsMedia 0001 | `ImsMediaManager` binds the ImsMedia service in its own package when that package has one (the zip's single APK) |
+| ImsMedia 0002 | Declares `JNIImsMediaService.setTestMode`. The pinned ImsMedia's native JNI table registers it and its Java class never declared it, so registration failed at library load and the media service died when the first call's media started: the phone hung up right after the call was answered. Outbound calls work end to end with this (bench) |
 | Iwlan 0001 | No physical-network reporting in `DataCallResponse` (Android 16 API) |
 | QNS 0001 | Wi-Fi calling activation without androidx: the activity is a plain `Activity`, and carrier portals open in the browser |
 
