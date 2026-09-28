@@ -40,6 +40,8 @@ install = {
     'apn/viettel-45204.xml': f'{root}/apn/viettel-45204.xml',
     'scripts/merge-viettel-apns.sh': f'{root}/scripts/merge-viettel-apns.sh',
     'grant-permissions.sh': f'{here}/zip/grant-permissions.sh',
+    # Keeps the stack across LineageOS updates (backuptool's addon.d).
+    'addon.d/60-aosp-ims.sh': f'{here}/zip/addon.d/60-aosp-ims.sh',
 }
 migrate = dict(install)
 migrate['META-INF/com/google/android/update-binary'] = f'{out}/scripts/update-binary-migrate'

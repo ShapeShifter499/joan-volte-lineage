@@ -4,7 +4,8 @@
   install or update. Microphone and camera for call audio and video calls
   (ImsMedia runs in this package), phone state for the telephony APIs,
   location for emergency calls (P-A-N-I). Flashed onto a ROM that has
-  already booted, grant them with aosp-ims/zip/grant-permissions.sh instead.
+  already booted, "Calling permissions" in the app drawer asks for them
+  (CallPermissionsActivity), or aosp-ims/zip/grant-permissions.sh grants them.
 -->
 <exceptions>
     <exception package="com.android.imsstack">

@@ -1,12 +1,13 @@
 **Unofficial alpha.** Bench results so far (US998 on T-Mobile): the
 migrate zip installs, ImsStack registers with IPsec, and outbound calls
-work end to end. Inbound calls were blocked twice over: the SIM's call
-control check (fixed, see Known limits) and a joan device-tree property
-that told the framework to ignore every incoming call - the installer now
-flips it (`ro.telephony.block_binder_thread_on_incoming_calls=true`,
-backup at `build.prop.joan-orig`; the uninstall zip restores it). Inbound
-confirmation pending on the bench. It is built entirely from source by
-this repository's `aosp-ims` workflow and passes its installer,
+work end to end (after fixes for the SIM's call control check, see Known
+limits, and for ImsMedia's media service, which died as the first call's
+media started). Incoming calls were refused by a joan device-tree
+property that told the framework to ignore them; the installer now turns
+it on (`ro.telephony.block_binder_thread_on_incoming_calls=true`, and the
+`-uninstall` zip turns it back off). An incoming call has not been
+confirmed yet. It is built entirely from
+source by this repository's `aosp-ims` workflow and passes its installer,
 carrier-config and ROM checks. Keep a way back: the `-uninstall` zip, or
 the official LineageOS nightly.
 
@@ -16,6 +17,10 @@ VoLTE and Wi-Fi calling for the LG V30 (joan) on LineageOS 22.2, using
 AOSP's own IMS stack from Android 17, backported to Android 15. It
 replaces joan's IMS stack.
 
+It is for every V30 model LineageOS supports, all on the one joan build:
+H930, H930DS, US998, H932, H931, H933, LS998, V300K, V300L, V300S and
+VS996 (tested so far: US998 on T-Mobile).
+
 | Part | What it does |
 |---|---|
 | ImsStack + ImsMedia (`com.android.imsstack`) | IMS registration, calls and SMS; call audio on Android |
@@ -23,15 +28,20 @@ replaces joan's IMS stack.
 | QNS (`com.android.telephony.qns`) | Moves IMS between LTE and Wi-Fi |
 
 It does VoLTE, Wi-Fi calling, SMS over IMS, video calling (ViLTE), RTT,
-emergency calls over IMS, call forwarding/waiting/barring over Ut/XCAP,
-and conference calls, where the carrier offers them.
+emergency calls over IMS, call forwarding/waiting/barring over Ut/XCAP
+(with a GBA service of its own for the carriers whose XCAP servers ask
+for GBA: LineageOS has none), and conference calls, where the carrier
+offers them.
 
 VoLTE and Wi-Fi calling are offered for every carrier: Wi-Fi calling
 works where the carrier's ePDG accepts the SIM, and IMS stays on LTE
 elsewhere. Each carrier's IMS settings (SIP, SMS over IMS, Ut, emergency,
 video, RTT, ePDG) come from the carrier data LineageOS ships for Pixels,
 1361 entries for 576 carriers, applied on top of whatever carrier config
-your ROM already has.
+your ROM already has. The same data supplies the IMS, XCAP (Ut) and
+emergency APNs your ROM's APN list lacks for your SIM (Verizon's MVNOs,
+among others), added on the phone and taken back if the ROM later
+brings its own.
 
 ## Which file
 
@@ -42,8 +52,12 @@ TWRP on this device generally does not.
   ROM. It is the official 2026-09-20 nightly with the IMS stack built in.
   - Recovery warns that the signature can't be verified (only LineageOS
     can sign with its key); choose to install anyway.
-  - It reports itself as `UNOFFICIAL`, so the updater won't replace it
-    with an official nightly (which would drop the IMS stack).
+  - It reports itself as `UNOFFICIAL`, so the updater won't offer official
+    nightlies. An official nightly flashed over it by hand keeps the IMS
+    stack (addon.d), and the updater then works as usual.
+  - It has its own build number, so LineageOS treats flashing it as a
+    system update even over the official 2026-09-20 nightly, without a
+    wipe: the calling permissions are granted at first boot.
 - **`aosp-ims-17.0.0_r1-a15-alpha1-fresh.zip`**: for a phone on LineageOS
   22.2, or a ROM based on it, that never had joan's IMS zip. It refuses a
   phone that has joan, and changes nothing.
@@ -54,19 +68,35 @@ TWRP on this device generally does not.
   it was. It also works on the ROM above.
 - **`SHA256SUMS`**: check a download with `sha256sum -c SHA256SUMS --ignore-missing`.
 
-## After flashing: one adb step
+## LineageOS updates
 
-Until a LineageOS build signs these apps with its platform key, some
-permissions can only be granted over adb. Once, after the first boot,
-with USB debugging on:
+The stack stays through LineageOS's own updates. Its `addon.d` script
+puts it back after each nightly, so there is no need to re-flash the zip.
+
+## After flashing: permissions
+
+These apps are not signed with the ROM's platform key (only LineageOS
+has it), so Android does not hand them every permission by itself.
+
+**Calls: the microphone.** Flashed together with a ROM install or update,
+or as the ROM above, the microphone, camera, location and phone
+permissions are granted at first boot. Flashed onto a ROM that has
+already booted, **Calling permissions** appears in the app drawer: open
+it and allow them. It goes away once the microphone is allowed; no
+reboot needed. (Or Settings > Apps > ImsStack > Permissions, with system
+apps shown.)
+
+**Wi-Fi calling: one adb step**, whichever file you flashed. IWLAN needs
+an app-op for its IPsec tunnel that has no setting on the phone. Once,
+after the first boot, with USB debugging on:
 
 ```
 sh grant-permissions.sh
 ```
 
 The script is attached here, inside the zips, and at
-`aosp-ims/zip/grant-permissions.sh` in the repository. Without `sh`
-(Windows), run its commands directly:
+`aosp-ims/zip/grant-permissions.sh` in the repository. It also grants
+everything above. Without `sh` (Windows), run its commands directly:
 
 ```
 adb shell pm grant com.android.imsstack android.permission.RECORD_AUDIO
@@ -82,11 +112,11 @@ adb shell pm grant com.google.android.iwlan android.permission.ACCESS_FINE_LOCAT
 adb shell pm grant com.android.telephony.qns android.permission.READ_PHONE_STATE
 ```
 
-- Without `RECORD_AUDIO`, the other side of a call hears silence.
+- Without `RECORD_AUDIO`, calls can't open the microphone.
 - Without the IWLAN app-op, Wi-Fi calling can't build its tunnel.
 - Location is used for emergency calls and the network location header.
 
-Reboot afterwards, so the IMS stack starts with the permissions in place.
+Reboot afterwards, so IWLAN starts with the app-op in place.
 
 Then turn on **VoLTE** (Settings > Network & internet > SIMs), and
 **Wi-Fi calling** where it is offered.
@@ -95,8 +125,9 @@ Then turn on **VoLTE** (Settings > Network & internet > SIMs), and
 
 - **Signature permissions.** Two signature-only permissions ImsStack asks
   for can't be granted to an app not signed with the ROM's key:
-  `ACCESS_SURFACE_FLINGER` and `INTERACT_ACROSS_USERS_FULL`. Their
-  features (video surfaces, work profiles) may misbehave.
+  `ACCESS_SURFACE_FLINGER` and `INTERACT_ACROSS_USERS_FULL`. Nothing in
+  the stack uses them (video goes to the surfaces the dialer provides),
+  so this costs nothing.
 - **Emergency calls.** The listener ImsStack uses to see outgoing
   emergency calls needs a permission only the ROM's own key can grant, so
   this build detects them from the call state instead (patch 0004). A
@@ -115,6 +146,9 @@ Then turn on **VoLTE** (Settings > Network & internet > SIMs), and
   this phone; a SIM that does answer is still obeyed.
 - **Video calling** is offered where the carrier's config allows it, and
   has not been tested yet.
+- **No EVS.** AOSP's media stack has no EVS codec yet, so calls use HD
+  voice (AMR-WB) or AMR, never EVS, even where the carrier offers it
+  (patch 0007).
 
 ## Building it into LineageOS
 
@@ -128,7 +162,7 @@ change.
 If something fails, send:
 
 - `adb logcat -b all -d > log.txt`, taken right after the failure (for a
-  failed call, `adb logcat -b all -d | grep -iE "call-control|invokeStartFailed|SIPMSG"`
+  failed call, `adb logcat -b all -d | grep -iE "call-control|invokeStartFailed|SIPMSG|OnMediaFailed|- Terminate :|libimsmedia|AAudio|ImsStackPermissions"`
   shows the stack's view of it);
 - the output of `adb shell dumpsys telephony.registry`;
 - the output of `adb shell dumpsys package com.android.imsstack`.

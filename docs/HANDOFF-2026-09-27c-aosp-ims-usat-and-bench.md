@@ -16,10 +16,42 @@ and 2 are done.
   (b) handoff proposed: an RRO replaces the ROM's whole vendor.xml.
 - Video calling, RTT and RCS are switched on (overlays, CAMERA grant).
 - ImsStack **0005/0006** (USAT call control, below).
+- ImsStack **0007**: EVS is never offered. ImsMedia's EVS encoder and
+  decoder are TODOs, and the Pixel data listed EVS for 430 of its 772
+  codec bundles (ImsStack's internal defaults turn EVS support on). The
+  importer drops EVS too and `check-carrier-config.py` fails on any.
+- **Calling permissions** (`zip/java/.../CallPermissionsActivity.java`):
+  an app-drawer entry, enabled by ImsStack at startup only while
+  RECORD_AUDIO is missing, that asks for the runtime permissions with
+  Android's dialogs. A zip flashed onto a booted ROM never gets the
+  default grants (LineageOS applies them only when
+  `ro.build.version.incremental` changes: see "LineageOS's own changes"
+  below). Untested on a phone. Wi-Fi calling still needs adb once
+  (IWLAN's app-op).
 - Installer free-space check uses statfs (toybox df overstated it).
 - Local checks at handoff: `tests/UsatCheck.java` 20 cases,
-  `check-carrier-config.py` 2866 SIM identities, e2e installer 164/164,
-  `check-rom.sh` all passed.
+  `check-carrier-config.py` 2866 SIM identities (three layers, 1473
+  imported blocks), e2e installer 164/164, `check-rom.sh` all passed,
+  plus `ApnPlanCheck` (9081 checks), `GbaCheck` (24, against a local
+  BSF), `check-apns.py` (2714 SIM identities), `check-soong.sh
+  --verify-stubs` (3 Soong fixture tests, 51 stand-ins found in Android
+  15), `regen-aosp-carrierconfig.sh --check`, and both privapp allowlist
+  checks. The 0001-0008 series applies to a clean `1e3981c` and gives the
+  work tree's exact tree; `apply-patches.sh` on a synthetic tree is
+  idempotent and splices 1553 region blocks.
+- **LG's settings for networks the Pixel data lacks**
+  (`tools/import-lg-ims.py`, `carrier/lg-ims.xml`, 38 PLMNs): IPsec off,
+  USSD over IMS, conference factory URI, each rule re-checked against
+  the Pixel data on every build. In the zip's assets, the source build's
+  vendor.xml region (after the Pixel blocks) and `check-carrier-config.py`
+  (which also checks the two sources never overlap). The device patches
+  were regenerated for the region's new header line only.
+- **AOSP 17's CarrierConfig changes** (`tools/import-aosp-carrierconfig.py`,
+  `carrier/aosp17-carrierconfig-ims.xml`, 74 blocks, 11 carriers): the
+  IMS keys Android 17's CarrierConfig assets set differently from Android
+  15's, as the bottom layer (`--base`) under the Pixel data (`--imported`)
+  and LG's (`--fill`). CI regenerates it from pinned commits
+  (`tools/regen-aosp-carrierconfig.sh --check`).
 - **No release is published.** The user asked for bench zips first.
   Publishing = edit a line of `aosp-ims/RELEASE` and push (CI builds from
   scratch and publishes); only do it when the user says so.
@@ -36,11 +68,25 @@ and 2 are done.
 - 0005 sets the call up as dialled when the UICC's answer is missing;
   real answers (93 00, errors, result 01) still block. 0006 fixes the
   PLMN coding of a three-digit MNC in the same envelope.
-- **Bench 3** zips (with 0005/0006) were sent to the user; results
-  pending. On the phone, look for
-  `call-control - no answer from the UICC, set up as dialled`, then the
-  INVITE (`SIPMSG[0]={ OUT, INVITE`) and its responses. If the call
-  still fails, the next suspect is the SIP/SDP exchange or media.
+- **Bench 3** (0005/0006): the call now goes out, rings (183, 180 with
+  PRACKs) and is answered (200 OK, ACK), then **our phone sends BYE
+  ~216 ms after the ACK**. Leading suspect: RECORD_AUDIO was never
+  granted (zip flashed onto a booted ROM), so ImsMedia's AAudio input
+  fails when the call goes sendrecv and ImsStack ends the call as a
+  media failure. Ruled out: the QoS wait (T-Mobile: 40 s, voice on the
+  default bearer allowed), and the mic being silenced in a background
+  process (capabilities are per uid; ImsStack's persistent process
+  gives the uid the microphone). Other candidates: an ImsMedia crash
+  (MEDIA_DETACH) or an AAudio/HAL failure.
+- Asked of the user: `dumpsys package com.android.imsstack | grep -E
+  "RECORD_AUDIO|CAMERA"`, grant plus reboot, retest; if it still drops,
+  `adb logcat -b all -d | grep -E "OnMediaFailed|- Terminate :|NotifyFailures|invokeTerminated|libimsmedia|AudioSession|AAudio|AudioRecord|Fatal signal|FATAL EXCEPTION|avc: +denied"`.
+- **Bench 4** zips carry 0007 and Calling permissions.
+- **Bench 5** (sent 09-28) adds the APN gate, the GBA service (0008) and
+  IWLAN's release flag values. On T-Mobile the gate should log
+  `nothing to add or remove` (the ROM has T-Mobile's IMS, XCAP and
+  emergency APNs); GBA shows only when call forwarding/waiting settings
+  are opened (`ImsStackGba` in the log).
 - Same log, ~80 s after the calls: the IMS and internet PDNs dropped
   (`LOST_CONNECTION`) and data went out of service, then IMS
   deregistered. Looks like a network or modem event; watch for it
@@ -48,14 +94,98 @@ and 2 are done.
 - Bench logs carry the IMSI and phone number. They live in the user's
   `aosp-ims/work/bench-logs/` (git-ignored); never commit or quote them.
 
+## Bench fixes from the local agent (branch `claude/aosp-ims-a15-backport-v2`)
+
+The user's local agent (on the bench phone) found the BYE's cause and a
+second blocker, and pushed fixes to the v2 branch. Brought onto this
+branch, verified against the sources:
+- **ImsMedia 0002**: the pinned ImsMedia registers `setTestMode` in its
+  native JNI table but never declared it in `JNIImsMediaService`, so the
+  media service died at library load when the first call's media
+  started: the BYE right after answer. Outbound calls work end to end
+  with it (bench). **ImsStack 0009** synchronizes the teardown that death
+  raced; **0010** logs a refused incoming call (v2's patch called a
+  `logw` the class lacked; the helper is added so it compiles).
+- **Incoming calls**: LineageOS 22.2's `ImsPhoneCallTracker` returns no
+  listener from `onIncomingCall` while
+  `ro.telephony.block_binder_thread_on_incoming_calls` is false, which
+  joan-common's `system.prop` sets; ImsStack answered 480. Device patch
+  **0003** sets it true; the zips flip that one line and leave a marker
+  (not v2's whole-`build.prop` backup, which a ROM update could make
+  stale), the uninstaller flips it back; `repack-rom.sh` sets it and
+  `check-rom.sh` asserts it (v2 read `/build.prop`; on this image it is
+  `/system/build.prop`). Inbound not yet confirmed on the bench.
+- Left out of v2: `zip/rro-carrierconfig/res/xml/vendor.xml` (a spliced
+  copy of joan-common's vendor.xml with no manifest and no build step;
+  the runtime gate replaced that approach), and the claim that
+  `USE_ICC_AUTH_WITH_DEVICE_IDENTIFIER` breaks GBA on the zip path
+  (Android 15 falls back to `READ_PRIVILEGED_PHONE_STATE`, which the zip
+  holds).
+
+**Bench 6** (sent 09-28, built from this branch at 9768009): the v2 fixes
+above plus the GBA service, APN gate and the three carrier-data layers.
+What to look for: an incoming call rings (`ImsStackNotify` in the log
+if the framework still refuses one), outbound calls keep working, and
+`getprop ro.telephony.block_binder_thread_on_incoming_calls` is `true`
+after the flash (`/system/etc/aosp-ims-incoming-calls.flipped` exists).
+
+## LineageOS's own changes (09-28)
+
+Every LineageOS fork on the IMS path was diffed file by file against
+`android-15.0.0_r32`, the tag LineageOS 22.2 builds its unforked projects
+from: frameworks/base's telephony, location, permission, package-manager,
+audio and network-policy code, frameworks/opt/telephony, TeleService,
+TelephonyProvider, IWLAN. 62 files differ; each is in
+`aosp-ims/tests/lineage-forks.txt` with its diff hash and verdict, and
+`tests/check-lineage-forks.py` (CI) fails on anything new. `--list`
+prints a fresh review after moving the `LINEAGE_*` pins in
+`upstream.lock`, and `--heads` shows what LineageOS changed since. The
+AOSP sources used everywhere else are that tag's trees exactly.
+- One real gap, fixed: on joan every fingerprint is LG's stock one, so
+  LineageOS tells a system update by `ro.build.version.incremental` alone
+  (PackageManager's upgrade scan and package cache, default permission
+  grants, TeleService's carrier config cache). The repacked ROM kept the
+  nightly's number. Dirty-flashed over that nightly it booted as no
+  update: no default permissions for ImsStack, despite the README's
+  promise. `repack-rom.sh` now sets `<nightly>.aospims.<hash of what it
+  adds>` (in `ro.build.version.incremental`,
+  `ro.system.build.version.incremental` and `ro.build.display.id`), and
+  `check-rom.sh` checks it. Checked locally: a repack gives
+  `e507d26f2f.aospims.b4e3d4ce` and passes; the official props fail the
+  check.
+- LineageOS's other `ImsPhoneCallTracker` switch,
+  `ro.telephony.handle_audio_direction_changes_between_call_state_changes`,
+  is unset on joan (AOSP's ringback behaviour); `check-rom.sh` checks it
+  stays so.
+- Nothing else in the incoming path returns "no listener" for a live
+  call: `processIncomingCall` does so only without an `ImsManager` or when
+  `takeCall` throws, and ImsStack's incoming session starts IDLE, which
+  Android 15 counts as alive.
+
 ## Still to do
 
-1. Bench 3 results; then the alpha1 release when the user agrees.
-2. **Every V30 model**: the ROM keeps LineageOS's OTA assert
-   (`v30, joan, h930, h932`); the zips check no model. Confirm against
-   `device/lge/joan` and document the models (H930, H930DS, H932,
-   US998, LS998, VS996).
-3. IMS APNs: ~100 carriers have IMS APNs with custom names that
-   LineageOS lacks (Android 15's default `ims` profile covers the rest).
-   The zip's APN merge is Viettel-only.
-4. Build the source-tree integration in a real LineageOS tree.
+1. Confirm an incoming call on the bench (bench 6); then the alpha1
+   release when the user agrees.
+2. ~~Every V30 model~~: done. The LineageOS wiki lists H930, H930DS,
+   US998 (unlocked), H932 (T-Mobile), H931, H933, LS998, V300K/L/S and
+   VS996, all on the one joan build. The zips check no model; the ROM
+   keeps the nightly's own device assert. Documented in both READMEs.
+3. ~~IMS APNs~~: done (item 5): the zip's `ImsApnGate` and the source
+   build's `vendor/apn/aosp-ims.xml`.
+4. Build the source-tree integration in a real LineageOS tree. Short of
+   that: `tests/check-soong.sh` (in CI) runs Android 15's own Soong over
+   the kit's ImsStack and ImsMedia `Android.bp` files and passes (user and
+   userdebug, product variables applied), every module they use from the
+   tree is defined in Android 15 (`--verify-stubs`), the ten resources
+   the device patch overlays exist in the nightly's framework-res and
+   TeleService, ImsStack's upstream privapp allowlist covers what its
+   manifests request at Android 15's protection levels (`build-apk.sh`),
+   and the zip's native compile flags match Soong's per module except
+   Soong's hardening sanitizers. `tests/check-tree-compile.sh` (in CI)
+   compiles all 873 native sources with Android 15's clang and Soong's
+   warnings as errors: clean.
+5. ~~From the port audit~~: done. GBA service (ImsStack 0008, device
+   patch 0002), the IMS/XCAP/emergency APNs LineageOS lacks (ImsApnGate,
+   vendor/apn/aosp-ims.xml), IWLAN flags at the Android 17 release values.
+   The SIM event list and IARI shims keep Android 15's contract on
+   purpose (see `docs/aosp-ims-port-audit-2026-09-27.md`).

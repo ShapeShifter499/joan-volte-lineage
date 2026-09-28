@@ -6,8 +6,14 @@ CarrierConfig would read it, and checked:
 
 - every imported block carries only keys import-carrier-settings.py keeps
   (no ImsService package overrides, provisioning, GBA-required, opt-out
-  lock or Wi-Fi-calling-on-by-default);
+  lock or Wi-Fi-calling-on-by-default), and no EVS anywhere, not even
+  inside a codec bundle: ImsMedia has no EVS codec;
+- the --fill layer (LG's settings, import-lg-ims.py) only fills PLMNs
+  the --imported layer (the Pixel data) has no block for; the --base
+  layer (AOSP 17's CarrierConfig changes) may lie under either;
 - the last block is the filterless every-SIM block;
+- a block keyed by carrier id and PLMN names a PLMN Android's carrier
+  database gives that id;
 - for every SIM Android can tell apart -- each carrier id and specific
   carrier id in carrier_list.textpb on each of its PLMNs, plus every PLMN
   in joan's map with no carrier id -- CarrierConfig's merge
@@ -25,8 +31,8 @@ those (MVNOs in the imported data) are checked for keys only.
 without imported data (apply-patches.sh adds that).
 
 Usage: check-carrier-config.py <carrier-id-map.json> <carrier-plmn-map.json>
-           <CarrierImsGate.java> <carrier_list.textpb> --imported <file>
-           [--patch <device patch>]
+           <CarrierImsGate.java> <carrier_list.textpb> [--base <file>]...
+           --imported <file>... [--fill <file>]... [--patch <device patch>]
 """
 import importlib.util
 import os
@@ -109,23 +115,39 @@ def patch_region(patch):
 
 
 def main(argv):
+    argv, layers, imported_files = mcc.take_imported(argv)
     opts = {}
-    for flag in ('--imported', '--patch'):
+    for flag in ('--patch',):
         if flag in argv:
             i = argv.index(flag)
             opts[flag] = argv[i + 1]
             argv = argv[:i] + argv[i + 2:]
-    if len(argv) != 4 or '--imported' not in opts:
+    if len(argv) != 4 or not layers['--imported']:
         raise SystemExit(__doc__)
     ids, plmns, epdg, carriers = mcc.load(*argv)
     fails = []
 
-    imported = parse_blocks(open(opts['--imported'], encoding='utf-8').read())
-    bad_keys = sorted({k for _, vals in imported for k in vals if not imp.keep(k)})
-    if bad_keys:
-        fails.append(f'imported data carries keys the importer excludes: {bad_keys[:8]}')
+    imported, covered = [], set()
+    for path in imported_files:
+        imported_text = open(path, encoding='utf-8').read()
+        blocks_here = parse_blocks(imported_text)
+        name = os.path.basename(path)
+        bad_keys = sorted({k for _, vals in blocks_here for k in vals if not imp.keep(k)})
+        if bad_keys:
+            fails.append(f'{name} carries keys the importer excludes: {bad_keys[:8]}')
+        nested = sorted({e.get('name') for e in ET.fromstring('<l>' + imported_text + '</l>').iter()
+                         if e.get('name') in imp.DROP_NESTED})
+        if nested:
+            fails.append(f'{name} carries nested keys the importer drops: {nested}')
+        here = {a.get('mcc', '') + a.get('mnc', '') for a, _ in blocks_here}
+        if path in layers['--imported']:
+            covered |= here
+        elif path in layers['--fill'] and covered & here:
+            fails.append(f'{name} fills PLMNs the imported data covers: '
+                         f'{sorted(covered & here)[:8]}')
+        imported += blocks_here
 
-    text = mcc.render(ids, plmns, epdg, carriers, opts['--imported'])
+    text = mcc.render(ids, plmns, epdg, carriers, imported_files)
     blocks = parse_blocks(text)
     last_attrs, last_vals = blocks[-1]
     if last_attrs or last_vals != dict(mcc.EVERY_SIM):
@@ -143,6 +165,14 @@ def main(argv):
             sims.add((parent if parent is not None else c, c, plmn))
     for plmn in plmns:
         sims.add((-1, -1, plmn))
+
+    # A block keyed by carrier id and PLMN only makes sense on a PLMN
+    # Android 15's carrier database gives that id.
+    for attrs, _ in imported:
+        if 'cid' in attrs and 'mcc' in attrs:
+            plmn = attrs['mcc'] + attrs.get('mnc', '')
+            if plmn not in tuples.get(int(attrs['cid']), ()):
+                fails.append(f'carrier id {attrs["cid"]} never gets PLMN {plmn}: {attrs}')
 
     n_imported_epdg = 0
     for cid, specific, plmn in sorted(sims):

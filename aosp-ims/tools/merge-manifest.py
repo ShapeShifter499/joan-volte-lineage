@@ -66,6 +66,29 @@ def main(stack_path, media_path, out, code, name):
             comp.set(a('exported'), 'false')
         app.append(comp)
 
+    # ImsApnGate adds the IMS, XCAP and emergency APNs a SIM lacks.
+    if 'android.permission.WRITE_APN_SETTINGS' not in have:
+        e = ET.Element('uses-permission')
+        e.set(a('name'), 'android.permission.WRITE_APN_SETTINGS')
+        sroot.insert(list(sroot).index(app), e)
+        have.add('android.permission.WRITE_APN_SETTINGS')
+
+    # Asks for the microphone and the other runtime permissions on the phone
+    # when the default-permissions file did not apply (flashed onto a ROM
+    # that had already booted). Out of the app drawer unless the stack finds
+    # the microphone missing (CallPermissionsActivity.updateLauncherEntry).
+    act = ET.SubElement(app, 'activity')
+    for k, v in (('name', 'com.android.imsstack.joan.CallPermissionsActivity'),
+                 ('label', 'Calling permissions'),
+                 ('icon', '@android:drawable/sym_action_call'),
+                 ('enabled', 'false'), ('exported', 'true'),
+                 ('excludeFromRecents', 'true'),
+                 ('theme', '@android:style/Theme.Translucent.NoTitleBar')):
+        act.set(a(k), v)
+    launcher = ET.SubElement(act, 'intent-filter')
+    ET.SubElement(launcher, 'action').set(a('name'), 'android.intent.action.MAIN')
+    ET.SubElement(launcher, 'category').set(a('name'), 'android.intent.category.LAUNCHER')
+
     # Upstream builds set the target SDK to the platform's; aapt2 would
     # otherwise take minSdkVersion (31).
     uses_sdk = sroot.find('uses-sdk')

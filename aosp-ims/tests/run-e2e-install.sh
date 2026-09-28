@@ -108,6 +108,66 @@ if [ "${1:-}" = "--inner" ]; then
     check 'grep -q "<permission name=\"android.permission.MODIFY_PHONE_STATE\"" "$S/system/etc/permissions/com.android.imsstack.xml"' "allowlist covers MODIFY_PHONE_STATE"
     check 'no_temps' "no .joan-new temp files left behind"
     check '[ ! -e "$S/system/etc/init/joan-grant.rc" ] && [ ! -e "$S/system/bin/joan-grant.sh" ]' "no boot-time grant on disk"
+    check 'cmp -s "$S/system/build.prop" "$WORK/buildprop-on.txt"' "build.prop: incoming-call handling on, nothing else changed"
+    check '[ -f "$S/system/etc/aosp-ims-incoming-calls.flipped" ]' "build.prop flip recorded for the uninstaller"
+    check 'cmp -s "$S/system/addon.d/60-aosp-ims.sh" "$ROOT/aosp-ims/zip/addon.d/60-aosp-ims.sh"' "addon.d script installed (kept across LineageOS updates)"
+    check 'cmp -s "$S/system/etc/aosp-ims/merge-viettel-apns.sh" "$ROOT/scripts/merge-viettel-apns.sh" && cmp -s "$S/system/etc/aosp-ims/viettel-45204.xml" "$ROOT/apn/viettel-45204.xml"' "addon.d's APN merge inputs installed"
+  }
+  # What a LineageOS update leaves once backuptool has run the addon.d
+  # script: the stack as the zip installed it, on the update's partitions.
+  restored_ok() {
+    check 'cmp -s "$S/system/priv-app/ImsStack/ImsStack.apk" "$WORK/zip/app/ImsStack.apk"' "update: apk restored byte-for-byte"
+    check 'cmp -s "$S/system/etc/permissions/com.android.imsstack.xml" "$ROOT/aosp-ims/permissions/privapp-permissions-com.android.imsstack.xml" && cmp -s "$S/system/etc/default-permissions/com.android.imsstack.xml" "$ROOT/aosp-ims/permissions/default-permissions-com.android.imsstack.xml" && cmp -s "$S/system/etc/sysconfig/com.android.imsstack.xml" "$ROOT/aosp-ims/permissions/sysconfig-com.android.imsstack.xml"' "update: allowlist, default grants and sysconfig restored"
+    check 'cmp -s "$S/system/priv-app/Iwlan/Iwlan.apk" "$WORK/zip/app/Iwlan.apk" && cmp -s "$S/system/priv-app/QualifiedNetworksService/QualifiedNetworksService.apk" "$WORK/zip/app/QualifiedNetworksService.apk"' "update: VoWiFi apps restored"
+    check 'cmp -s "$S/system/etc/permissions/com.google.android.iwlan.xml" "$ROOT/aosp-ims/permissions/privapp-permissions-com.google.android.iwlan.xml" && cmp -s "$S/system/etc/permissions/com.android.telephony.qns.xml" "$ROOT/aosp-ims/permissions/privapp-permissions-com.android.telephony.qns.xml" && cmp -s "$S/system/etc/sysconfig/com.google.android.iwlan.xml" "$ROOT/aosp-ims/permissions/sysconfig-com.google.android.iwlan.xml"' "update: VoWiFi allowlists and sysconfig restored"
+    check 'cmp -s "$P/overlay/ImsStackPhoneOverlay.apk" "$WORK/zip/app/ImsStackPhoneOverlay.apk" && cmp -s "$P/overlay/ImsStackFrameworkOverlay.apk" "$WORK/zip/app/ImsStackFrameworkOverlay.apk"' "update: overlays restored on product"
+    check 'cmp -s "$S/system/addon.d/60-aosp-ims.sh" "$ROOT/aosp-ims/zip/addon.d/60-aosp-ims.sh"' "update: addon.d script kept for the next update"
+    check 'cmp -s "$S/system/etc/aosp-ims/merge-viettel-apns.sh" "$ROOT/scripts/merge-viettel-apns.sh" && cmp -s "$S/system/etc/aosp-ims/viettel-45204.xml" "$ROOT/apn/viettel-45204.xml"' "update: APN merge inputs restored"
+    check '[ "$(stat -c %a "$S/system/priv-app/ImsStack")" = 755 ] && [ "$(stat -c %a "$S/system/priv-app/Iwlan")" = 755 ]' "update: priv-app directories 755"
+    check '! find "$S" "$P" -name "*.aosp-ims-new" -o -name "*.joan-new" | grep -q .' "update: no temp files left behind"
+  }
+  # The OTA's backuptool.sh as LineageOS recovery runs it, with one change:
+  # it starts addon.d scripts through the shell under test, because their
+  # #!/sbin/sh does not exist on this host.
+  stage_backuptool() {
+    mkdir -p /tmp/install/bin /mnt/system
+    cp "$ROOT/aosp-ims/tests/fixtures/backuptool/backuptool.functions" /tmp/install/bin/
+    sed 's#^\( *\)\$script \$stage$#\1$E2E_SHELL $script $stage#' \
+      "$ROOT/aosp-ims/tests/fixtures/backuptool/backuptool.sh" > /tmp/install/bin/backuptool.sh
+    [ "$(grep -c '\$E2E_SHELL \$script \$stage' /tmp/install/bin/backuptool.sh)" = 1 ]
+  }
+  run_backuptool() {
+    E2E_DYNAMIC=1 E2E_SHELL="$SHELL_UNDER_TEST" $SHELL_UNDER_TEST /tmp/install/bin/backuptool.sh \
+      "$1" /dev/block/mapper/system ext4 >> "$WORK/out-$SCEN-ota.txt" 2>&1
+  }
+  # A LineageOS update as recovery writes it: system, product and
+  # system_ext rewritten whole, from a newer build.
+  flash_update() {
+    for fu_d in "$LSYS" "$LPROD" "$LSYSEXT"; do
+      mkfs.ext4 -q -F -m 0 -b 4096 -I 256 -N 1024 "$fu_d"
+    done
+    mkdir -p /mnt/new_s /mnt/new_p
+    mount "$LSYS" /mnt/new_s; mount "$LPROD" /mnt/new_p
+    mkdir -p /mnt/new_s/system/priv-app/Dummy /mnt/new_s/system/etc/permissions \
+             /mnt/new_s/system/addon.d /mnt/new_s/product /mnt/new_s/system_ext \
+             /mnt/new_p/overlay /mnt/new_p/etc
+    ln -s /product /mnt/new_s/system/product
+    ln -s /system_ext /mnt/new_s/system/system_ext
+    head -c 50000 /dev/urandom > /mnt/new_s/system/priv-app/Dummy/Dummy.apk
+    echo '<permissions/>' > /mnt/new_s/system/etc/permissions/platform.xml
+    case "$SCEN" in
+      ota)
+        cp "$WORK/buildprop-update.txt" /mnt/new_s/system/build.prop
+        cp "$WORK/apns-newrom.xml" /mnt/new_p/etc/apns-conf.xml
+        ;;
+      otaalt)
+        # No incoming-call gate, its own IMS feature file, its APN list on /system.
+        cp "$WORK/buildprop-update-plain.txt" /mnt/new_s/system/build.prop
+        cp "$WORK/apns-newrom.xml" /mnt/new_s/system/etc/apns-conf.xml
+        cp "$WORK/ims-feature-rom.xml" /mnt/new_s/system/etc/permissions/android.hardware.telephony.ims.xml
+        ;;
+    esac
+    umount /mnt/new_s /mnt/new_p
   }
   viettel_blocks() { grep -c 'joan-viettel-45204-begin' "$1" 2>/dev/null || true; }
 
@@ -170,6 +230,7 @@ if [ "${1:-}" = "--inner" ]; then
       check 'cmp -s "$P/overlay/ImsStackPhoneOverlay.apk" "$WORK/zip/app/ImsStackPhoneOverlay.apk"' "overlays installed anyway"
       check 'cmp -s "$S/system/priv-app/ImsStack/ImsStack.apk" "$WORK/zip/app/ImsStack.apk"' "apk installed anyway"
       check 'no_temps' "no .joan-new temp files left behind"
+      check 'cmp -s "$S/system/build.prop" "$WORK/buildprop-plain.txt" && [ ! -e "$S/system/etc/aosp-ims-incoming-calls.flipped" ]' "build.prop without the property left alone"
       umount_chk
       ;;
     reflash)
@@ -222,7 +283,57 @@ if [ "${1:-}" = "--inner" ]; then
       check '[ ! -e "$S/system/etc/permissions/android.hardware.telephony.ims.xml" ]' "IMS feature xml removed (it was ours)"
       check '[ ! -e "$P/overlay/ImsStackPhoneOverlay.apk" ] && [ ! -e "$P/overlay/ImsStackFrameworkOverlay.apk" ]' "overlays removed"
       check 'cmp -s "$P/etc/apns-conf.xml" "$WORK/apns-orig.xml"' "APN list restored byte-for-byte"
+      check 'cmp -s "$S/system/build.prop" "$WORK/buildprop-joan.txt"' "build.prop restored byte-for-byte"
+      check '! find "$S" "$P" -name "*aosp-ims*" | grep -q .' "no aosp-ims marker or temp file left"
       check '! find "$S" "$P" -name "*joan*" | grep -q .' "nothing named joan left on either partition"
+      umount_chk
+      ;;
+    ota|otaalt)
+      # Installed, then a LineageOS update: the OTA's own backuptool runs
+      # the addon.d script before and after rewriting the partitions.
+      rc=$(run_install)
+      check '[ "$rc" = 0 ]' "install before the update exits 0 (rc=$rc)"
+      if stage_backuptool; then ok "the OTA's backuptool staged"; else bad "backuptool fixture not staged"; fi
+      run_backuptool backup
+      flash_update
+      run_backuptool restore
+      check '! grep -q "not possible" "$WORK/out-$SCEN-ota.txt"' "backuptool ran the addon.d scripts both times"
+      mount_chk
+      restored_ok
+      case "$SCEN" in
+        ota)
+          check 'cmp -s "$S/system/build.prop" "$WORK/buildprop-update.txt.on"' "update: its build.prop gates incoming calls off again; flipped on, nothing else changed"
+          check '[ -f "$S/system/etc/aosp-ims-incoming-calls.flipped" ]' "update: flip recorded for the uninstaller"
+          check 'cmp -s "$S/system/etc/permissions/android.hardware.telephony.ims.xml" "$ROOT/permissions/android.hardware.telephony.ims.xml" && [ -f "$S/system/etc/permissions/android.hardware.telephony.ims.xml.joan-added" ]' "update: IMS feature xml ours again, and recorded as ours"
+          check 'cmp -s "$P/etc/apns-conf.xml.joan-orig" "$WORK/apns-newrom.xml"' "update: APN backup is the update's own list"
+          check '[ "$(viettel_blocks "$P/etc/apns-conf.xml")" = 1 ] && grep -q "NewRom Carrier" "$P/etc/apns-conf.xml"' "update: Viettel rows merged into the update's list"
+          check '[ "$(cat "$P/etc/apns-conf.xml.joan-merged")" = "$(md5sum < "$P/etc/apns-conf.xml" | cut -d" " -f1)" ]' "update: APN merge marker matches the live list"
+          ;;
+        otaalt)
+          check 'cmp -s "$S/system/build.prop" "$WORK/buildprop-update-plain.txt" && [ ! -e "$S/system/etc/aosp-ims-incoming-calls.flipped" ]' "update without the gate: build.prop left alone, no marker"
+          check 'cmp -s "$S/system/etc/permissions/android.hardware.telephony.ims.xml.joan-orig" "$WORK/ims-feature-rom.xml" && cmp -s "$S/system/etc/permissions/android.hardware.telephony.ims.xml" "$ROOT/permissions/android.hardware.telephony.ims.xml"' "update ships its own IMS feature xml: kept aside, ours in place"
+          check '[ "$(viettel_blocks "$P/etc/apns-conf.xml")" = 1 ] && [ -f "$P/etc/apns-conf.xml.joan-added" ] && cmp -s "$S/system/etc/apns-conf.xml" "$WORK/apns-newrom.xml"' "update keeps its APN list on /system: merged into a /product copy, /system untouched"
+          ;;
+      esac
+      umount_chk
+      urc=$(run_uninstall)
+      check '[ "$urc" = 0 ]' "uninstall after the update exits 0 (rc=$urc)"
+      mount_chk
+      check '[ ! -e "$S/system/priv-app/ImsStack" ] && [ ! -e "$S/system/addon.d/60-aosp-ims.sh" ] && [ ! -e "$S/system/etc/aosp-ims" ]' "uninstall after the update: stack and addon.d script gone"
+      case "$SCEN" in
+        ota)
+          check 'cmp -s "$S/system/build.prop" "$WORK/buildprop-update.txt"' "uninstall: build.prop is the update's own again"
+          check 'cmp -s "$P/etc/apns-conf.xml" "$WORK/apns-newrom.xml"' "uninstall: APN list is the update's own again"
+          check '[ ! -e "$S/system/etc/permissions/android.hardware.telephony.ims.xml" ]' "uninstall: IMS feature xml removed (the update has none)"
+          ;;
+        otaalt)
+          check 'cmp -s "$S/system/build.prop" "$WORK/buildprop-update-plain.txt"' "uninstall: build.prop untouched"
+          check '[ ! -e "$P/etc/apns-conf.xml" ] && cmp -s "$S/system/etc/apns-conf.xml" "$WORK/apns-newrom.xml"' "uninstall: /product APN copy removed, /system list intact"
+          check 'cmp -s "$S/system/etc/permissions/android.hardware.telephony.ims.xml" "$WORK/ims-feature-rom.xml"' "uninstall: the update's own IMS feature xml back"
+          ;;
+      esac
+      check '! find "$S" "$P" -name "*aosp-ims*" | grep -q .' "uninstall: no aosp-ims file left"
+      check '! find "$S" "$P" -name "*joan*" | grep -q .' "uninstall: nothing named joan left"
       umount_chk
       ;;
     *) bad "unknown scenario"; ;;
@@ -237,6 +348,34 @@ rm -rf "$WORK"
 mkdir -p "$WORK/zip/META-INF/com/google/android" "$WORK/zip/app" \
   "$WORK/zip/etc/permissions" "$WORK/zip/etc/default-permissions" "$WORK/zip/etc/sysconfig" \
   "$WORK/zip/apn" "$WORK/zip/scripts" "$WORK/bin"
+
+# build.prop as joan's nightly has it (incoming calls gated off for the
+# modem IMS), as the installer should leave it, and a ROM without the line.
+# The LineageOS version is what backuptool checks before it runs addon.d.
+BP_HEAD='ro.system.build.version.sdk=35\nro.build.version.sdk=35\nro.lineage.version=22.2-20260920-NIGHTLY-joan\n'
+printf "${BP_HEAD}ro.telephony.block_binder_thread_on_incoming_calls=false\n" > "$WORK/buildprop-joan.txt"
+printf "${BP_HEAD}ro.telephony.block_binder_thread_on_incoming_calls=true\n" > "$WORK/buildprop-on.txt"
+printf "$BP_HEAD" > "$WORK/buildprop-plain.txt"
+# The next nightly's, for the update scenarios: gated off again (and as
+# the addon.d script should leave it), and without the line.
+BP_UPD='ro.system.build.version.sdk=35\nro.build.version.sdk=35\nro.lineage.version=22.2-20260927-NIGHTLY-joan\nro.build.version.incremental=0a1b2c3d4e\n'
+printf "${BP_UPD}ro.telephony.block_binder_thread_on_incoming_calls=false\n" > "$WORK/buildprop-update.txt"
+printf "${BP_UPD}ro.telephony.block_binder_thread_on_incoming_calls=true\n" > "$WORK/buildprop-update.txt.on"
+printf "$BP_UPD" > "$WORK/buildprop-update-plain.txt"
+# An update that declares IMS itself, differently from this package.
+printf '<?xml version="1.0" encoding="utf-8"?>\n<permissions>\n    <feature name="android.hardware.telephony.ims" />\n    <!-- the update'"'"'s own -->\n</permissions>\n' \
+  > "$WORK/ims-feature-rom.xml"
+
+# The OTA's backuptool (tests/fixtures/backuptool) runs the addon.d script
+# in the update scenarios. Where the pinned OTA is at hand (E2E_OTA, set in
+# CI), the fixture must be the OTA's own, byte for byte.
+if [ -n "${E2E_OTA:-}" ]; then
+  for f in backuptool.sh backuptool.functions; do
+    unzip -p "$E2E_OTA" "install/bin/$f" | cmp -s - "aosp-ims/tests/fixtures/backuptool/$f" \
+      || { echo "tests/fixtures/backuptool/$f is not the one in $E2E_OTA"; exit 1; }
+  done
+  echo "backuptool fixture: the pinned OTA's own"
+fi
 
 # Tool farm.
 for t in cat chmod cut df dmesg head ls lsattr md5sum cksum mkdir mount mv \
@@ -256,7 +395,10 @@ rm -f "$WORK/bin/umount"
 printf '#!/bin/sh\nexec toybox umount -D "$@"\n' > "$WORK/bin/umount"
 chmod 755 "$WORK/bin/umount"
 printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/chcon"
-printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/getprop"
+# joan's recovery maps dynamic partitions; backuptool asks, the installer
+# does not need to.
+printf '#!/bin/sh\n[ "$1" = ro.boot.dynamic_partitions ] && [ -n "$E2E_DYNAMIC" ] && echo true\nexit 0\n' \
+  > "$WORK/bin/getprop"
 chmod 755 "$WORK/bin/chcon" "$WORK/bin/getprop"
 
 # The package under test. The apk is a stand-in: the installer never
@@ -279,6 +421,8 @@ cp aosp-ims/permissions/sysconfig-com.android.imsstack.xml "$WORK/zip/etc/syscon
 cp aosp-ims/permissions/sysconfig-com.google.android.iwlan.xml "$WORK/zip/etc/sysconfig/com.google.android.iwlan.xml"
 cp apn/viettel-45204.xml "$WORK/zip/apn/"
 cp scripts/merge-viettel-apns.sh "$WORK/zip/scripts/"
+mkdir -p "$WORK/zip/addon.d"
+cp aosp-ims/zip/addon.d/60-aosp-ims.sh "$WORK/zip/addon.d/"
 python3 - "$WORK" <<'PYZ'
 import os, sys, zipfile
 work = sys.argv[1]
@@ -340,9 +484,17 @@ populate() {
   # populate <scenario> <sysdir> <proddir> <sysextdir>
   sc=$1; s=$2; p=$3; se=$4
   mkdir -p "$s/system/priv-app/Dummy" "$s/system/etc/permissions" \
-           "$s/system/etc/init" "$s/system/bin" "$p/overlay" "$p/etc" \
-           "$se/bin" "$se/etc/init"
-  printf 'ro.system.build.version.sdk=35\nro.build.version.sdk=35\n' > "$s/system/build.prop"
+           "$s/system/etc/init" "$s/system/bin" "$s/system/addon.d" "$p/overlay" "$p/etc" \
+           "$se/bin" "$se/etc/init" "$s/product" "$s/system_ext"
+  # As in joan's system image: mount points for the other partitions at
+  # the root, and links to them from system/.
+  ln -s /product "$s/system/product"
+  ln -s /system_ext "$s/system/system_ext"
+  if [ "$sc" = prodtight ]; then
+    cp "$WORK/buildprop-plain.txt" "$s/system/build.prop"   # a ROM without the property
+  else
+    cp "$WORK/buildprop-joan.txt" "$s/system/build.prop"    # joan: incoming calls gated off
+  fi
   head -c 50000 /dev/urandom > "$s/system/priv-app/Dummy/Dummy.apk"
   echo '<permissions/>' > "$s/system/etc/permissions/platform.xml"
   if [ "$sc" = syslist ]; then
@@ -381,10 +533,16 @@ fill_to() {
 
 CREATED_DEVBLOCK=0
 if [ ! -d /dev/block ]; then mkdir /dev/block; CREATED_DEVBLOCK=1; fi
+# backuptool mounts product and system_ext at /product and /system_ext, as
+# on the phone. The mounts stay in each scenario's namespace; the empty
+# mount points it creates are removed again.
+MADE_DIRS=""
+for d in /product /system_ext; do [ -e "$d" ] || MADE_DIRS="$MADE_DIRS $d"; done
 LOOPS=""
 cleanup() {
   for l in $LOOPS; do losetup -d "$l" 2>/dev/null || true; done
   [ "$CREATED_DEVBLOCK" = 1 ] && rmdir /dev/block 2>/dev/null || true
+  for d in $MADE_DIRS; do rmdir "$d" 2>/dev/null || true; done
 }
 trap cleanup EXIT
 
@@ -394,7 +552,7 @@ run_scenario() {
   mk_img "$WORK/system.img" 24
   mk_img "$WORK/product.img" 16
   mk_img "$WORK/system_ext.img" 8
-  rm -f "$WORK/out-$sc.txt" "$WORK/out-$sc-uninstall.txt"
+  rm -f "$WORK/out-$sc.txt" "$WORK/out-$sc-uninstall.txt" "$WORK/out-$sc-ota.txt"
   # Attach once and keep the same devices for populating and for the
   # install. `mount -o loop` would autoclear on umount, and a re-attach
   # can race that teardown onto the same loop number.
@@ -415,17 +573,21 @@ run_scenario() {
   else
     total_fail=$((total_fail + $?))
     echo "  -- installer output ($sc, $shell):"; sed 's/^/     | /' "$WORK/out-$sc.txt" | tail -40
+    if [ -f "$WORK/out-$sc-ota.txt" ]; then
+      echo "  -- backuptool output ($sc, $shell):"; sed 's/^/     | /' "$WORK/out-$sc-ota.txt" | tail -40
+    fi
   fi
   losetup -d "$ls" "$lp" "$le"
   LOOPS=""
+  for d in $MADE_DIRS; do rmdir "$d" 2>/dev/null || true; done
 }
 
 echo "== e2e AOSP IMS installer (generated update-binary on ext4 images)"
-for sc in fresh upgrade67 joanrefuse sysfull prodtight reflash rebase syslist uninstall; do
+for sc in fresh upgrade67 joanrefuse sysfull prodtight reflash rebase syslist uninstall ota otaalt; do
   run_scenario "$sc" mksh
 done
 # LineageOS recovery runs mksh; TWRP and OrangeFox run busybox ash.
-for sc in fresh upgrade67 joanrefuse uninstall; do
+for sc in fresh upgrade67 joanrefuse uninstall ota; do
   run_scenario "$sc" "busybox sh"
 done
 

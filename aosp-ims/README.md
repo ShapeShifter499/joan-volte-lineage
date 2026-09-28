@@ -16,13 +16,28 @@ Qualcomm's IMS core (`docs/v30-modem-and-qualcomm-ims-2026-09-27.md`).
 AOSP's stack runs on the application processor and needs the modem only
 for the LTE bearer and SIM authentication, which the V30 has.
 
+**Phones.** Every V30 that LineageOS 22.2 supports, all on the one `joan`
+build (per the LineageOS wiki): H930, H930DS (dual SIM), US998, H932
+(T-Mobile), H931, H933, LS998, V300K, V300L, V300S and VS996. The zips
+check no model, and the ROM keeps the official nightly's device check,
+so both install wherever the official nightly does. Tested so far: a
+US998 on T-Mobile. Some carriers allow VoLTE only on phone models they
+have certified; that is decided by the network, not the phone.
+
 > **Alpha.** Bench results so far (US998, T-Mobile): the migrate zip
 > installs and ImsStack registers with IPsec, once patch 0004 stopped a
 > startup crash. The first calls then failed before any INVITE left the
 > phone: the SIM's call control answer never reached ImsStack (joan's RIL
-> returns status words 00 00), and 0005 now sets such a call up as
-> dialled. No call has completed yet. Keep a way back: the `-uninstall`
-> zip, or the official nightly.
+> returns status words 00 00), and 0005 sets such a call up as dialled.
+> With it, a call rang and was answered, then the phone hung up a fifth
+> of a second later: ImsMedia's media service died as the call's media
+> started (its native JNI table registers a method its Java class never
+> declared). ImsMedia 0002 fixes that, and outbound calls now work end to
+> end. Incoming calls were refused before ringing by a joan device-tree
+> property that tells LineageOS's telephony to ignore them (for the
+> Qualcomm modem IMS); the zips and the ROM now turn it on. An incoming
+> call has not been confirmed yet. Keep a way back: the `-uninstall` zip,
+> or the official nightly.
 
 What the stack does, all of it upstream AOSP code: VoLTE (voice over
 LTE, HD voice codecs), Wi-Fi calling (VoWiFi over IWLAN, with QNS moving
@@ -45,7 +60,7 @@ The ROM and zips are on the
 [`aosp-ims-17.0.0_r1-a15-alpha1`](https://github.com/ShapeShifter499/joan-volte-lineage/releases/tag/aosp-ims-17.0.0_r1-a15-alpha1)
 prerelease, built from this directory by `.github/workflows/aosp-ims.yml`.
 `aosp-ims/RELEASE-NOTES.md` is its description: which file to flash,
-the adb step, known limits, and what logs to send.
+permissions, known limits, and what logs to send.
 
 ### Which zip
 
@@ -60,25 +75,61 @@ on this device generally does not).
 - **`-uninstall`**: removes everything either zip, or the ROM above,
   added. The ROM's own files are left as the nightly shipped them.
 
+Both install zips also set one line of `/system/build.prop`:
+`ro.telephony.block_binder_thread_on_incoming_calls=true`. joan's tree
+ships it false for the Qualcomm modem IMS, and with it false LineageOS's
+telephony hands an IMS stack no incoming call. Only that line changes;
+the zip leaves a marker (`/system/etc/aosp-ims-incoming-calls.flipped`)
+and the `-uninstall` zip sets the line back to false. A ROM without the
+line is left alone. The repacked ROM ships it true.
+
 These use joan's installer v8, the one that flashes across
 LineageOS-based ROMs (alpha67): it checks free space before writing,
 copies atomically, writes the permission allowlists before the APKs, and
 invalidates the package manager's cache so the next boot rescans.
 
-### The adb step (zips and repacked ROM)
+### LineageOS updates
+
+The zips and the repacked ROM install `/system/addon.d/60-aosp-ims.sh`.
+A LineageOS update runs it through its backuptool before and after
+rewriting system and product. The script puts the stack back, then redoes
+the build.prop incoming-call flip and the Viettel APN merge on the
+update's own files. Afterwards the phone is as if the zip had been
+flashed onto the update, so there is no need to re-flash after each
+nightly. The uninstall zip removes the script. `tests/run-e2e-install.sh` runs the
+joan OTA's own backuptool around a simulated update, and CI checks that
+copy against the pinned OTA.
+
+### Permissions (zips and repacked ROM)
 
 The apps are not signed with the ROM's platform key (only LineageOS has
-it), so some permissions can only be granted over adb until a build
-carries the stack. With USB debugging on, once, after the first boot:
+it), so:
 
-```
-sh grant-permissions.sh        # in the zip, and at aosp-ims/zip/grant-permissions.sh
-```
+- **Calls** need ImsStack's runtime permissions, the microphone above
+  all: ImsMedia, in ImsStack's package, records the call. The
+  default-permissions file grants them on the first boot after a ROM
+  install or update, so the repacked ROM (an update even over its own
+  nightly: see [The ROM](#the-rom)), and a zip flashed in the same
+  recovery session as a ROM update, need nothing more. A zip flashed
+  onto a ROM that has already booted gets them from **Calling
+  permissions** in the app drawer. ImsStack puts it there while the
+  microphone is missing (`zip/java/.../CallPermissionsActivity.java`); it
+  asks with Android's own dialogs for the microphone, camera (video
+  calls), location (emergency calls) and phone, and leaves the drawer
+  once the microphone is allowed. No reboot needed. The same permissions
+  are under Settings > Apps > ImsStack > Permissions (show system apps).
+- **Wi-Fi calling** needs one step over adb, however it was installed:
+  IWLAN's tunnel needs the `MANAGE_IPSEC_TUNNELS` app-op, which has no
+  setting on the phone. With USB debugging on, once:
 
-It runs `pm grant` for ImsStack's microphone, camera (video calls),
-phone and location permissions, IWLAN's phone and location, and QNS's
-phone state; and `appops set com.google.android.iwlan MANAGE_IPSEC_TUNNELS
-allow`, which Wi-Fi calling needs to build its tunnel. Reboot afterwards.
+  ```
+  sh grant-permissions.sh        # in the zip, and at aosp-ims/zip/grant-permissions.sh
+  ```
+
+  It runs `appops set com.google.android.iwlan MANAGE_IPSEC_TUNNELS
+  allow`, and `pm grant` for everything above plus IWLAN's phone and
+  location and QNS's phone state. Reboot afterwards.
+
 A source build needs none of this.
 
 ## What it does per carrier
@@ -99,11 +150,48 @@ brings it along, for every SIM:
   `tools/import-carrier-settings.py` into `carrier/lineage-pixel-ims.xml`
   (sources pinned in `upstream.lock`), filtered to the keys the AOSP stack
   reads; never the keys that would pick another ImsService, require
-  provisioning, lock the VoLTE toggle or turn Wi-Fi calling on by default.
+  provisioning, lock the VoLTE toggle or turn Wi-Fi calling on by default,
+  and never EVS (ImsMedia has no EVS codec; ImsStack 0007 also drops it
+  from any other config).
+- **What AOSP 17's own CarrierConfig changed**: Android 17's
+  CarrierConfig app ships newer carrier assets than LineageOS 22.2's
+  (Android 15's). The IMS keys they set differently are carried over as
+  a layer under the Pixel data (`tools/import-aosp-carrierconfig.py`,
+  `carrier/aosp17-carrierconfig-ims.xml`, regenerated and compared in CI
+  by `tools/regen-aosp-carrierconfig.sh`): 11 carriers, among them TIM
+  (Ut, no IPsec), ALIV (USSD over IMS, conference factory), netplus.ch
+  (Ut and BSF servers), Brisanet, OXIO, Madar and Pivotel, and Verizon's
+  and Xfinity's hold in IMS calls where the Pixel data does not decide
+  it. Keyed by carrier id and PLMN as Android 15's carrier database
+  assigns them (by PLMN for carriers it does not know yet).
+- **LG's own settings where the Pixel data has nothing**: of the 82
+  PLMNs joan's LG profiles cover and the Pixel data has no block for,
+  the 38 where LG's V30 settings differ from ImsStack's defaults get
+  what they say about IPsec (off), USSD (over IMS) and the conference
+  factory: MTS, MegaFon, Beeline and Tele2 in Russia, CSL and PCCW in
+  Hong Kong, Vodacom and Cell C in South Africa, Verizon's, AT&T's and
+  Canadian carriers' secondary PLMNs, among others
+  (`tools/import-lg-ims.py`, `carrier/lg-ims.xml`). Only those three:
+  each is checked, every time the file is made, against the networks
+  both data sets cover (LG's IPsec off matches the Pixel data 30 of 34
+  times, its USSD over IMS 88 of 95, conference factories 71 of 75), and
+  conference URIs copied from another country's network in LG's data
+  are left out.
 - **ePDG**: the carrier's own address from that data where it has one;
   for T-Mobile, MetroPCS, AT&T and Verizon otherwise, whose ePDGs are not
   at the 3GPP default name, joan's table. Everyone else uses the default
   name derived from the SIM.
+- **IMS, XCAP and emergency APNs** from the same Pixel data
+  (`carrier/lineage-pixel-apns.xml`, the converter's APN list, imported
+  by `tools/import-carrier-apns.py`). LineageOS's own list has IMS APNs
+  for about 200 networks, the Pixel data for about 1400. Android 15 makes
+  up an IMS APN named `ims` and an emergency APN named `sos` by itself,
+  so what was missing is the carriers whose APNs are named otherwise
+  (Verizon's MVNOs, among others) and every XCAP APN, which Ut needs. An
+  APN is added only for a type the SIM has none of, and only at the level
+  its APNs already come from (Android picks a SIM's MVNO rows over its
+  MCC/MNC rows, so a row at the wrong level would hide its internet APN).
+  IMS and emergency APNs allow IWLAN, for Wi-Fi calling.
 
 Where it lives: the zip and the ROM apply it at run time, on top of
 whatever carrier config the ROM ships
@@ -113,20 +201,33 @@ LineageOS-based ROM keeps its own. A source build carries the same as
 CarrierConfig `vendor.xml` blocks (`tools/make-carrier-config.py`,
 spliced in by `upstream/aosp-ims/apply-patches.sh`).
 `tests/check-carrier-config.py` checks the result for all 2866 SIM
-identities Android's carrier database knows.
+identities Android's carrier database knows, and that LG's blocks only
+fill PLMNs the Pixel data lacks.
 
-## Status (2026-09-27)
+The APNs likewise: the zip adds them on the phone
+(`zip/java/.../ImsApnGate.java`, deciding with `ApnPlan.java` against the
+APNs Android actually gives the SIM), as rows keyed by the SIM's carrier
+id, which Android appends to the SIM's other rows; it takes them back
+once the ROM has its own. A source build gets them as
+`vendor/apn/aosp-ims.xml` (`tools/make-apns.py`, from `apply-patches.sh`),
+939 rows against LineageOS's list at the commit pinned in
+`upstream.lock`. `tests/check-apns.py` checks that list for 2714 SIM
+identities: no SIM's APNs change level or lose a row, and the list still
+validates against LineageOS's schema.
+
+## Status (2026-09-28)
 
 | Step | State |
 |---|---|
-| ImsStack + ImsMedia Java, against LineageOS 22.2's own framework | done: 6 ImsStack patches, 1 ImsMedia |
+| ImsStack + ImsMedia Java, against LineageOS 22.2's own framework | done: 10 ImsStack patches, 2 ImsMedia |
+| LineageOS 22.2's own changes on the IMS path | reviewed, 62 files and 3 properties; `tests/check-lineage-forks.py` (in CI) |
 | `libimsstack.so`, `libimsmedia.so`, linked against the ROM's libraries | done |
 | IWLAN + QNS (Android 17) for the zip | done: 1 patch each |
 | Single-APK packaging, overlays, permission files | done |
-| Flashable zips (fresh, migrate, uninstall) | done; 164 end-to-end installer checks pass |
+| Flashable zips (fresh, migrate, uninstall) | done; 261 end-to-end installer checks pass, LineageOS updates (addon.d) included |
 | Repacked LineageOS 22.2 ROM | done; `tests/check-rom.sh` passes |
-| Source-tree integration (`upstream/AOSP-IMS.md`) | written and checked piece by piece; not yet built in a tree |
-| **Tested on a phone** | US998 on T-Mobile: the migrate zip installs and ImsStack registers (IPsec sec-agree, reg-event) once 0004 stops the startup crash. Calls failed on USAT call control until 0005; not yet re-tested |
+| Source-tree integration (`upstream/AOSP-IMS.md`) | written and checked piece by piece, its build files by Android 15's own Soong (`tests/check-soong.sh`, in CI); not yet built in a tree |
+| **Tested on a phone** | US998 on T-Mobile: the migrate zip installs and ImsStack registers (IPsec sec-agree, reg-event) once 0004 stops the startup crash. With 0005/0006 calls go out, ring and are answered; with ImsMedia 0002 (the media service no longer dies at the first call) outbound calls work end to end. Incoming calls were refused by joan's `ro.telephony.block_binder_thread_on_incoming_calls=false`, which the installer now flips; not yet confirmed |
 
 ## What the backport changes
 
@@ -141,7 +242,12 @@ pinned in `upstream.lock`.
 | ImsStack 0004 | Emergency call tracking without `READ_ACTIVE_EMERGENCY_SESSION` (signature-only). Without the platform key the listener is refused, which crash-looped the stack on a US998; ImsStack now falls back to the call state plus `TelecomManager#isInEmergencyCall` (a privileged permission the zip holds). Platform-signed builds keep the original listener |
 | ImsStack 0005 | USAT call control with no answer from the SIM. joan's RIL completes the CALL CONTROL envelope with status words 00 00 and no data, which no UICC sends; ImsStack took it as a refusal and failed every MO call on a SIM with call control by USIM (T-Mobile's). With no answer there is no verdict: the call is set up as dialled, and an SMS under MO SMS control sent as is. A real answer from the SIM (busy, an error, or result 01 "not allowed") still blocks |
 | ImsStack 0006 | The location information in those envelopes coded a three-digit MNC in dialling order (310-260 as `13 20 06`); it is now coded as 3GPP TS 24.008 says (`13 00 62`) |
+| ImsStack 0007 | Never offers EVS. ImsMedia's EVS encoder and decoder are still TODOs, so an EVS call would carry no audio; the Pixel-derived config offers EVS for hundreds of carriers. The codec offer keeps AMR-WB and AMR whatever the config says |
+| ImsStack 0008 | ImsStack is also the device's GBA service (`ImsStackGbaService`, selected by the phone's `config_gba_package`). Ut/XCAP authenticates with GBA, which Android asks for by default for every carrier, and neither AOSP nor LineageOS ships a GBA service, so XCAP servers that ask for it refused call forwarding, waiting and barring settings. GBA_ME: HTTP digest AKA with the carrier's BSF (TS 24.109), AKA on the ISIM or USIM, Ks_NAF per TS 33.220 |
+| ImsStack 0009 | `MediaManagerHelper.close()` is synchronized: when the media service died mid-call, two callers raced its check-then-act teardown into a NullPointerException on top of the media failure (bench) |
+| ImsStack 0010 | Logs why the framework refused an incoming call (the exception, or no listener) before the stack answers 480 (bench instrumentation) |
 | ImsMedia 0001 | `ImsMediaManager` binds the ImsMedia service in its own package when that package has one (the zip's single APK) |
+| ImsMedia 0002 | Declares `JNIImsMediaService.setTestMode`. The pinned ImsMedia's native JNI table registers it and its Java class never declared it, so registration failed at library load and the media service died when the first call's media started: the phone hung up right after the call was answered. Outbound calls work end to end with this (bench) |
 | Iwlan 0001 | No physical-network reporting in `DataCallResponse` (Android 16 API) |
 | QNS 0001 | Wi-Fi calling activation without androidx: the activity is a plain `Activity`, and carrier portals open in the browser |
 
@@ -168,13 +274,11 @@ pinned in `upstream.lock`.
   calling available on the device; IWLAN and QNS as the WLAN data,
   network and qualified-networks services.
 - **What it cannot have.** `ACCESS_SURFACE_FLINGER` and
-  `INTERACT_ACROSS_USERS_FULL` are signature-only: video surfaces and
-  work profiles may misbehave. `USE_ICC_AUTH_WITH_DEVICE_IDENTIFIER` is
-  also signature-only, but Android 15 falls back to
-  `READ_PRIVILEGED_PHONE_STATE` (which the zip holds) for the underlying
-  SIM auth, so GBA-based Ut/XCAP authentication still works.
-  `MANAGE_IPSEC_TUNNELS` comes from the adb app-op instead. A source
-  build signs with the platform key and holds everything.
+  `INTERACT_ACROSS_USERS_FULL` are signature-only, but nothing uses
+  them: ImsMedia draws video into the surfaces the dialer hands it
+  (`ANativeWindow`, no SurfaceFlinger calls), and neither app makes a
+  cross-user call. `MANAGE_IPSEC_TUNNELS` comes from the adb app-op
+  instead.
 
 ## How it builds
 
@@ -226,6 +330,37 @@ UNOFFICIAL, and writes a block OTA recovery flashes the same way. The
 images are written whole, at exactly the partition sizes the OTA's
 dynamic-partition ops declare. Only LineageOS can sign with its key, so
 recovery warns that verification failed and asks before installing.
+
+It also gives the ROM its own build number: `ro.build.version.incremental`
+becomes the nightly's plus `.aospims.` and a hash of what the repack adds
+(Settings > About shows it). On joan, LineageOS tells a system update by
+that number alone, because every partition's fingerprint is LG's stock
+one in every build. PackageManager's upgrade scan and package cache, the
+default permission grants and TeleService's carrier config cache all key
+on it. So flashing the ROM over the nightly it came from, without a
+wipe, is still an update: ImsStack gets its permissions at first boot,
+and the package cache can't keep an older IMS zip's manifest.
+
+### LineageOS's own changes
+
+LineageOS builds most of Android 15 from AOSP's `android-15.0.0_r32` and
+forks a few projects. `tests/check-lineage-forks.py` (in CI) diffs the
+forks on the IMS path against that tag at the commits `upstream.lock`
+pins: frameworks/base's telephony, location, permission,
+package-manager, audio and network-policy code, frameworks/opt/telephony,
+TeleService, TelephonyProvider and IWLAN. Every file that differs must be
+in `tests/lineage-forks.txt` with the reviewed diff's hash and what it
+means for this stack, and so must every system property LineageOS's added
+code reads. It also checks that CarrierConfig, `frameworks/opt/net/ims`,
+ImsMedia and the Telephony module are still AOSP's in LineageOS's manifest.
+The review found three properties that matter:
+
+- `ro.telephony.block_binder_thread_on_incoming_calls`, set true above;
+- `ro.build.version.incremental`, handled as above;
+- `ro.telephony.handle_audio_direction_changes_between_call_state_changes`,
+  which joan leaves at AOSP's behaviour.
+
+`--heads` shows what LineageOS has changed since the review.
 
 ### Releasing
 

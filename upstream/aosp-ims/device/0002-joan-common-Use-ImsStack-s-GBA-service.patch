@@ -1,0 +1,35 @@
+From 254d14b3c158c62ad6ddb314a9a7be645eec28ee Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 28 Sep 2026 02:05:44 +0000
+Subject: [PATCH] joan-common: Use ImsStack's GBA service
+
+ImsStack authenticates Ut/XCAP (call forwarding, waiting and barring
+settings over IMS) with GBA, which Android's carrier config asks for by
+default. The request goes to the GbaService in config_gba_package, and
+LineageOS has none, so XCAP servers that ask for GBA refused every
+request. ImsStack carries one (ImsStackGbaService, from the backport's
+ImsStack 0008): GBA_ME with the carrier's BSF.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SByt7CZfKR6U4r1VS86tHS
+---
+ overlay/packages/services/Telephony/res/values/config.xml | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/overlay/packages/services/Telephony/res/values/config.xml b/overlay/packages/services/Telephony/res/values/config.xml
+index eb0c709..45de29f 100644
+--- a/overlay/packages/services/Telephony/res/values/config.xml
++++ b/overlay/packages/services/Telephony/res/values/config.xml
+@@ -9,6 +9,9 @@
+          (MMTEL), and RCS capability exchange. -->
+     <string name="config_ims_mmtel_package" translatable="false">com.android.imsstack</string>
+     <string name="config_ims_rcs_package" translatable="false">com.android.imsstack</string>
++    <!-- ImsStack is also the GBA service Ut/XCAP authenticates with: the
++         platform has none of its own. -->
++    <string name="config_gba_package" translatable="false">com.android.imsstack</string>
+ 
+     <!-- Real-time text, where the carrier config allows it. -->
+     <bool name="config_support_rtt">true</bool>
+-- 
+2.43.0
+

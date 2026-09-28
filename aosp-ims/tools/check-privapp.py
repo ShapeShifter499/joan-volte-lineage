@@ -6,7 +6,11 @@ throws during boot when a priv-app requests a signature|privileged
 permission that no privapp-permissions file grants: the phone does not
 come up. Protection levels are read from the ROM's own framework-res.apk.
 
-Usage: check-privapp.py <aapt2> <apk> <framework-res.apk> <allowlist.xml>
+<apk> may instead be a comma-separated list of AndroidManifest.xml files,
+the manifests a source build merges into one app (the LineageOS tree
+build of ImsStack, with its own upstream allowlist).
+
+Usage: check-privapp.py <aapt2> <apk | manifest.xml,...> <framework-res.apk> <allowlist.xml>
 """
 import re
 import subprocess
@@ -39,6 +43,10 @@ def platform_levels(aapt2, fwres):
 
 
 def requested(aapt2, apk):
+    if apk.endswith('.xml'):
+        name = '{http://schemas.android.com/apk/res/android}name'
+        return {e.get(name) for m in apk.split(',')
+                for e in ET.parse(m).getroot().iter('uses-permission')}
     out = subprocess.run([aapt2, 'dump', 'permissions', apk],
                          check=True, capture_output=True, text=True).stdout
     return set(re.findall(r"uses-permission: name='([^']+)'", out))

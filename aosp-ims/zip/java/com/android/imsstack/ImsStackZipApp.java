@@ -18,6 +18,7 @@ package com.android.imsstack;
 import android.app.Application;
 import android.util.Log;
 
+import com.android.imsstack.joan.CallPermissionsActivity;
 import com.android.imsstack.joan.CarrierImsGate;
 import com.android.telephony.imsmedia.ImsMediaApplication;
 import com.android.telephony.imsmedia.WakeLockManager;
@@ -42,6 +43,9 @@ public class ImsStackZipApp extends ImsStackApp {
             // LineageOS on joan ships no carrier config for most carriers,
             // and AOSP defaults carrier_volte_available_bool to false.
             CarrierImsGate.start(this);
+            // Flashed onto a ROM that had already booted, nothing granted the
+            // microphone: offer "Calling permissions" in the app drawer.
+            CallPermissionsActivity.updateLauncherEntry(this);
             return;
         }
         ImsMediaApplication.setAppContext(getApplicationContext());

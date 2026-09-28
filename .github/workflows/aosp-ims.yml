@@ -88,6 +88,11 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: false
+
       - name: Host tools
         run: |
           sudo apt-get update -q
@@ -106,18 +111,42 @@ jobs:
           VERSION_NAME: ${{ steps.meta.outputs.version }}
         run: aosp-ims/tools/build-all.sh
 
+      - name: The kit's build files under Android 15's Soong
+        run: aosp-ims/tests/check-soong.sh --verify-stubs
+
+      - name: The kit's native code under Android 15's clang, warnings as errors
+        run: aosp-ims/tests/check-tree-compile.sh
+
+      - name: AOSP 17's CarrierConfig changes, regenerated from the pinned sources
+        run: aosp-ims/tools/regen-aosp-carrierconfig.sh --check
+
+      - name: LineageOS 22.2's own changes on the IMS path, as reviewed
+        run: python3 aosp-ims/tests/check-lineage-forks.py
+
       - name: Carrier config matches the gate and the device patch
         run: |
           python3 aosp-ims/tests/check-carrier-config.py \
               ims-service/assets/carrier-id-map.json ims-service/assets/carrier-plmn-map.json \
               aosp-ims/zip/java/com/android/imsstack/joan/CarrierImsGate.java \
               "$WORK/aosp15/telephonyprovider/assets/latest_carrier_id/carrier_list.textpb" \
-              --imported aosp-ims/carrier/lineage-pixel-ims.xml \
+              --base aosp-ims/carrier/aosp17-carrierconfig-ims.xml \
+              --imported aosp-ims/carrier/lineage-pixel-ims.xml --fill aosp-ims/carrier/lg-ims.xml \
               --patch upstream/aosp-ims/device/0001-joan-common-Add-the-AOSP-IMS-stack.patch
+
+      - name: IMS APNs added to LineageOS's own list
+        run: |
+          . aosp-ims/upstream.lock
+          git init -q "$RUNNER_TEMP/vendor-apn"
+          git -C "$RUNNER_TEMP/vendor-apn" fetch -q --depth 1 "$LINEAGE_APN_URL" "$LINEAGE_APN_COMMIT"
+          git -C "$RUNNER_TEMP/vendor-apn" checkout -q FETCH_HEAD
+          python3 aosp-ims/tests/check-apns.py aosp-ims/carrier/lineage-pixel-apns.xml \
+              "$RUNNER_TEMP/vendor-apn"
 
       - name: Installer end-to-end tests
         run: |
-          sudo env "PATH=$PATH" aosp-ims/tests/run-e2e-install.sh | tee "$RUNNER_TEMP/e2e.log"
+          . aosp-ims/upstream.lock
+          sudo env "PATH=$PATH" "E2E_OTA=$WORK/rom/$(basename "$LINEAGE_OTA_URL")" \
+              aosp-ims/tests/run-e2e-install.sh | tee "$RUNNER_TEMP/e2e.log"
           grep -q 'all passed' "$RUNNER_TEMP/e2e.log"
 
       - name: Repack the LineageOS ROM

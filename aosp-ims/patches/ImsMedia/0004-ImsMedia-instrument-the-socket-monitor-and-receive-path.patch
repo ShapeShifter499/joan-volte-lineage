@@ -1,0 +1,39 @@
+From 8fe3ee0a5124b761c03b62a2cd8cf2fb174582d8 Mon Sep 17 00:00:00 2001
+From: Fulgor Nymvale <fulgor@nym-skyforge>
+Date: Mon, 28 Sep 2026 04:11:35 -0700
+Subject: [PATCH] Instrument the socket monitor and receive path
+
+Downlink RTP reaches the kernel socket (Recv-Q grows to 127KB in the ss
+snapshots) while the decoder counts zero: the shared select loop holds
+registered sockets yet never drains them. Log the registered fd list
+when it changes, the select result, and recv attempts/results so the
+next call shows where the chain breaks.
+
+Assisted-by: ZCode:GLM-5.3-Flash
+Signed-off-by: Lance <Gero3977@gmail.com>
+---
+ .../lib/libimsmedia/core/utils/ImsMediaSocket.cpp         | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/service/src/com/android/telephony/imsmedia/lib/libimsmedia/core/utils/ImsMediaSocket.cpp b/service/src/com/android/telephony/imsmedia/lib/libimsmedia/core/utils/ImsMediaSocket.cpp
+index 1a7d73c..2d82542 100644
+--- a/service/src/com/android/telephony/imsmedia/lib/libimsmedia/core/utils/ImsMediaSocket.cpp
++++ b/service/src/com/android/telephony/imsmedia/lib/libimsmedia/core/utils/ImsMediaSocket.cpp
+@@ -302,6 +302,14 @@ int32_t ImsMediaSocket::ReceiveFrom(uint8_t* pData, uint32_t nBufferSize)
+     sockaddr_storage ss;
+     pstSockAddr = reinterpret_cast<sockaddr*>(&ss);
+     len = recvfrom(mSocketFd, pData, nBufferSize, 0, pstSockAddr, &nSockAddrLen);
++    {
++        static int nRecvLogCounter = 0;
++        if (++nRecvLogCounter % 50 == 0)
++        {
++            IMLOGI3("[ReceiveFrom] fd[%d], len[%d], recvCount[%d]", mSocketFd, len,
++                    nRecvLogCounter);
++        }
++    }
+ 
+     if (len > 0)
+     {
+-- 
+2.55.0
+

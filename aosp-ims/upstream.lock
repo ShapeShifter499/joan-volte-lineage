@@ -26,6 +26,39 @@ CARRIERSETTINGS_COMMIT=7085ddc01630fdfed802c5900db1b1b6a42cd90c
 CARRIERSETTINGS_PATH=proprietary/product/etc/CarrierSettings
 LINEAGE_SCRIPTS_URL=https://github.com/LineageOS/scripts
 LINEAGE_SCRIPTS_COMMIT=e81615b64084478eae6af876908e77371bd08660
+# carrier/lineage-pixel-apns.xml is the converter's APN list from the same
+# inputs (tools/import-carrier-apns.py). tests/check-apns.py checks the
+# APNs tools/make-apns.py adds against LineageOS's own list at this commit.
+LINEAGE_APN_URL=https://github.com/LineageOS/android_vendor_apn
+LINEAGE_APN_COMMIT=6e73ba90cc9438d1aefb4c323289b281b006a59a
+
+# carrier/aosp17-carrierconfig-ims.xml is the IMS part of what AOSP 17's
+# CarrierConfig assets changed since Android 15
+# (tools/import-aosp-carrierconfig.py, from tools/regen-aosp-carrierconfig.sh,
+# which CI runs to check the file is current): both asset sets, both
+# carrier id lists, and Android 15's CarrierConfigManager for defaults.
+AOSP_CARRIERCONFIG_URL=https://android.googlesource.com/platform/packages/apps/CarrierConfig
+AOSP_CARRIERCONFIG_A15_COMMIT=e800ce78fcbd63511853022c105ab3fc557b8756
+AOSP_CARRIERCONFIG_A17_COMMIT=c9f82c3de8293731d4230758dc258916c12335a6
+AOSP_TELEPHONYPROVIDER_URL=https://android.googlesource.com/platform/packages/providers/TelephonyProvider
+AOSP_TELEPHONYPROVIDER_A15_COMMIT=4b3aa80a7ee5858981c17065e197119aebecadd8
+AOSP_TELEPHONYPROVIDER_A17_COMMIT=013b803626164c026025897b7dec45521c2cccab
+AOSP_FRAMEWORKS_BASE_URL=https://android.googlesource.com/platform/frameworks/base
+AOSP_FRAMEWORKS_BASE_A15_COMMIT=396d32905ded85c082232bc510b525c9e372e585
+
+# LineageOS 22.2's own changes on the IMS path (tests/check-lineage-forks.py,
+# which CI runs against the review in tests/lineage-forks.txt): the AOSP tag
+# its unforked projects build from, and its forks at the commits the ROM
+# below was built from. Moving LINEAGE_OTA_URL to a newer nightly means
+# moving these to that nightly's commits and reviewing what --list shows.
+LINEAGE_AOSP_TAG=android-15.0.0_r32
+LINEAGE_MANIFEST_URL=https://github.com/LineageOS/android
+LINEAGE_MANIFEST_COMMIT=98c181d61f032a69c817835238cbb40fd049100e
+LINEAGE_FRAMEWORKS_BASE_COMMIT=5c05c66e872c907a925f633b69f11661c59e7ad0
+LINEAGE_OPT_TELEPHONY_COMMIT=6feb405d62073d98593e60cfc3f340874ba4594b
+LINEAGE_TELESERVICE_COMMIT=4fe0d7081464f0d3eddf97f65ef11f63cf090dbe
+LINEAGE_TELEPHONYPROVIDER_COMMIT=f1f77da006e1412fb67d7798717c85f286b85769
+LINEAGE_IWLAN_COMMIT=83bd43325c23f5ab0c9eb56cbda1b8138179eb6b
 
 # Android 15 QPR2, what LineageOS 22.2 is built on (BP1A.250505.005):
 # platform headers come from this branch, libc++ headers from the clang

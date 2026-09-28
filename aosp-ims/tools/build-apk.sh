@@ -27,20 +27,32 @@ python3 "$HERE/tools/merge-manifest.py" "$S/ImsStack/java/AndroidManifest.xml" \
     "$VERSION_CODE" "$VERSION_NAME"
 cp -r "$S/ImsStack/java/assets/." "$S/ImsMedia/service/assets/." "$OUT/assets/"
 # CarrierImsGate's data: joan's SIM -> LG profile maps, for its ePDG table,
-# and the per-carrier IMS config imported from the Pixel carrier settings
-# LineageOS converts, one file per PLMN. Checked first against the rules
-# the source build's vendor.xml follows.
+# and the per-carrier IMS config, one file per PLMN, in layers: what AOSP
+# 17's CarrierConfig assets changed, under the Pixel carrier settings
+# LineageOS converts, then LG's settings for the PLMNs those lack. The LG
+# part is regenerated to prove it is current, and all of it is checked
+# against the rules the source build's vendor.xml follows.
 mkdir -p "$OUT/assets/joan"
 cp "$HERE/../ims-service/assets/carrier-id-map.json" \
    "$HERE/../ims-service/assets/carrier-plmn-map.json" "$OUT/assets/joan/"
+python3 "$HERE/tools/import-lg-ims.py" "$HERE/../ims-service/assets/carrier-profiles-full.json" \
+    "$HERE/../ims-service/assets/carrier-plmn-map.json" "$HERE/carrier/lineage-pixel-ims.xml" \
+    "$OUT/lg-ims.xml"
+cmp "$OUT/lg-ims.xml" "$HERE/carrier/lg-ims.xml" \
+    || { echo "carrier/lg-ims.xml is stale: run tools/import-lg-ims.py"; exit 1; }
 python3 "$HERE/tests/check-carrier-config.py" \
     "$HERE/../ims-service/assets/carrier-id-map.json" \
     "$HERE/../ims-service/assets/carrier-plmn-map.json" \
     "$HERE/zip/java/com/android/imsstack/joan/CarrierImsGate.java" \
     "$WORK/aosp15/telephonyprovider/assets/latest_carrier_id/carrier_list.textpb" \
-    --imported "$HERE/carrier/lineage-pixel-ims.xml" | tail -1
-python3 "$HERE/tools/make-carrier-config.py" --imported "$HERE/carrier/lineage-pixel-ims.xml" \
+    --base "$HERE/carrier/aosp17-carrierconfig-ims.xml" \
+    --imported "$HERE/carrier/lineage-pixel-ims.xml" --fill "$HERE/carrier/lg-ims.xml" | tail -1
+python3 "$HERE/tools/make-carrier-config.py" --base "$HERE/carrier/aosp17-carrierconfig-ims.xml" \
+    --imported "$HERE/carrier/lineage-pixel-ims.xml" --fill "$HERE/carrier/lg-ims.xml" \
     --assets "$OUT/assets/joan/carrier"
+# ImsApnGate's data: the Pixel APNs LineageOS converts, one file per PLMN.
+python3 "$HERE/tools/make-apns.py" "$HERE/carrier/lineage-pixel-apns.xml" \
+    --assets "$OUT/assets/joan/apns"
 "$BT/aapt2" compile --dir "$S/ImsStack/java/res" -o "$OUT/res/stack.zip"
 "$BT/aapt2" compile --dir "$S/ImsMedia/service/res" -o "$OUT/res/media.zip"
 "$BT/aapt2" link --manifest "$OUT/AndroidManifest.xml" -I "$PUB" -A "$OUT/assets" \
@@ -60,9 +72,15 @@ javac -J-Xmx4g -encoding UTF-8 -nowarn -proc:none -source 21 -target 21 \
     -d "$OUT/classes" -classpath "$CP" @"$OUT/srcs"
 # The annotation stubs exist only to compile; the platform owns those names.
 rm -rf "$OUT/classes/android/annotation" "$OUT/classes/com/android/internal"
-# USAT call control and MO SMS control decisions (ImsStack 0005, 0006).
-javac -d "$OUT/check" "$HERE/tests/UsatCheck.java"
+# USAT call control and MO SMS control decisions (ImsStack 0005, 0006),
+# the APNs ImsApnGate adds, and the GBA_ME client (ImsStack 0008) against a
+# local BSF.
+javac -d "$OUT/check" -cp "$OUT/classes" "$HERE/tests/UsatCheck.java" "$HERE/tests/ApnPlanCheck.java" \
+    "$HERE/tests/GbaCheck.java"
 java -cp "$OUT/check:$OUT/classes:$ML/android.jar" UsatCheck
+java -cp "$OUT/check:$OUT/classes" com.android.imsstack.joan.ApnPlanCheck \
+    "$HERE/carrier/lineage-pixel-apns.xml"
+java -cp "$OUT/check:$OUT/classes" com.android.imsstack.gba.GbaCheck
 
 # 3. Dex. The framework is library, not program: it is on the device.
 LIBS=()
@@ -125,4 +143,11 @@ sign "$OUT/ImsStackFrameworkOverlay-unsigned.apk" "$OUT/ImsStackFrameworkOverlay
 #    framework-res protection levels.
 python3 "$HERE/tools/check-privapp.py" "$BT/aapt2" "$OUT/ImsStack.apk" \
     "$WORK/rom/framework-res.apk" "$HERE/permissions/privapp-permissions-com.android.imsstack.xml"
+#    The same for a LineageOS tree build, which merges ImsStack's own
+#    manifests (the debuggable one on userdebug) and installs its upstream
+#    allowlist.
+M=$S/ImsStack/java
+python3 "$HERE/tools/check-privapp.py" "$BT/aapt2" \
+    "$M/AndroidManifest.xml,$M/AndroidManifest-lib.xml,$M/AndroidManifest-debuggable.xml" \
+    "$WORK/rom/framework-res.apk" "$M/privapp-permissions_com.android.imsstack.xml"
 ls -la "$OUT"/*.apk | grep -v -e unsigned -e aligned

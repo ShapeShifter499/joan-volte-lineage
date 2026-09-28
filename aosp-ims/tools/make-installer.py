@@ -8,7 +8,7 @@ anything, orders the privapp allowlist before the apk, and stamps the
 package cache so PackageManager rereads what changed (the fix for the
 post-alpha67 bootloop). Rather than fork that logic, this rewrites the
 names of what it installs and adds what the AOSP stack needs: the
-sysconfig file, adb grant hints in place of joan's launcher entry, and one
+sysconfig file, hints naming this stack's own launcher entry, and one
 of two joan policies. update-binary (fresh flash) refuses a phone that has
 joan, before writing anything; update-binary-migrate removes joan's stack,
 which this one replaces, keeping the files both share.
@@ -39,12 +39,17 @@ INSTALL = [
     ('joan-ims.apk', 'ImsStack.apk', 3),
     ('JoanIms', 'ImsStack', 11),
     ('org.joan.ims.xml', 'com.android.imsstack.xml', 10),
+    # CallPermissionsActivity: in the app drawer while the microphone is
+    # missing. Wi-Fi calling's IPsec app-op has no dialog, so adb stays.
     ('    ui_print "    otherwise open \\"joan IMS\\" once from the launcher"\n',
-     '    ui_print "    otherwise grant them over adb (aosp-ims/zip/grant-permissions.sh)"\n', 1),
+     '    ui_print "    otherwise open \\"Calling permissions\\" in the app drawer"\n', 1),
     ('    warn "  skipped the default grants; open \\"joan IMS\\" once from the launcher"\n',
-     '    warn "  skipped the default grants; grant them over adb (aosp-ims/zip/grant-permissions.sh)"\n', 1),
+     '    warn "  skipped the default grants; open \\"Calling permissions\\" in the app drawer"\n', 1),
+    ('ui_print "If a call\'s far end hears nothing, grant the microphone:"\n',
+     'ui_print "If \\"Calling permissions\\" appears in the app drawer, open it:"\n', 1),
     ('ui_print "  open \\"joan IMS\\" once, or: adb shell pm grant org.joan.ims android.permission.RECORD_AUDIO"\n',
-     'ui_print "  adb shell pm grant com.android.imsstack android.permission.RECORD_AUDIO"\n', 1),
+     'ui_print "  calls need the microphone. Wi-Fi calling: run grant-permissions.sh"\n'
+     'ui_print "  (in this zip) once over adb"\n', 1),
     # Free space as a write can use it. toybox df (recovery's) counts ext4's
     # reserved clusters as free -- up to 16 MB -- so on a nearly full
     # partition the check passed and the write failed part way, after
@@ -61,14 +66,17 @@ INSTALL = [
   esac
   fk=$(df -k "$1" 2>/dev/null | tail -1 | tr -s " " | cut -d" " -f4)
 ''', 1),
-    # Space: the sysconfig file is installed too.
+    # Space: the sysconfig file is installed too, and the addon.d script
+    # with the two files its APN step needs.
     ('  "$TMP/etc/default-permissions/com.android.imsstack.xml")\n',
      '  "$TMP/etc/default-permissions/com.android.imsstack.xml" \\\n'
      '  "$TMP/etc/sysconfig/com.android.imsstack.xml" \\\n'
      '  "$TMP/app/Iwlan.apk" "$TMP/app/QualifiedNetworksService.apk" \\\n'
      '  "$TMP/etc/permissions/com.google.android.iwlan.xml" \\\n'
      '  "$TMP/etc/permissions/com.android.telephony.qns.xml" \\\n'
-     '  "$TMP/etc/sysconfig/com.google.android.iwlan.xml")\n', 1),
+     '  "$TMP/etc/sysconfig/com.google.android.iwlan.xml" \\\n'
+     '  "$TMP/addon.d/60-aosp-ims.sh" "$TMP/scripts/merge-viettel-apns.sh" \\\n'
+     '  "$TMP/apn/viettel-45204.xml")\n', 1),
     # After the allowlist: power-save and data-saver exemptions, so an
     # incoming call reaches the stack while the phone sleeps.
     ('ui_print "Installing ImsService priv-app"\n',
@@ -89,21 +97,25 @@ if [ -f "$TMP/etc/sysconfig/com.google.android.iwlan.xml" ]; then
 fi
 ui_print "Installing ImsService priv-app (AOSP ImsStack + ImsMedia)"
 ''', 1),
-    # The AOSP stack delivers MT calls through the framework's
-    # ImsPhoneCallTracker, which LineageOS's joan tree gates off
-    # (ro.telephony.block_binder_thread_on_incoming_calls=false, for the
-    # modem IMS this stack replaces): with false the listener returns null
-    # for every incoming call and the stack answers 480. Back the original
-    # build.prop up once, then turn the handling on.
+    # The stack hands incoming calls to the framework's ImsPhoneCallTracker,
+    # which LineageOS gates on ro.telephony.block_binder_thread_on_incoming_
+    # calls; joan's tree sets it false for the modem IMS this replaces, and
+    # with it false the framework returns no listener for any incoming call,
+    # so the stack answers 480 and the phone never rings. Flip that one line
+    # (through copy_file: atomic, mode and label kept) and leave a marker for
+    # the uninstaller, which flips it back. Nothing else in build.prop is
+    # touched, and no copy of it is kept that a ROM update could outdate.
     ('ui_print "Installing ImsService priv-app (AOSP ImsStack + ImsMedia)"\n',
      '''ui_print "Installing ImsService priv-app (AOSP ImsStack + ImsMedia)"
 BP="$SYS/build.prop"
-if [ -f "$BP" ] && ! grep -q "^ro.telephony.block_binder_thread_on_incoming_calls=true$" "$BP"; then
-  if [ ! -f "$BP.joan-orig" ]; then
-    copy_file "$BP" "$BP.joan-orig" 644 u:object_r:system_file:s0
-  fi
-  echo "ro.telephony.block_binder_thread_on_incoming_calls=true" >> "$BP"
-  ui_print "  build.prop: framework incoming-call handling enabled"
+IC=ro.telephony.block_binder_thread_on_incoming_calls
+if [ -f "$BP" ] && grep -q "^$IC=false\$" "$BP"; then
+  sed "s/^$IC=false\$/$IC=true/" "$BP" > "$TMP/build.prop.aosp-ims"
+  copy_file "$TMP/build.prop.aosp-ims" "$BP" 644 u:object_r:system_file:s0
+  echo "$IC=false" > "$SYS/etc/aosp-ims-incoming-calls.flipped"
+  chmod 644 "$SYS/etc/aosp-ims-incoming-calls.flipped" 2>/dev/null || true
+  chcon u:object_r:system_file:s0 "$SYS/etc/aosp-ims-incoming-calls.flipped" 2>/dev/null || true
+  ui_print "  build.prop: framework incoming-call handling on"
 fi
 ''', 1),
     # After ImsStack: the VoWiFi apps, IWLAN (ePDG tunnel) and QNS
@@ -123,7 +135,35 @@ done
     ('rm -f "$SYS/priv-app/ImsStack/"*.joan-new \\\n',
      'rm -f "$SYS/priv-app/ImsStack/"*.joan-new \\\n'
      '      "$SYS/priv-app/Iwlan/"*.joan-new "$SYS/priv-app/QualifiedNetworksService/"*.joan-new \\\n'
-     '      "$SYS/etc/sysconfig/"*.joan-new \\\n', 1),
+     '      "$SYS/etc/sysconfig/"*.joan-new \\\n'
+     '      "$SYS/etc/aosp-ims/"*.joan-new "$SYS/addon.d/"*.joan-new \\\n', 1),
+    # A LineageOS update rewrites system and product, everything above; its
+    # backuptool runs /system/addon.d scripts before and after. This one
+    # puts the stack back and makes the build.prop and APN-list edits again
+    # on the update's own files (zip/addon.d/60-aosp-ims.sh), with the APN
+    # merge's two inputs kept in /system/etc/aosp-ims. Optional: without it
+    # an update removes the stack and the zip has to be flashed again.
+    ('# --- Make PackageManager read what was just installed ---------------------\n',
+     '''# --- Kept across LineageOS updates (addon.d) -----------------------------
+if [ -f "$TMP/addon.d/60-aosp-ims.sh" ]; then
+  mkdir -p "$SYS/etc/aosp-ims" "$SYS/addon.d" 2>/dev/null
+  chmod 755 "$SYS/etc/aosp-ims" 2>/dev/null || true
+  chcon u:object_r:system_file:s0 "$SYS/etc/aosp-ims" 2>/dev/null || true
+  for f in scripts/merge-viettel-apns.sh apn/viettel-45204.xml; do
+    try_copy_file "$TMP/$f" "$SYS/etc/aosp-ims/${f##*/}" 644 u:object_r:system_file:s0 \\
+      || warn "$CF_ERR"
+  done
+  if try_copy_file "$TMP/addon.d/60-aosp-ims.sh" "$SYS/addon.d/60-aosp-ims.sh" 644 \\
+      u:object_r:system_file:s0; then
+    ui_print "  addon.d: kept across LineageOS updates"
+  else
+    warn "$CF_ERR"
+    warn "  a LineageOS update will remove the stack; flash this zip again after one"
+  fi
+fi
+
+# --- Make PackageManager read what was just installed ---------------------
+''', 1),
     ('  "$PRODMNT/overlay/ImsStackPhoneOverlay.apk" "$PRODMNT/overlay/ImsStackFrameworkOverlay.apk"\n',
      '  "$PRODMNT/overlay/ImsStackPhoneOverlay.apk" "$PRODMNT/overlay/ImsStackFrameworkOverlay.apk" \\\n'
      '  "$SYS/priv-app/Iwlan/Iwlan.apk" "$SYS/priv-app/Iwlan" \\\n'
@@ -178,20 +218,30 @@ UNINSTALL = [
      'rm -f "$SYS/etc/sysconfig/com.android.imsstack.xml"\n', 1),
     ('rm -f "$SYS/etc/default-permissions/org.joan.ims.xml"\n',
      'rm -f "$SYS/etc/default-permissions/com.android.imsstack.xml"\n'
+     'rm -f "$SYS/addon.d/60-aosp-ims.sh"\n'
+     'rm -rf "$SYS/etc/aosp-ims"\n'
      'rm -rf "$SYS/priv-app/Iwlan" "$SYS/priv-app/QualifiedNetworksService"\n'
      'rm -f "$SYS/etc/permissions/com.google.android.iwlan.xml" \\\n'
      '      "$SYS/etc/permissions/com.android.telephony.qns.xml" \\\n'
      '      "$SYS/etc/sysconfig/com.google.android.iwlan.xml" "$SYS/etc/sysconfig/"*.joan-new\n', 1),
     ('JoanIms + leftovers removed', 'ImsStack + leftovers removed', 1),
-    # Undo the incoming-call property: the backed-up build.prop goes back.
-    ('rm -f "$PRODMNT/overlay/"*.joan-new "$PRODMNT/etc/"*.joan-new 2>/dev/null\n',
-     '''BP="$SYS/build.prop"
-if [ -f "$BP.joan-orig" ]; then
-  copy_file "$BP.joan-orig" "$BP" 644 u:object_r:system_file:s0
-  rm -f "$BP.joan-orig"
-  ui_print "  build.prop: restored"
+    # Undo the incoming-call flip, only where the installer made it, one
+    # line, written beside build.prop and renamed over it.
+    ('ui_print "  /system: ImsStack + leftovers removed (or absent)"\n',
+     '''ui_print "  /system: ImsStack + leftovers removed (or absent)"
+BP="$SYS/build.prop"
+IC=ro.telephony.block_binder_thread_on_incoming_calls
+if [ -f "$SYS/etc/aosp-ims-incoming-calls.flipped" ]; then
+  if grep -q "^$IC=true\$" "$BP" 2>/dev/null \
+      && sed "s/^$IC=true\$/$IC=false/" "$BP" > "$BP.aosp-ims-new" \
+      && chmod 644 "$BP.aosp-ims-new" \
+      && { chcon u:object_r:system_file:s0 "$BP.aosp-ims-new" 2>/dev/null; true; } \
+      && mv -f "$BP.aosp-ims-new" "$BP"; then
+    ui_print "  build.prop: incoming-call handling back to the ROM's setting"
+  fi
+  rm -f "$BP.aosp-ims-new" "$SYS/etc/aosp-ims-incoming-calls.flipped"
 fi
-rm -f "$PRODMNT/overlay/"*.joan-new "$PRODMNT/etc/"*.joan-new 2>/dev/null\n''', 1),
+''', 1),
     ('rm -f "$PRODMNT/overlay/JoanImsPhoneDefault.apk"\n',
      'rm -f "$PRODMNT/overlay/ImsStackPhoneOverlay.apk"\n', 1),
     ('rm -f "$PRODMNT/overlay/JoanFwVolte.apk"\n',
