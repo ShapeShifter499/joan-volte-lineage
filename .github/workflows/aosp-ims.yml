@@ -120,7 +120,7 @@ jobs:
               ims-service/assets/carrier-id-map.json ims-service/assets/carrier-plmn-map.json \
               aosp-ims/zip/java/com/android/imsstack/joan/CarrierImsGate.java \
               "$WORK/aosp15/telephonyprovider/assets/latest_carrier_id/carrier_list.textpb" \
-              --imported aosp-ims/carrier/lineage-pixel-ims.xml \
+              --imported aosp-ims/carrier/lineage-pixel-ims.xml --imported aosp-ims/carrier/lg-ims.xml \
               --patch upstream/aosp-ims/device/0001-joan-common-Add-the-AOSP-IMS-stack.patch
 
       - name: IMS APNs added to LineageOS's own list

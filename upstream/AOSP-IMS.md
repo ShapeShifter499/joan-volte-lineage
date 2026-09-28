@@ -145,6 +145,13 @@ region between `aosp-ims-begin`/`aosp-ims-end` markers:
    own address wins. Keys that would pick another ImsService, require
    provisioning, lock the VoLTE toggle or turn Wi-Fi calling on by
    default are left out (`aosp-ims/tools/import-carrier-settings.py`).
+   Then, for the PLMNs joan's LG profiles cover and the Pixel data has
+   no block for, what LG's own V30 settings say about IPsec, USSD over
+   IMS and the conference factory where they differ from ImsStack's
+   defaults: 38 PLMNs, in Russia, Hong Kong, South Africa, North America
+   and elsewhere (`aosp-ims/carrier/lg-ims.xml`, from
+   `aosp-ims/tools/import-lg-ims.py`, which checks each of the three
+   against the networks both data sets cover every time it runs).
 3. Last, for every SIM: VoLTE and Wi-Fi calling offered, and the VoLTE
    toggle visible, editable and able to turn IMS off (from the device
    patch).
@@ -160,6 +167,7 @@ python3 aosp-ims/tools/make-carrier-config.py \
     aosp-ims/zip/java/com/android/imsstack/joan/CarrierImsGate.java \
     <tree>/packages/providers/TelephonyProvider/assets/latest_carrier_id/carrier_list.textpb \
     --imported aosp-ims/carrier/lineage-pixel-ims.xml \
+    --imported aosp-ims/carrier/lg-ims.xml \
     --splice <tree>/device/lge/joan-common/overlay/packages/apps/CarrierConfig/res/xml/vendor.xml
 ```
 

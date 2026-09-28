@@ -50,10 +50,12 @@ import org.xmlpull.v1.XmlPullParser;
  *
  * It also applies the per-carrier IMS config LineageOS converts from Pixel
  * carrier settings (SIP, SMS over IMS, Ut, emergency, video, RTT, ePDG,
- * QNS), from assets/joan/carrier/<mcc><mnc>.xml: the blocks matching this
- * SIM, in order, with CarrierConfig's own filter rules. At run time and on
- * top of whatever the ROM ships, so a LineageOS-based ROM keeps its own
- * carrier config; a source build puts the same blocks in its vendor.xml.
+ * QNS), and for the networks that data lacks, what LG's own settings say
+ * about IPsec, USSD over IMS and the conference factory, from
+ * assets/joan/carrier/<mcc><mnc>.xml: the blocks matching this SIM, in
+ * order, with CarrierConfig's own filter rules. At run time and on top of
+ * whatever the ROM ships, so a LineageOS-based ROM keeps its own carrier
+ * config; a source build puts the same blocks in its vendor.xml.
  *
  * The IMS, XCAP and emergency APNs a SIM lacks come from ImsApnGate, run
  * at the same moments.

@@ -28,19 +28,26 @@ python3 "$HERE/tools/merge-manifest.py" "$S/ImsStack/java/AndroidManifest.xml" \
 cp -r "$S/ImsStack/java/assets/." "$S/ImsMedia/service/assets/." "$OUT/assets/"
 # CarrierImsGate's data: joan's SIM -> LG profile maps, for its ePDG table,
 # and the per-carrier IMS config imported from the Pixel carrier settings
-# LineageOS converts, one file per PLMN. Checked first against the rules
-# the source build's vendor.xml follows.
+# LineageOS converts, then LG's settings for the PLMNs those lack, one file
+# per PLMN. The LG part is regenerated to prove it is current, and all of
+# it is checked against the rules the source build's vendor.xml follows.
 mkdir -p "$OUT/assets/joan"
 cp "$HERE/../ims-service/assets/carrier-id-map.json" \
    "$HERE/../ims-service/assets/carrier-plmn-map.json" "$OUT/assets/joan/"
+python3 "$HERE/tools/import-lg-ims.py" "$HERE/../ims-service/assets/carrier-profiles-full.json" \
+    "$HERE/../ims-service/assets/carrier-plmn-map.json" "$HERE/carrier/lineage-pixel-ims.xml" \
+    "$OUT/lg-ims.xml"
+cmp "$OUT/lg-ims.xml" "$HERE/carrier/lg-ims.xml" \
+    || { echo "carrier/lg-ims.xml is stale: run tools/import-lg-ims.py"; exit 1; }
 python3 "$HERE/tests/check-carrier-config.py" \
     "$HERE/../ims-service/assets/carrier-id-map.json" \
     "$HERE/../ims-service/assets/carrier-plmn-map.json" \
     "$HERE/zip/java/com/android/imsstack/joan/CarrierImsGate.java" \
     "$WORK/aosp15/telephonyprovider/assets/latest_carrier_id/carrier_list.textpb" \
-    --imported "$HERE/carrier/lineage-pixel-ims.xml" | tail -1
+    --imported "$HERE/carrier/lineage-pixel-ims.xml" --imported "$HERE/carrier/lg-ims.xml" \
+    | tail -1
 python3 "$HERE/tools/make-carrier-config.py" --imported "$HERE/carrier/lineage-pixel-ims.xml" \
-    --assets "$OUT/assets/joan/carrier"
+    --imported "$HERE/carrier/lg-ims.xml" --assets "$OUT/assets/joan/carrier"
 # ImsApnGate's data: the Pixel APNs LineageOS converts, one file per PLMN.
 python3 "$HERE/tools/make-apns.py" "$HERE/carrier/lineage-pixel-apns.xml" \
     --assets "$OUT/assets/joan/apns"

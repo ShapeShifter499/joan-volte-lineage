@@ -128,6 +128,19 @@ brings it along, for every SIM:
   provisioning, lock the VoLTE toggle or turn Wi-Fi calling on by default,
   and never EVS (ImsMedia has no EVS codec; ImsStack 0007 also drops it
   from any other config).
+- **LG's own settings where the Pixel data has nothing**: of the 82
+  PLMNs joan's LG profiles cover and the Pixel data has no block for,
+  the 38 where LG's V30 settings differ from ImsStack's defaults get
+  what they say about IPsec (off), USSD (over IMS) and the conference
+  factory: MTS, MegaFon, Beeline and Tele2 in Russia, CSL and PCCW in
+  Hong Kong, Vodacom and Cell C in South Africa, Verizon's, AT&T's and
+  Canadian carriers' secondary PLMNs, among others
+  (`tools/import-lg-ims.py`, `carrier/lg-ims.xml`). Only those three:
+  each is checked, every time the file is made, against the networks
+  both data sets cover (LG's IPsec off matches the Pixel data 30 of 34
+  times, its USSD over IMS 88 of 95, conference factories 71 of 75), and
+  conference URIs copied from another country's network in LG's data
+  are left out.
 - **ePDG**: the carrier's own address from that data where it has one;
   for T-Mobile, MetroPCS, AT&T and Verizon otherwise, whose ePDGs are not
   at the 3GPP default name, joan's table. Everyone else uses the default
@@ -152,7 +165,8 @@ LineageOS-based ROM keeps its own. A source build carries the same as
 CarrierConfig `vendor.xml` blocks (`tools/make-carrier-config.py`,
 spliced in by `upstream/aosp-ims/apply-patches.sh`).
 `tests/check-carrier-config.py` checks the result for all 2866 SIM
-identities Android's carrier database knows.
+identities Android's carrier database knows, and that LG's blocks only
+fill PLMNs the Pixel data lacks.
 
 The APNs likewise: the zip adds them on the phone
 (`zip/java/.../ImsApnGate.java`, deciding with `ApnPlan.java` against the

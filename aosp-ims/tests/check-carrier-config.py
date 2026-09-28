@@ -8,6 +8,8 @@ CarrierConfig would read it, and checked:
   (no ImsService package overrides, provisioning, GBA-required, opt-out
   lock or Wi-Fi-calling-on-by-default), and no EVS anywhere, not even
   inside a codec bundle: ImsMedia has no EVS codec;
+- each imported file after the first (LG's settings, import-lg-ims.py)
+  only fills PLMNs the ones before it have no block for;
 - the last block is the filterless every-SIM block;
 - for every SIM Android can tell apart -- each carrier id and specific
   carrier id in carrier_list.textpb on each of its PLMNs, plus every PLMN
@@ -26,7 +28,7 @@ those (MVNOs in the imported data) are checked for keys only.
 without imported data (apply-patches.sh adds that).
 
 Usage: check-carrier-config.py <carrier-id-map.json> <carrier-plmn-map.json>
-           <CarrierImsGate.java> <carrier_list.textpb> --imported <file>
+           <CarrierImsGate.java> <carrier_list.textpb> --imported <file>...
            [--patch <device patch>]
 """
 import importlib.util
@@ -110,28 +112,38 @@ def patch_region(patch):
 
 
 def main(argv):
+    argv, imported_files = mcc.take_imported(argv)
     opts = {}
-    for flag in ('--imported', '--patch'):
+    for flag in ('--patch',):
         if flag in argv:
             i = argv.index(flag)
             opts[flag] = argv[i + 1]
             argv = argv[:i] + argv[i + 2:]
-    if len(argv) != 4 or '--imported' not in opts:
+    if len(argv) != 4 or not imported_files:
         raise SystemExit(__doc__)
     ids, plmns, epdg, carriers = mcc.load(*argv)
     fails = []
 
-    imported_text = open(opts['--imported'], encoding='utf-8').read()
-    imported = parse_blocks(imported_text)
-    bad_keys = sorted({k for _, vals in imported for k in vals if not imp.keep(k)})
-    if bad_keys:
-        fails.append(f'imported data carries keys the importer excludes: {bad_keys[:8]}')
-    nested = sorted({e.get('name') for e in ET.fromstring('<l>' + imported_text + '</l>').iter()
-                     if e.get('name') in imp.DROP_NESTED})
-    if nested:
-        fails.append(f'imported data carries nested keys the importer drops: {nested}')
+    imported, seen = [], set()
+    for path in imported_files:
+        imported_text = open(path, encoding='utf-8').read()
+        blocks_here = parse_blocks(imported_text)
+        name = os.path.basename(path)
+        bad_keys = sorted({k for _, vals in blocks_here for k in vals if not imp.keep(k)})
+        if bad_keys:
+            fails.append(f'{name} carries keys the importer excludes: {bad_keys[:8]}')
+        nested = sorted({e.get('name') for e in ET.fromstring('<l>' + imported_text + '</l>').iter()
+                         if e.get('name') in imp.DROP_NESTED})
+        if nested:
+            fails.append(f'{name} carries nested keys the importer drops: {nested}')
+        here = {a.get('mcc', '') + a.get('mnc', '') for a, _ in blocks_here}
+        if seen & here:
+            fails.append(f'{name} has blocks for PLMNs an earlier file covers: '
+                         f'{sorted(seen & here)[:8]}')
+        seen |= here
+        imported += blocks_here
 
-    text = mcc.render(ids, plmns, epdg, carriers, opts['--imported'])
+    text = mcc.render(ids, plmns, epdg, carriers, imported_files)
     blocks = parse_blocks(text)
     last_attrs, last_vals = blocks[-1]
     if last_attrs or last_vals != dict(mcc.EVERY_SIM):

@@ -61,6 +61,15 @@ remains is on-device verification and joan's own hardware limits.
   Android 15 falls back to "ims" and "sos" by itself; the rest (Verizon's
   MVNOs, every XCAP APN) are added only for a type the SIM lacks and at
   the level its APNs already come from.
+- **Carrier config where the Pixel data has none** (`carrier/lg-ims.xml`).
+  82 PLMNs joan's LG profiles cover have no Pixel block at all; the 38
+  where LG's settings differ from ImsStack's defaults get LG's IPsec,
+  USSD-over-IMS and conference-factory settings, the
+  three LG fields whose translation into ImsStack's keys the Pixel data
+  confirms on the networks both cover (30/34, 88/95, 71/75). ImsStack's
+  defaults cover the rest: it falls back from IPsec on a 420 and derives
+  the 3GPP conference factory by itself, so these only save a round trip
+  or reach a carrier-specific conference server.
 
 ## Carried as upstream has them
 

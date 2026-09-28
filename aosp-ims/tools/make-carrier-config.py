@@ -16,9 +16,11 @@ after the carrier's own config, so the region is ordered:
 
 1. ePDG addresses from CarrierImsGate's table, by Android carrier id and
    PLMN through joan's maps, as the gate resolves a SIM. First, so that
-2. the imported per-carrier IMS config (--imported: LineageOS's Pixel
-   carrier settings, tools/import-carrier-settings.py) wins where it has
-   an address of its own;
+2. the imported per-carrier IMS config (--imported, repeatable, in the
+   order given: LineageOS's Pixel carrier settings,
+   tools/import-carrier-settings.py, then LG's settings for the PLMNs the
+   Pixel data lacks, tools/import-lg-ims.py) wins where it has an address
+   of its own;
 3. last, for every SIM: VoLTE and Wi-Fi calling offered, and the VoLTE
    toggle visible, editable and able to turn IMS off. The same rules
    CarrierImsGate applies at run time in the zip.
@@ -29,7 +31,7 @@ every SIM and simply stay on LTE where the network has nothing.
 
 Usage:
   make-carrier-config.py <carrier-id-map.json> <carrier-plmn-map.json>
-      <CarrierImsGate.java> <carrier_list.textpb> [--imported <file>]
+      <CarrierImsGate.java> <carrier_list.textpb> [--imported <file>]...
       [--splice <vendor.xml> | --full <base vendor.xml> | --assets <dir>]
 
 Prints the region; --splice rewrites the given vendor.xml in place
@@ -141,16 +143,17 @@ def render_block(attrs, comment, values):
     return lines
 
 
-def render(ids, plmns, epdg, carriers, imported=None):
+def render(ids, plmns, epdg, carriers, imported=()):
     lines = [BEGIN,
              '    <!-- AOSP IMS stack (ImsStack). 1: ePDG addresses by carrier id and PLMN.',
              '         2: per-carrier IMS config imported from the Pixel carrier settings',
-             '            LineageOS converts for Pixels (when present).',
+             '            LineageOS converts for Pixels, then from LG\'s own settings for',
+             '            the PLMNs those lack (when present).',
              '         3: for every SIM, VoLTE and Wi-Fi calling offered, VoLTE toggle kept. -->']
     for attrs, comment, values in epdg_blocks(ids, plmns, epdg, carriers):
         lines += render_block(attrs, comment, values)
-    if imported:
-        lines.append(open(imported, encoding='utf-8').read().rstrip('\n'))
+    for path in imported or ():
+        lines.append(open(path, encoding='utf-8').read().rstrip('\n'))
     lines += render_block({}, 'every SIM: VoLTE and Wi-Fi calling offered; the opt-out stays',
                           EVERY_SIM)
     lines.append(END)
@@ -167,17 +170,18 @@ def splice_text(doc, text):
 
 
 def write_assets(imported, out_dir):
-    """The imported blocks, one <carrier_config_list> file per PLMN."""
+    """The imported blocks, one <carrier_config_list> file per PLMN, in order."""
     import os
     import xml.etree.ElementTree as ET
-    root = ET.fromstring('<l>' + open(imported, encoding='utf-8').read() + '</l>')
     by_plmn = {}
-    for block in root.findall('carrier_config'):
-        plmn = block.get('mcc', '') + block.get('mnc', '')
-        if len(plmn) < 5 or not plmn.isdigit():
-            raise SystemExit(f'{imported}: a block without mcc/mnc: {block.attrib}')
-        block.tail = '\n'
-        by_plmn.setdefault(plmn, []).append(ET.tostring(block, encoding='unicode'))
+    for path in imported:
+        root = ET.fromstring('<l>' + open(path, encoding='utf-8').read() + '</l>')
+        for block in root.findall('carrier_config'):
+            plmn = block.get('mcc', '') + block.get('mnc', '')
+            if len(plmn) < 5 or not plmn.isdigit():
+                raise SystemExit(f'{path}: a block without mcc/mnc: {block.attrib}')
+            block.tail = '\n'
+            by_plmn.setdefault(plmn, []).append(ET.tostring(block, encoding='unicode'))
     os.makedirs(out_dir, exist_ok=True)
     for plmn, blocks in by_plmn.items():
         with open(os.path.join(out_dir, plmn + '.xml'), 'w', encoding='utf-8') as f:
@@ -188,22 +192,39 @@ def write_assets(imported, out_dir):
           f'{sum(len(b) for b in by_plmn.values())} blocks')
 
 
+def take_imported(argv):
+    """(argv without the --imported pairs, [their files, in order])."""
+    rest, files = [], []
+    i = 0
+    while i < len(argv):
+        if argv[i] == '--imported':
+            if i + 1 >= len(argv):
+                raise SystemExit('--imported needs a file')
+            files.append(argv[i + 1])
+            i += 2
+        else:
+            rest.append(argv[i])
+            i += 1
+    return rest, files
+
+
 def main(argv):
+    argv, imported = take_imported(argv)
     opts = {}
-    for flag in ('--imported', '--splice', '--full', '--assets'):
+    for flag in ('--splice', '--full', '--assets'):
         if flag in argv:
             i = argv.index(flag)
             opts[flag] = argv[i + 1]
             argv = argv[:i] + argv[i + 2:]
     if '--assets' in opts:
-        if '--imported' not in opts:
+        if not imported:
             raise SystemExit('--assets needs --imported')
-        write_assets(opts['--imported'], opts['--assets'])
+        write_assets(imported, opts['--assets'])
         return
     if len(argv) != 4 or ('--splice' in opts and '--full' in opts):
         raise SystemExit(__doc__)
     ids, plmns, epdg, carriers = load(*argv)
-    text = render(ids, plmns, epdg, carriers, opts.get('--imported'))
+    text = render(ids, plmns, epdg, carriers, imported)
     if '--splice' in opts:
         path = opts['--splice']
         doc = splice_text(open(path, encoding='utf-8').read(), text)

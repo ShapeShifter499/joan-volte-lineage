@@ -33,6 +33,13 @@ and 2 are done.
   `GbaCheck` (24, against a local BSF) and `check-apns.py` (2714 SIM
   identities). The 0001-0008 series applies to a clean `1e3981c` and
   gives the work tree's exact tree.
+- **LG's settings for networks the Pixel data lacks**
+  (`tools/import-lg-ims.py`, `carrier/lg-ims.xml`, 38 PLMNs): IPsec off,
+  USSD over IMS, conference factory URI, each rule re-checked against
+  the Pixel data on every build. In the zip's assets, the source build's
+  vendor.xml region (after the Pixel blocks) and `check-carrier-config.py`
+  (which also checks the two sources never overlap). The device patches
+  were regenerated for the region's new header line only.
 - **No release is published.** The user asked for bench zips first.
   Publishing = edit a line of `aosp-ims/RELEASE` and push (CI builds from
   scratch and publishes); only do it when the user says so.
