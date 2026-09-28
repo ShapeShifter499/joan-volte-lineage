@@ -1,0 +1,73 @@
+From 22beb632e89c6a92eeb9e62de400a0f67ab260f7 Mon Sep 17 00:00:00 2001
+From: Fulgor Nymvale <fulgor@nym-skyforge>
+Date: Mon, 28 Sep 2026 09:23:47 -0700
+Subject: [PATCH] ImsStack: resolve the bind network by live capability, not
+ the cache
+
+getNetworkByCapability returned the Apn's cached Network, which can
+outlive its own connectivity: this ROM tears an ePDG tunnel down and
+brings it back under a new network id, and in that gap the cache still
+holds the dead id. A socket bound to it fails its next connect with
+ENETUNREACH (errno 113) - observed on the bench as the registration
+refresh dying ~1-3 minutes after a successful tunnel registration.
+Scan the live networks for the capability instead, and return null (no
+network) rather than a stale id when nothing carries it mid-rebuild, so
+the caller retries instead of binding to something unroutable.
+
+Assisted-by: ZCode:GLM-5.3-Flash
+Signed-off-by: Lance <Gero3977@gmail.com>
+---
+ .../imsstack/core/agents/dcm/DcApn.java       | 36 ++++++++++++++++++-
+ 1 file changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/java/src/com/android/imsstack/core/agents/dcm/DcApn.java b/java/src/com/android/imsstack/core/agents/dcm/DcApn.java
+index 7b8b975..c1548ee 100644
+--- a/java/src/com/android/imsstack/core/agents/dcm/DcApn.java
++++ b/java/src/com/android/imsstack/core/agents/dcm/DcApn.java
+@@ -477,8 +477,42 @@ public class DcApn implements IDcApn {
+ 
+     @Override
+     public Network getNetworkByCapability(int apnType) {
++        // The cached network can outlive its own connectivity: this ROM
++        // tears an ePDG tunnel down and brings it back under a new
++        // network id, and during that gap the cache still holds the dead
++        // id, so binding a socket to it fails the next connect with
++        // ENETUNREACH (errno 113) and the SIP registration refresh dies.
++        // Resolve live by capability instead, and only fall back to the
++        // cache when nothing satisfies the capability right now.
+         IApn apn = getApnControl(apnType);
+-        return (apn != null) ? apn.getCachedNetwork() : null;
++        Network cached = (apn != null) ? apn.getCachedNetwork() : null;
++
++        try {
++            android.net.ConnectivityManager cm =
++                    mContext.getSystemService(android.net.ConnectivityManager.class);
++            if (cm != null) {
++                int wanted = (apnType == com.android.imsstack.core.agents.dcmif.DcConstants.TYPE_IMS)
++                        ? android.net.NetworkCapabilities.NET_CAPABILITY_IMS
++                        : android.net.NetworkCapabilities.NET_CAPABILITY_XCAP;
++                for (Network n : cm.getAllNetworks()) {
++                    android.net.NetworkCapabilities nc = cm.getNetworkCapabilities(n);
++                    if (nc != null && nc.hasCapability(wanted)) {
++                        return n;
++                    }
++                }
++                // No live network carries the capability (tunnel mid-
++                // rebuild): report null rather than a dead cached id, so
++                // the caller treats this as no-network instead of binding
++                // to something unroutable.
++                if (cached != null) {
++                    ImsLog.w(mSlotId, "capability scan found no live network; dropping stale cache");
++                }
++                return null;
++            }
++        } catch (Throwable t) {
++            ImsLog.w(mSlotId, "capability scan failed: " + t);
++        }
++        return cached;
+     }
+ 
+     @Override
+-- 
+2.55.0
+
