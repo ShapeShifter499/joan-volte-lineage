@@ -1,4 +1,4 @@
-From 8fe3ee0a5124b761c03b62a2cd8cf2fb174582d8 Mon Sep 17 00:00:00 2001
+From 7c67cb0f17558baecdfcb6cbe46fc83f309eac2e Mon Sep 17 00:00:00 2001
 From: Fulgor Nymvale <fulgor@nym-skyforge>
 Date: Mon, 28 Sep 2026 04:11:35 -0700
 Subject: [PATCH] Instrument the socket monitor and receive path
@@ -12,11 +12,11 @@ next call shows where the chain breaks.
 Assisted-by: ZCode:GLM-5.3-Flash
 Signed-off-by: Lance <Gero3977@gmail.com>
 ---
- .../lib/libimsmedia/core/utils/ImsMediaSocket.cpp         | 8 ++++++++
- 1 file changed, 8 insertions(+)
+ .../libimsmedia/core/utils/ImsMediaSocket.cpp | 20 ++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
 
 diff --git a/service/src/com/android/telephony/imsmedia/lib/libimsmedia/core/utils/ImsMediaSocket.cpp b/service/src/com/android/telephony/imsmedia/lib/libimsmedia/core/utils/ImsMediaSocket.cpp
-index 1a7d73c..2d82542 100644
+index 1a7d73c..29b935e 100644
 --- a/service/src/com/android/telephony/imsmedia/lib/libimsmedia/core/utils/ImsMediaSocket.cpp
 +++ b/service/src/com/android/telephony/imsmedia/lib/libimsmedia/core/utils/ImsMediaSocket.cpp
 @@ -302,6 +302,14 @@ int32_t ImsMediaSocket::ReceiveFrom(uint8_t* pData, uint32_t nBufferSize)
@@ -34,6 +34,44 @@ index 1a7d73c..2d82542 100644
  
      if (len > 0)
      {
+@@ -493,6 +501,7 @@ uint32_t ImsMediaSocket::SetSocketFD(void* pReadFds, void* pWriteFds, void* pExc
+     FD_ZERO(reinterpret_cast<fd_set*>(pExceptFds));
+     IMLOGD_PACKET0(IM_PACKET_LOG_SOCKET, "[SetSocketFD]");
+ 
++    std::string fds;
+     for (auto& i : slistRxSocket)
+     {
+         int32_t socketFD = i->GetSocketFd();
+@@ -502,8 +511,11 @@ uint32_t ImsMediaSocket::SetSocketFD(void* pReadFds, void* pWriteFds, void* pExc
+         {
+             nMaxSD = socketFD;
+         }
++
++        fds += std::to_string(socketFD) + " ";
+     }
+ 
++    IMLOGI2("[SetSocketFD] monitoring fds[%s] nMaxSD[%d]", fds.c_str(), nMaxSD);
+     sSocketListUpdated = false;
+     return nMaxSD;
+ }
+@@ -575,10 +587,16 @@ void ImsMediaSocket::SocketMonitorThread()
+ 
+         if (res == -1)
+         {
+-            IMLOGE0("[SocketMonitorThread] select function Error!!");
++            IMLOGE1("[SocketMonitorThread] select function Error!! errno[%d]", errno);
+         }
+         else
+         {
++            static int nSelectLogCounter = 0;
++            if (++nSelectLogCounter % 10 == 0)
++            {
++                IMLOGI3("[SocketMonitorThread] select res[%d] nMaxSD[%d] loops[%d]", res, nMaxSD,
++                        nSelectLogCounter);
++            }
+             ReadDataFromSocket(&TmpReadfds);
+         }
+     }
 -- 
 2.55.0
 

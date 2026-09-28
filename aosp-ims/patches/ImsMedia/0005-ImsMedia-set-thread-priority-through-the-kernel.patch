@@ -1,0 +1,80 @@
+From 49a3acdb565b60db33e59a51bdae91c8dc9dcec4 Mon Sep 17 00:00:00 2001
+From: Fulgor Nymvale <fulgor@nym-skyforge>
+Date: Mon, 28 Sep 2026 06:44:42 -0700
+Subject: [PATCH] Set thread priority through the kernel, not the
+ scheduling_policy service
+
+android::requestPriority() resolves the scheduling_policy service through
+servicemanager, and that lookup blocks indefinitely for a caller whose
+SELinux context is denied service_manager find - which is the zip build's
+privileged-app situation (avc: denied { find } name=scheduling_policy,
+scontext=u:r:priv_app). The socket monitor thread called it on its way to
+the select loop, so every downlink packet sat in the socket unread: the
+monitor logged "enter" and then nothing, forever, on every call. Ask the
+kernel directly instead: sched_setscheduler(SCHED_FIFO) first, falling
+back to setpriority; where the caller may not elevate, the syscall fails
+immediately instead of hanging, and the threads run at their current
+priority, which carries audio fine.
+
+Assisted-by: ZCode:GLM-5.3-Flash
+Signed-off-by: Lance <Gero3977@gmail.com>
+---
+ .../core/utils/IImsMediaThread.cpp            | 35 +++++++++++++++++--
+ 1 file changed, 32 insertions(+), 3 deletions(-)
+
+diff --git a/service/src/com/android/telephony/imsmedia/lib/libimsmedia/core/utils/IImsMediaThread.cpp b/service/src/com/android/telephony/imsmedia/lib/libimsmedia/core/utils/IImsMediaThread.cpp
+index 39ea284..0ccb830 100644
+--- a/service/src/com/android/telephony/imsmedia/lib/libimsmedia/core/utils/IImsMediaThread.cpp
++++ b/service/src/com/android/telephony/imsmedia/lib/libimsmedia/core/utils/IImsMediaThread.cpp
+@@ -18,6 +18,8 @@
+ #include <ImsMediaTrace.h>
+ #include <thread>
+ #include <mediautils/SchedulingPolicyService.h>
++#include <sched.h>
++#include <sys/resource.h>
+ 
+ #define MAX_THREAD_NAME_LEN 16
+ 
+@@ -68,9 +70,36 @@ bool IImsMediaThread::StartThread(const char* name)
+ 
+ void IImsMediaThread::SetThreadPriority(pid_t pid, pid_t tid, int priority)
+ {
+-    const int err =
+-            android::requestPriority(pid, tid, priority, false /*isForApp*/, true /*asynchronous*/);
+-    IMLOGD3("[SetThreadPriority] tid:%u, returned:%d. Err: %s", tid, err, strerror(errno));
++    // android::requestPriority() resolves the scheduling_policy service
++    // through servicemanager, and that lookup blocks indefinitely for a
++    // caller whose SELinux context is denied service_manager find:
++    //
++    //   avc: denied { find } for ... name=scheduling_policy
++    //        scontext=u:r:priv_app:s0 ... permissive=0
++    //
++    // That is the zip build's situation (ImsMedia runs as a privileged
++    // app, not in the radio domain a platform build uses). The socket
++    // monitor thread calls this on its way to the select loop, so one
++    // blocked lookup meant no downlink RTP was ever read. Ask the kernel
++    // directly instead: no service lookup is involved, and where the
++    // caller may not elevate the syscall fails immediately (EPERM)
++    // instead of hanging - the threads then simply run at their current
++    // priority, which carries audio fine.
++    const bool realtime = (priority < 0);
++    int err = -1;
++    if (realtime)
++    {
++        struct sched_param param = {};
++        param.sched_priority = 2;
++        err = sched_setscheduler(0, SCHED_FIFO, &param);
++    }
++    if (err != 0)
++    {
++        err = setpriority(PRIO_PROCESS, 0, realtime ? -8 : 0);
++    }
++    IMLOGD3("[SetThreadPriority] tid:%u, kernel direct, returned:%d. Err: %s", tid, err,
++            strerror(errno));
++    (void)pid;
+ }
+ 
+ void IImsMediaThread::StopThread()
+-- 
+2.55.0
+
