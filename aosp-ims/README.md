@@ -124,6 +124,7 @@ it), so:
 
   ```
   sh grant-permissions.sh        # in the zip, and at aosp-ims/zip/grant-permissions.sh
+  grant-permissions.bat          # Windows equivalent (needs adb on PATH)
   ```
 
   It runs `appops set com.google.android.iwlan MANAGE_IPSEC_TUNNELS

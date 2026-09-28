@@ -40,6 +40,7 @@ install = {
     'apn/viettel-45204.xml': f'{root}/apn/viettel-45204.xml',
     'scripts/merge-viettel-apns.sh': f'{root}/scripts/merge-viettel-apns.sh',
     'grant-permissions.sh': f'{here}/zip/grant-permissions.sh',
+    'grant-permissions.bat': f'{here}/zip/grant-permissions.bat',
     # Keeps the stack across LineageOS updates (backuptool's addon.d).
     'addon.d/60-aosp-ims.sh': f'{here}/zip/addon.d/60-aosp-ims.sh',
 }

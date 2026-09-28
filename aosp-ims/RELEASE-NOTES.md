@@ -95,8 +95,12 @@ sh grant-permissions.sh
 ```
 
 The script is attached here, inside the zips, and at
-`aosp-ims/zip/grant-permissions.sh` in the repository. It also grants
-everything above. Without `sh` (Windows), run its commands directly:
+`aosp-ims/zip/grant-permissions.sh` in the repository. On Windows use
+`grant-permissions.bat` (in the repository at
+`aosp-ims/zip/grant-permissions.bat`; run it from a Command Prompt with
+the phone connected — it needs adb on your PATH). It also grants
+everything above. Without `sh` (macOS/Linux) or the batch file
+(Windows), run its commands directly:
 
 ```
 adb shell pm grant com.android.imsstack android.permission.RECORD_AUDIO

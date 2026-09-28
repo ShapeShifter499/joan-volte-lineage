@@ -161,7 +161,8 @@ jobs:
         run: |
           cd "$WORK/out"
           cp "$GITHUB_WORKSPACE/aosp-ims/zip/grant-permissions.sh" .
-          sha256sum zip/*.zip rom/*.zip grant-permissions.sh | sed 's#  [a-z]*/#  #' | tee SHA256SUMS
+          cp "$GITHUB_WORKSPACE/aosp-ims/zip/grant-permissions.bat" .
+          sha256sum zip/*.zip rom/*.zip grant-permissions.sh grant-permissions.bat | sed 's#  [a-z]*/#  #' | tee SHA256SUMS
 
       - name: Publish the prerelease named in aosp-ims/RELEASE
         if: steps.meta.outputs.publish == 'true'
@@ -178,4 +179,4 @@ jobs:
           cd "$WORK/out"
           gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "$TITLE" \
               --notes-file "$GITHUB_WORKSPACE/aosp-ims/RELEASE-NOTES.md" \
-              rom/*.zip zip/*.zip grant-permissions.sh SHA256SUMS
+              rom/*.zip zip/*.zip grant-permissions.sh grant-permissions.bat SHA256SUMS

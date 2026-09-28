@@ -400,6 +400,15 @@ public final class CarrierImsGate {
         if (wfcWanted || importedWanted) {
             over.putBoolean(KEY_WFC, true);
         }
+        // A failed registration refresh retries after this many seconds.
+        // With no value the stack defaults to a minutes-long P-CSCF
+        // penalty box, which turns LineageOS 22.2's ePDG tunnel
+        // teardown/rebuild cycle (the IMS network returns under a new
+        // network id) into a long unregistered gap: the refresh socket
+        // dies with errno 113 against the gone network and the stack
+        // sits out the box. Retrying in seconds rides out the cycle; the
+        // rebuilt tunnel is up well inside a minute.
+        over.putInt("ims.reg_default_wait_time_int", 5);
         if (epdgWanted) {
             over.putString(KEY_EPDG_STATIC, epdg);
             over.putIntArray(KEY_EPDG_PRIORITY, new int[] {EPDG_ADDRESS_STATIC, EPDG_ADDRESS_PLMN});
