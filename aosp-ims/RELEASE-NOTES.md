@@ -25,6 +25,10 @@ over IPv4 (Digi Mobil Romania among them) could never register with the
 earlier bench builds. Every registration going over TCP failed before
 anything was sent. Fixed (ImsStack 0014).
 
+Also new, not yet re-tested on the phone: hanging up an outgoing call
+before it rang (or the network refusing it, busy for instance) could leave
+the call screen stuck on "Disconnecting". Fixed (ImsStack 0015).
+
 ## What this is
 
 It replaces joan's own IMS app with the IMS stack Google wrote for
@@ -69,7 +73,7 @@ can sign with its key): choose *Yes* to install anyway.
   it was. It also works on the ROM above.
 - **`SHA256SUMS`**: check a download with `sha256sum -c SHA256SUMS --ignore-missing`.
 
-Bench testers: this is the same code as bench 10.
+Bench testers: this is the same code as bench 11.
 
 **LineageOS updates** keep the stack: its `addon.d` script puts it back
 after each nightly, so there is no need to re-flash.

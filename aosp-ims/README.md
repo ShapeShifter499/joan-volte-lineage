@@ -29,7 +29,9 @@ have certified; that is decided by the network, not the phone.
 > incoming calls ring and answer, and Wi-Fi calling registers over the
 > carrier's tunnel and carries calls with audio both ways. Carriers whose
 > IMS runs over IPv4 (Digi Mobil Romania among them) get past the first
-> REGISTER only from ImsStack 0014 on; not yet tested there. SMS over IMS,
+> REGISTER only from ImsStack 0014 on; not yet tested there. Hanging up
+> an outgoing call before it rang could leave it stuck "disconnecting"
+> until ImsStack 0015 (not yet re-tested on the bench). SMS over IMS,
 > video calling, RTT, Ut/XCAP and emergency calls over IMS are built in
 > but untested. Keep a way back: the `-uninstall` zip, or the official
 > nightly. Something wrong: [`HOW-TO-LOG.md`](HOW-TO-LOG.md).
@@ -227,7 +229,7 @@ validates against LineageOS's schema.
 
 | Step | State |
 |---|---|
-| ImsStack + ImsMedia Java, against LineageOS 22.2's own framework | done: 14 ImsStack patches, 6 ImsMedia |
+| ImsStack + ImsMedia Java, against LineageOS 22.2's own framework | done: 15 ImsStack patches, 6 ImsMedia |
 | LineageOS 22.2's own changes on the IMS path | reviewed, 62 files and 3 properties; `tests/check-lineage-forks.py` (in CI) |
 | `libimsstack.so`, `libimsmedia.so`, linked against the ROM's libraries | done |
 | IWLAN + QNS (Android 17) for the zip | done: 3 IWLAN patches, 1 QNS |
@@ -283,6 +285,7 @@ pinned in `upstream.lock`.
 | ImsStack 0012 | Resolves the network to bind by live capability, not a cached one |
 | ImsStack 0013 | Reports IWLAN only while the IMS APN itself runs over WLAN. 0011 did so whenever Wi-Fi was up, and every LTE registration then failed within seconds |
 | ImsStack 0014 | Binds a connecting socket before `connect()` and keeps `errno`. 0010's bind after `connect()` left `errno` at ENOTCONN, so every IPv4 TCP connection failed before anything was sent: carriers with IPv4 IMS and a REGISTER over the TCP threshold (Digi Mobil Romania) never registered |
+| ImsStack 0015 | Ends an outgoing call as terminated, not start-failed, once Telephony has seen it initiate. Without domain selection, LineageOS acts on a start failure only while its pending MO is set, which the first 100 Trying clears: a call hung up or refused before the first 18x stayed in Telecom's DISCONNECTING for good |
 | ImsMedia 0001 | `ImsMediaManager` binds the ImsMedia service in its own package when that package has one (the zip's single APK) |
 | ImsMedia 0002 | Declares `JNIImsMediaService.setTestMode`, which the pinned ImsMedia's native JNI table registers and its Java class never declared: the media service died at the first call's media |
 | ImsMedia 0003 | Defers the native open when a session opens with no RTP config yet (incoming calls open at ring time), and runs it with the first modify |

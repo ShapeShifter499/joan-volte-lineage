@@ -1,0 +1,84 @@
+From 7bff5354506e1027d20b147a9fc3a7f208318ec7 Mon Sep 17 00:00:00 2001
+From: Lance <Gero3977@gmail.com>
+Date: Mon, 28 Sep 2026 14:29:24 -0700
+Subject: [PATCH] ImsStack: end an initiated MO call as terminated, not
+ start-failed
+
+A MO call that ends before its first 18x is reported to Telephony as
+start-failed. On a platform without domain selection (LineageOS 22.2 on
+joan), ImsPhoneCallTracker.onCallStartFailed acts only while mPendingMO
+is set, and onCallInitiating, which the stack sends on the first 100,
+clears it. So a call hung up, or refused by the network, between the
+100 Trying and the first 18x was never disconnected: Telecom kept it in
+DISCONNECTING, and the in-call screen hung.
+
+Bench (US998, T-Mobile, Wi-Fi call, 2026-09-28): INVITE, 100 Trying,
+hang-up 0.56 s later; CANCEL, 200, 487, ACK within 200 ms; the stack
+then sent invokeStartFailed(501) and the framework logged
+onCallStartFailed with nothing after it. The call was still
+DISCONNECTING 37 s later.
+
+Remember when Telephony has seen the call initiate, and from then on end
+it as terminated, which ImsPhoneCallTracker handles in any state. A
+failure that asks for a CS redial still goes out as start-failed (only
+that path redials), and so does the alternate-emergency case, which
+already clears MO_PROGRESSING for that reason.
+
+Signed-off-by: Lance <Gero3977@gmail.com>
+Assisted-by: Claude-Code:claude-opus-5-5
+---
+ .../imsservice/mmtel/ImsCallSessionImpl.java    | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/java/src/com/android/imsstack/imsservice/mmtel/ImsCallSessionImpl.java b/java/src/com/android/imsstack/imsservice/mmtel/ImsCallSessionImpl.java
+index 882abd0..ed293f8 100644
+--- a/java/src/com/android/imsstack/imsservice/mmtel/ImsCallSessionImpl.java
++++ b/java/src/com/android/imsstack/imsservice/mmtel/ImsCallSessionImpl.java
+@@ -1726,6 +1726,15 @@ public class ImsCallSessionImpl extends ImsCallSessionImplBase {
+         if (mCallDetails.is(CallDetails.MO)
+                 && (ImsCallUtils.isCsSilentRedialRequired(reasonInfo)
+                 || !mCallDetails.is(CallDetails.MO_PROGRESSING))) {
++            // Without domain selection (LineageOS 22.2), ImsPhoneCallTracker handles a start
++            // failure only while its pending MO is set, and onCallInitiating clears it: a call
++            // hung up or refused between the first 100 and the first 18x never left Telecom's
++            // DISCONNECTING. Once Telephony has seen the call initiate, end it as terminated,
++            // unless the failure asks for a CS redial, which only the start-failed path does.
++            if (mCallDetails.is(CallDetails.MO_INITIATING_NOTIFIED)
++                    && !ImsCallUtils.isCsSilentRedialRequired(reasonInfo)) {
++                return FinalCallEndCallback.TERMINATED;
++            }
+             return FinalCallEndCallback.START_FAILED;
+         }
+ 
+@@ -2359,6 +2368,10 @@ public class ImsCallSessionImpl extends ImsCallSessionImplBase {
+          * Indicates that MO call session is transited to PROGRESSING.
+          */
+         public static final int MO_PROGRESSING = 0x00000400;
++        /**
++         * Indicates that Telephony was told the MO call is initiating.
++         */
++        public static final int MO_INITIATING_NOTIFIED = 0x00000800;
+ 
+         /**
+          * Indicates that session is waiting for the media session to close.
+@@ -3091,6 +3104,9 @@ public class ImsCallSessionImpl extends ImsCallSessionImplBase {
+             setCallInfo(profile);
+ 
+             mCallback.invokeInitiating(ImsCallSessionImpl.this, profile);
++            if (mCallDetails.is(CallDetails.MO)) {
++                mCallDetails.set(CallDetails.MO_INITIATING_NOTIFIED);
++            }
+         }
+ 
+         @Override
+@@ -3211,6 +3227,7 @@ public class ImsCallSessionImpl extends ImsCallSessionImplBase {
+                 mCallback.invokeUpdated(ImsCallSessionImpl.this,
+                         ImsCallUtils.getSanitizedCallProfileForVideoDirection(mCallProfile));
+                 mCallDetails.clear(CallDetails.MO_PROGRESSING);
++                mCallDetails.clear(CallDetails.MO_INITIATING_NOTIFIED);
+             }
+ 
+             setState(ImsCallSessionImplBase.State.TERMINATED);
+-- 
+2.55.0
+

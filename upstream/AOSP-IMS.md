@@ -59,6 +59,7 @@ are the backport, the same ones the zip is built from:
 | ImsStack 0012 | Resolves the network to bind by live capability, not a cached one |
 | ImsStack 0013 | Reports IWLAN only while the IMS APN itself runs over WLAN |
 | ImsStack 0014 | Binds a connecting socket before `connect()` and keeps `errno`: 0010's later bind failed every IPv4 TCP connection. Needed in a tree build too |
+| ImsStack 0015 | Ends an outgoing call as terminated once Telephony has seen it initiate: without domain selection, ImsPhoneCallTracker ignores a start failure after the first 100 Trying, and a call hung up before the first 18x never disconnected. Needed in a tree build too |
 | ImsMedia 0001 | Lets ImsMedia run inside the caller's own package (the zip's single APK). A separate `ImsMediaService`, as here, is bound as before |
 | ImsMedia 0002 | Declares `JNIImsMediaService.setTestMode`, which the pinned ImsMedia's native JNI table registers and its Java class lacked: the media service died at library load on the first call. Needed in a tree build too |
 | ImsMedia 0003 | Defers the native open when a session opens with no RTP config yet (incoming calls open at ring time), and runs it with the first modify |
