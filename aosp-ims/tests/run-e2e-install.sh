@@ -47,6 +47,14 @@ if [ "${1:-}" = "--inner" ]; then
   bad()  { printf '  FAIL: [%s] %s\n' "$SCEN" "$1"; fails=$((fails + 1)); }
   check() { if eval "$1"; then ok "$2"; else bad "$2"; fi; }
 
+  # A recovery's mount table is short. A host's may hold entries (Docker's
+  # overlays) longer than busybox's getmntent buffer, and busybox's mount
+  # listing stops at the first one, so an installer under busybox sh
+  # never saw its own mounts. Drop them from this private namespace.
+  awk 'length($0) > 512 { print $2 }' /proc/self/mounts | sort -r | while read -r t; do
+    umount -l "$(printf '%b' "$t")" 2>/dev/null || true
+  done
+
   # Recovery's view of the world: by-name/mapper nodes, an empty /mnt,
   # and a /tmp that is a different filesystem from the partitions.
   mount -t tmpfs none /dev/block
@@ -392,7 +400,25 @@ for t in cmp dd grep tr unzip; do ln -sf "$(command -v busybox)" "$WORK/bin/$t";
 # partitions are dm nodes and nothing is freed; here the partitions ARE
 # loop devices, and freeing them mid-test pulls the images away.
 rm -f "$WORK/bin/umount"
-printf '#!/bin/sh\nexec toybox umount -D "$@"\n' > "$WORK/bin/umount"
+if command -v toybox >/dev/null 2>&1; then
+  printf '#!/bin/sh\nexec toybox umount -D "$@"\n' > "$WORK/bin/umount"
+else
+  # busybox umount frees a loop device only when asked (-d).
+  printf '#!/bin/sh\nexec busybox umount "$@"\n' > "$WORK/bin/umount"
+  # busybox's mount listing stops at the first /proc/mounts line longer
+  # than its buffer (a host with Docker's overlay mounts has them), so the
+  # installer never saw its own mounts. Toybox reads the table whole; so
+  # does this, in the same format.
+  rm -f "$WORK/bin/mount"
+  cat > "$WORK/bin/mount" <<'MNT'
+#!/bin/sh
+if [ $# -eq 0 ]; then
+  exec awk '{ printf "%s on %s type %s (%s)\n", $1, $2, $3, $4 }' /proc/self/mounts
+fi
+exec busybox mount "$@"
+MNT
+  chmod 755 "$WORK/bin/mount"
+fi
 chmod 755 "$WORK/bin/umount"
 printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/chcon"
 # joan's recovery maps dynamic partitions; backuptool asks, the installer
