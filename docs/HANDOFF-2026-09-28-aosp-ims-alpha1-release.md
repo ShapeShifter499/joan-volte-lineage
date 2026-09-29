@@ -23,13 +23,25 @@ sudo env PATH=$PATH WORK=$PWD/work ROM_TAG=$(sed -n 3p RELEASE) tools/repack-rom
 TMPDIR=work tests/check-rom.sh work/out/rom/*.zip work/out/apk
 ```
 
+Run `tests/run-e2e-install.sh` from the repo root. On this host it needed
+two harness fixes (`29cec31`: no toybox; Docker's long mount lines stop
+busybox's mount listing). The device patch had gone stale against the
+generator (`9ba50c0`), which only CI's carrier-config step would have caught.
+
 `tests/check-soong.sh` / `check-tree-compile.sh` need `work/soong15`,
 which this machine does not have (they ran only in CI).
 
 ## State
 
-- **alpha1** (`aosp-ims-17.0.0_r1-a15-alpha1`): built locally from
-  `3eac863`+; see the release itself for what was uploaded. = bench 11.
+- **alpha1 published** 2026-09-28: prerelease
+  `aosp-ims-17.0.0_r1-a15-alpha1`, tag on `29cec31`, built locally (same
+  code as bench 11). Assets: the ROM (sha256 `c716012f…`), `-fresh`
+  (`bbda824d…`), `-migrate-from-joan` (`5f559ced…`), `-uninstall`, the
+  three grant scripts, `HOW-TO-LOG.md`, `SHA256SUMS`. Checked before
+  upload: 261/261 installer e2e checks (mksh and busybox sh),
+  `check-rom.sh` all passed, carrier-config check OK (2866 SIM identities),
+  every patch series == its work tree. Not run: Soong/tree-compile checks
+  (no `work/soong15` here), lineage-forks (network).
 - **ImsStack 0014**: IPv4 TCP connects all failed (errno clobbered by
   0010's post-`connect()` bind). Found in the Digi Mobil RO tester log
   (Nextcloud `Research/LG_v30_VoLTE/tester_logs/Digi_Mobil_Romania/09-28-2026`).
