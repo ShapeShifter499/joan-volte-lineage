@@ -1,59 +1,57 @@
 # Unmodified Android 17 IMS experiment
 
-This is an experiment, not a release. It starts from the AOSP IMS alpha1
-work and asks a narrower question: can the V30 keep Android 17 ImsStack
-unmodified, and move the V30-specific workarounds into a small overlay?
+This experiment follows the boundary Hansol described: do not backport or
+patch ImsStack. The Android 17 stack should remain unmodified, while the
+V30-specific accommodation lives outside it.
 
-Do not flash this branch. It contains no new installer and has not been
-built or tested on a phone.
+This is not a release. Nothing here has been packed, flashed, built into
+LineageOS, or tested on a phone.
 
-## The two layouts
+## What krazey actually does
 
-- `zip-overlay/` is the future recovery-zip side. It holds only the
-  overlay resources that a zip can install over an already-built stack.
-- `source-tree/` is the future LineageOS source-build side. It holds the
-  same overlay in the form a device tree can add without editing
-  `packages/modules/ImsStack`.
+The relevant public fork is:
 
-Both layouts currently carry the same one resource. Keeping the copies
-identical is deliberate: the zip and source paths must not drift into
-two different workarounds.
+https://github.com/krazey/ImsStack
 
-## What is actually isolated
+Its current tree is based on AOSP Android 17 and is not a source backport.
+For Android 16, its README selects one Soong configuration variable:
 
-The one implemented workaround is the incoming-call framework switch:
-
-```text
-ro.telephony.block_binder_thread_on_incoming_calls=true
+```make
+$(call soong_config_set_bool,imsstack_namespace,use_android16_telephony_compat,true)
 ```
 
-The existing alpha1 branch already sets that property in three places:
-the source device patch, the recovery installer, and the systemless
-module. This experiment gathers that same property into one named
-overlay so it is no longer hidden inside the broader IMS integration.
+`java/Android.bp` uses that variable to compile one of two files:
 
-This does not modify ImsStack. It changes a LineageOS telephony property
-because the V30 tree sets it false for its old modem-IMS arrangement.
+- Android 17: `DomainSelectionEmergencyModeMonitor.java`
+- Android 16: `DomainSelectionEmergencyModeMonitorCompat.java`
 
-## What is not implemented
+Both expose the same small class and methods. The Android 16 file is a
+no-op adapter because Android 16 lacks the Android 17 domain-selection
+emergency callback. That is a build-time file selection, not a runtime
+overlay and not a line-by-line backport of the stack.
 
-- There is no radio HAL 1.6 shim. The current V30 radio interface remains
-  the Android 1.4 radio declared by the device tree. A HAL upgrade is a
-  separate, much larger project and is not implied by these files.
-- There is no dedicated-bearer or QCI workaround yet. The public
-  krazey/ImsStack fork has a device-level switch,
-  `config_imsstack_dedicated_bearer_qos_supported`, which disables QoS
-  precondition waits and allows voice on the default bearer. That switch
-  exists in the fork, not in unmodified upstream ImsStack, so copying its
-  behavior here would violate the unmodified-stack goal.
-- No carrier behavior is claimed. In particular, this does not say that
-  any carrier's QCI or dedicated-bearer behavior is understood or fixed.
-- No zip has been packed, no source tree has been built, and no phone has
-  been tested.
+The same fork also exposes product overlay resources, including
+`config_imsstack_dedicated_bearer_qos_supported`. Setting it false disables
+dedicated-bearer QoS waits and allows voice on the default bearer. That is
+the closest public match to Hansol's "bypass a QCI timeout" description,
+but it is a fork-owned feature. It is not present in unmodified upstream
+AOSP ImsStack, so this experiment does not copy it.
 
-## Boundary
+## The two intended layouts
 
-`claude/aosp-ims-a15-backport` remains the patched Android 17 stack.
-This branch does not replace it and does not remove any of its patches.
-It only reserves a clean place to test which V30 changes can live outside
-ImsStack.
+- `zip-overlay/` is reserved for a recovery zip that can change V30
+  configuration without changing ImsStack.
+- `source-tree/` is reserved for the same configuration when someone builds
+  LineageOS from source.
+
+They are intentionally empty. No V30-only property or HAL shim has been
+promoted into either layout yet.
+
+## Not claimed
+
+- No radio HAL 1.6 implementation or compatibility shim is included.
+- No QCI or dedicated-bearer workaround is included.
+- No compatibility with LineageOS 22.2 has been established. Android 15 may
+  need more than krazey's Android 16 emergency-monitor adapter.
+- The older patched branch remains available, but it is not the model for
+  this experiment.

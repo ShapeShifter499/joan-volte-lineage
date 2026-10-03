@@ -1,13 +1,8 @@
-# Source-build overlay
+# Source-build side
 
-This directory is the source-build half of the experiment. A future
-device-tree change can add the property in `device-overlay/system.prop`
-without editing Android 17 ImsStack.
+Reserved for a future LineageOS device-tree change that can accommodate
+the V30 without modifying Android 17 ImsStack.
 
-The matching recovery-zip half is `../zip-overlay/system.prop`. The two
-files are intentionally identical. If one changes, change and review the
-other in the same commit.
-
-This directory does not add a radio HAL, a QCI bypass, or a carrier
-configuration. It also does not claim that the property alone makes IMS
-work.
+No change is included yet. In particular, this directory does not select
+krazey's Android 16 compatibility file, alter a radio HAL, or disable
+dedicated-bearer QoS.

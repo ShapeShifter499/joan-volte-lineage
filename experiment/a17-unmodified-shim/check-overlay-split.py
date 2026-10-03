@@ -1,36 +1,27 @@
 #!/usr/bin/env python3
-"""Check the unmodified-IMS experiment stays within its declared boundary."""
+"""Keep this experiment inside the unmodified-stack boundary."""
 
 from pathlib import Path
 import sys
 
 root = Path(__file__).resolve().parent
-zip_prop = root / "zip-overlay" / "system.prop"
-source_prop = root / "source-tree" / "device-overlay" / "system.prop"
-required = "ro.telephony.block_binder_thread_on_incoming_calls=true"
-forbidden_markers = (
-    "config_imsstack_dedicated_bearer_qos_supported",
-    "vendor.qti.hardware.radio@",
-    "IRadio/slot1",
-)
-
+allowed = {
+    root / "README.md",
+    root / "check-overlay-split.py",
+    root / "source-tree" / "README.md",
+    root / "zip-overlay" / "README.md",
+}
+actual = {path for path in root.rglob("*") if path.is_file()}
 errors = []
-zip_text = zip_prop.read_text()
-source_text = source_prop.read_text()
-if zip_text != source_text:
-    errors.append("zip and source overlays differ")
-for name, text in (("zip", zip_text), ("source", source_text)):
-    active = [
-        line.strip() for line in text.splitlines()
-        if line.strip() and not line.startswith("#")
-    ]
-    if active != [required]:
-        errors.append(f"{name} overlay does not contain exactly the incoming-call property")
-    for marker in forbidden_markers:
-        if marker in text:
-            errors.append(f"{name} overlay contains undeclared workaround marker {marker}")
-
+if actual != allowed:
+    errors.append("unexpected experiment files: " + ", ".join(
+        str(path.relative_to(root)) for path in sorted(actual - allowed)
+    ))
+for path in (root / "source-tree" / "README.md", root / "zip-overlay" / "README.md"):
+    text = path.read_text()
+    if "No change is included yet" not in text and "No overlay is included yet" not in text:
+        errors.append(f"{path.name} no longer declares that it is empty")
 if errors:
     print("\n".join(errors), file=sys.stderr)
     sys.exit(1)
-print("overlay split OK: one identical incoming-call property, no HAL or QCI shim")
+print("unmodified-stack boundary OK: no overlay or shim has been added")
