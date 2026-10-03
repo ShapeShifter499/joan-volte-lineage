@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- AOSP IWLAN and QNS replace the Qualcomm IWLAN service, which needs
+         a modem IMS core this modem does not have. -->
+    <string name="config_wlan_data_service_package" translatable="false">com.google.android.iwlan</string>
+    <string name="config_wlan_network_service_package" translatable="false">com.google.android.iwlan</string>
+    <string name="config_qualified_networks_service_package" translatable="false">com.android.telephony.qns</string>
+
+    <!-- The device has an app-side IMS stack. Carriers still control
+         VoLTE/WFC availability through CarrierConfig; no carrier is
+         admitted by this experiment. -->
+    <bool name="config_device_volte_available">true</bool>
+    <bool name="config_device_wfc_ims_available">true</bool>
+</resources>

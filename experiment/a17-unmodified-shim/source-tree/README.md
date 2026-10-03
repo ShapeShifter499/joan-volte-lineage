@@ -1,8 +1,11 @@
 # Source-build side
 
-Reserved for a future LineageOS device-tree change that can accommodate
-the V30 without modifying Android 17 ImsStack.
+This directory now contains the first Android 15 / LineageOS 22.2 shape:
 
-No change is included yet. In particular, this directory does not select
-krazey's Android 16 compatibility file, alter a radio HAL, or disable
-dedicated-bearer QoS.
+- `joan-ims-unmodified.mk` selects the unmodified stack's packages.
+- `overlay/` contains the framework and Telephony package selections.
+
+It deliberately contains no carrier admission, QCI/QoS workaround, radio
+HAL shim, or Soong backport patch. Before claiming more, sync Android 17
+`ImsStack` and its paired `ImsMedia` into a real LineageOS 22.2 tree and
+record the first Soong/javac failure without editing ImsStack.
