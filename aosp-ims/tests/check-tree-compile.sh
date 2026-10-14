@@ -44,7 +44,8 @@ PY
 (
     cd "$S/build/soong"
     FLAGS_OUT=$WORK/native-flags.txt FLAGS_MODULES=$MODULES \
-        IMSSTACK=$WORK/src/ImsStack IMSMEDIA=$WORK/src/ImsMedia STUBS=$HERE/tests/soong/stubs.bp \
+        IMSSTACK=$WORK/src/ImsStack IMSMEDIA=$WORK/src/ImsMedia \
+        CARRIERSETTINGS=$WORK/src/CarrierSettings STUBS=$HERE/tests/soong/stubs.bp \
         GOTOOLCHAIN=local GOFLAGS= go test ./imscheck/ -count=1 -run TestDumpNativeFlags >/dev/null
 )
 python3 "$HERE/tests/tree-compile.py" "$T/$CLANG_VERSION/bin/clang-${V##*/}" "$T/$V" \

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Android 15's Soong over the Android.bp files the LineageOS 22.2 kit
-// syncs: ImsStack and ImsMedia from Android 17 with the kit's patches.
+// syncs: ImsStack, ImsMedia and CarrierSettings from krazey's Android 17
+// integration with the kit's patches.
 //
 // Every module type, property, select() and product variable in them has
 // to mean something to Android 15's Soong, and every dependency has to
@@ -12,7 +13,7 @@
 // --verify-stubs.
 //
 // tests/check-soong.sh copies this into Android 15's build/soong as
-// package imscheck and runs it; IMSSTACK, IMSMEDIA and STUBS name the
+// package imscheck and runs it; IMSSTACK, IMSMEDIA, CARRIERSETTINGS and STUBS name the
 // inputs.
 package imscheck
 
@@ -71,12 +72,13 @@ func env(t *testing.T, name string) string {
 	return v
 }
 
-// kit is the fixture: the two trees and the stand-ins, on an Android 15
+// kit is the fixture: the three trees and the stand-ins, on an Android 15
 // release configuration (SDK 35, REL).
 func kit(t *testing.T, debuggable bool, edit func(android.MockFS)) android.FixturePreparer {
 	fs := android.MockFS{}
 	fs.Merge(tree(t, env(t, "IMSSTACK"), "packages/modules/ImsStack"))
 	fs.Merge(tree(t, env(t, "IMSMEDIA"), "packages/modules/ImsMedia"))
+	fs.Merge(tree(t, env(t, "CARRIERSETTINGS"), "packages/apps/CarrierSettings"))
 	if edit != nil {
 		edit(fs)
 	}
@@ -88,6 +90,7 @@ func kit(t *testing.T, debuggable bool, edit func(android.MockFS)) android.Fixtu
 		java.PrepareForIntegrationTestWithJava,
 		// product_variables (debuggable) only apply with the variable mutator.
 		android.PrepareForTestWithVariables,
+		android.PrepareForTestWithSoongConfigModuleBuildComponents,
 		android.PrepareForTestWithLicenses,
 		android.PrepareForTestWithLicenseDefaultModules,
 		codegen.PrepareForTestWithAconfigBuildComponents,
@@ -104,6 +107,18 @@ func kit(t *testing.T, debuggable bool, edit func(android.MockFS)) android.Fixtu
 			"prebuilts/sdk/35/public/framework.aidl":              nil,
 		}.AddToFixture(),
 		android.FixtureAddTextFile("stubs/Android.bp", string(stubs)),
+		// These standard build/make license kinds are present in a full A15
+		// tree but not in the minimal Soong integration fixture.
+		android.FixtureAddTextFile("license-kinds/Android.bp", `
+license_kind {
+    name: "SPDX-license-identifier-GPL-2.0-only",
+    conditions: ["restricted"],
+}
+license_kind {
+    name: "legacy_proprietary",
+    conditions: ["by_exception_only", "not_allowed", "proprietary"],
+}
+`),
 		android.FixtureModifyProductVariables(func(v android.FixtureProductVariables) {
 			sdk := 35
 			v.Platform_sdk_version = &sdk
@@ -111,6 +126,13 @@ func kit(t *testing.T, debuggable bool, edit func(android.MockFS)) android.Fixtu
 			v.Platform_sdk_final = proptools.BoolPtr(true)
 			v.Platform_version_active_codenames = nil
 			v.Debuggable = proptools.BoolPtr(debuggable)
+			// joan-common.mk sets this on LineageOS 22.2. Exercising the
+			// true branch proves the A15-compatible source selector works.
+			v.VendorVars = map[string]map[string]string{
+				"imsstack_namespace": {
+					"use_android16_telephony_compat": "true",
+				},
+			}
 		}),
 	)
 }
@@ -118,7 +140,8 @@ func kit(t *testing.T, debuggable bool, edit func(android.MockFS)) android.Fixtu
 func checkKit(t *testing.T, debuggable bool) {
 	res := kit(t, debuggable, nil).RunTest(t)
 	for _, m := range []string{"ImsStack", "ImsMediaService", "libimsstack", "libimsmedia",
-		"imsstack_flags_java_lib", "preinstalled-packages-imsmedia.xml"} {
+		"imsstack_flags_java_lib", "preinstalled-packages-imsmedia.xml", "CarrierSettings",
+		"preinstalled-packages-carriersettings.xml"} {
 		if len(res.ModuleVariantsForTests(m)) == 0 {
 			t.Errorf("module %s missing", m)
 		}

@@ -8,6 +8,7 @@ QPR2. It replaces joan's own `ImsService`.
 |---|---|---|
 | ImsStack | `com.android.imsstack` | IMS registration, SIP, IPsec, calls, SMS |
 | ImsMedia | `com.android.telephony.imsmedia` | RTP, jitter buffer, codecs, call audio |
+| CarrierSettings | `org.lineageos.carriersettings` | Data-only, same-signer SIP/registration policy read privately by ImsStack |
 | IWLAN | `com.google.android.iwlan` | The IPsec tunnel to the carrier's ePDG, for Wi-Fi calling |
 | QNS | `com.android.telephony.qns` | Moves IMS between LTE and Wi-Fi |
 
@@ -35,6 +36,14 @@ have certified; that is decided by the network, not the phone.
 > video calling, RTT, Ut/XCAP and emergency calls over IMS are built in
 > but untested. Keep a way back: the `-uninstall` zip, or the official
 > nightly. Something wrong: [`HOW-TO-LOG.md`](HOW-TO-LOG.md).
+
+> **Development head after alpha1 (not published or bench-qualified yet):**
+> ImsStack and ImsMedia are rebased onto krazey's paired Android-17 forks;
+> superseded patches are retired, krazey CarrierSettings and a joan
+> capability RRO are packaged, and the null-config ImsMedia open fix is now a
+> guarded state machine. The alpha1 release links below remain the last
+> published/bench baseline; filenames generated from this working tree still
+> say alpha1 until an exact candidate is versioned.
 
 What the stack does, all of it upstream AOSP code: VoLTE (voice over
 LTE, HD voice codecs), Wi-Fi calling (VoWiFi over IWLAN, with QNS moving
@@ -229,11 +238,11 @@ validates against LineageOS's schema.
 
 | Step | State |
 |---|---|
-| ImsStack + ImsMedia Java, against LineageOS 22.2's own framework | done: 15 ImsStack patches, 6 ImsMedia |
+| ImsStack + ImsMedia Java, against LineageOS 22.2's own framework | development head done: krazey base + 16 active ImsStack patches + 1 rebased ImsMedia state-machine patch; alpha1 release used the old 15/6 series |
 | LineageOS 22.2's own changes on the IMS path | reviewed, 62 files and 3 properties; `tests/check-lineage-forks.py` (in CI) |
 | `libimsstack.so`, `libimsmedia.so`, linked against the ROM's libraries | done |
 | IWLAN + QNS (Android 17) for the zip | done: 3 IWLAN patches, 1 QNS |
-| Single-APK packaging, overlays, permission files | done |
+| APK packaging, CarrierSettings, overlays, permission files | development head done; signer equality/data-only/RRO contents verified |
 | Flashable zips (fresh, migrate, uninstall) | done; end-to-end installer tests pass, LineageOS updates (addon.d) included |
 | Repacked LineageOS 22.2 ROM | done; `tests/check-rom.sh` passes |
 | Source-tree integration (`upstream/AOSP-IMS.md`) | written and checked piece by piece, its build files by Android 15's own Soong (`tests/check-soong.sh`, in CI); not yet built in a tree |
@@ -269,7 +278,7 @@ pinned in `upstream.lock`.
 
 | Patch | What |
 |---|---|
-| ImsStack 0001 | The four Android 16/17 APIs ImsStack uses, on Android 15: `requestUiccIari` (no IARIs, RCS only), `BarringInfo#getCellIdentity` (read back from the parcel), `EXTRA_SETUP_EVENT_LIST` (local constant), `DomainSelectionEmergencyModeListener` (not registered) |
+| ImsStack 0001 | The remaining Android 16/17 APIs on Android 15 plus an Android-15-compatible Soong selector for krazey's pre-A17 emergency-mode adapter |
 | ImsStack 0002 | Debug menus without androidx.appcompat |
 | ImsStack 0003 | Hands call audio to Android (`AUDIO_HANDLER_ANDROID`), so Telecom puts the call in `MODE_IN_COMMUNICATION`, the mode ImsMedia's audio path needs on this HAL |
 | ImsStack 0004 | Emergency call tracking without `READ_ACTIVE_EMERGENCY_SESSION` (signature-only). Without the platform key the listener is refused, which crash-looped the stack on a US998; ImsStack now falls back to the call state plus `TelecomManager#isInEmergencyCall`. Platform-signed builds keep the original listener |
@@ -285,13 +294,8 @@ pinned in `upstream.lock`.
 | ImsStack 0012 | Resolves the network to bind by live capability, not a cached one |
 | ImsStack 0013 | Reports IWLAN only while the IMS APN itself runs over WLAN. 0011 did so whenever Wi-Fi was up, and every LTE registration then failed within seconds |
 | ImsStack 0014 | Binds a connecting socket before `connect()` and keeps `errno`. 0010's bind after `connect()` left `errno` at ENOTCONN, so every IPv4 TCP connection failed before anything was sent: carriers with IPv4 IMS and a REGISTER over the TCP threshold (Digi Mobil Romania) never registered |
-| ImsStack 0015 | Ends an outgoing call as terminated, not start-failed, once Telephony has seen it initiate. Without domain selection, LineageOS acts on a start failure only while its pending MO is set, which the first 100 Trying clears: a call hung up or refused before the first 18x stayed in Telecom's DISCONNECTING for good |
-| ImsMedia 0001 | `ImsMediaManager` binds the ImsMedia service in its own package when that package has one (the zip's single APK) |
-| ImsMedia 0002 | Declares `JNIImsMediaService.setTestMode`, which the pinned ImsMedia's native JNI table registers and its Java class never declared: the media service died at the first call's media |
-| ImsMedia 0003 | Defers the native open when a session opens with no RTP config yet (incoming calls open at ring time), and runs it with the first modify |
-| ImsMedia 0004 | Logs the socket monitor and receive path |
-| ImsMedia 0005 | Sets thread priority through the kernel: the `scheduling_policy` service lookup is SELinux-denied for a privileged app and blocked the socket monitor forever, so no downlink RTP was read |
-| ImsMedia 0006 | Drops media-quality thresholds that arrive with no native session (crashed the media service at call teardown) |
+| ImsStack 0015 | Retired on the krazey base: krazey's local-termination/initiating state is a strict superset |
+| ImsMedia 0001 (rebased) | Defers a null-config native open until first modify, queues native operations, closes/fails safely and reports open success exactly once; replaces the old 0003+0006 and adds focused unit tests |
 | Iwlan 0001 | No physical-network reporting in `DataCallResponse` (Android 16 API) |
 | Iwlan 0002 | Doesn't propose AES_XCBC_96 (Android 15 can't build it) or crash on an unsupported algorithm |
 | Iwlan 0003 | Creates the tunnel interface with its real endpoints: on joan's 4.4 kernel it is a VTI, which dropped every packet addressed with IWLAN's placeholder endpoints |
@@ -299,12 +303,14 @@ pinned in `upstream.lock`.
 
 ## How the zip installs without the platform key
 
-- **One APK.** Upstream ImsMedia runs as `android.uid.phone`, which only
-  the platform key can claim. The zip folds the ImsMedia service into the
-  ImsStack APK instead (`tools/merge-manifest.py`): the same app and uid,
-  with the service in its own process as upstream.
-  `zip/java/.../ImsStackZipApp.java` keeps the media process from
-  starting the IMS stack.
+- **One executable IMS APK plus one data APK.** Upstream ImsMedia runs as
+  `android.uid.phone`, which only the platform key can claim. The zip folds the
+  ImsMedia service into the ImsStack APK instead: the same app and uid, with
+  the service in its own process. `zip/java/.../ImsStackZipApp.java` keeps the
+  media process from starting the IMS stack. `CarrierSettings.apk` contains
+  only assets (no `classes.dex`), is installed as a system app and is signed
+  with the same generated key; ImsStack checks system-app and signer identity
+  before reading it.
 - **Hidden APIs.** `android:usesNonSdkApi="true"` on a system app
   (`ApplicationInfo.isAllowedToUseHiddenApis()`).
 - **Platform libraries.** A bundled system app gets the shared linker
@@ -315,10 +321,12 @@ pinned in `upstream.lock`.
   `tools/check-privapp.py` fails the build if the APK requests a
   privileged permission the allowlist does not cover (the ROM would not
   boot).
-- **Selecting the service.** Two overlays (`zip/rro-phone`,
-  `zip/rro-fw`): ImsStack as `config_ims_mmtel_package`; VoLTE and Wi-Fi
+- **Selecting the service.** Three overlays (`zip/rro-phone`,
+  `zip/rro-fw`, `zip/rro-imsstackconfig`): ImsStack as
+  `config_ims_mmtel_package`; VoLTE and Wi-Fi
   calling available on the device; IWLAN and QNS as the WLAN data,
-  network and qualified-networks services.
+  network and qualified-networks services; and dedicated-bearer QoS disabled
+  because joan's legacy data stack cannot report it.
 - **What it cannot have.** `ACCESS_SURFACE_FLINGER` and
   `INTERACT_ACROSS_USERS_FULL` are signature-only, but nothing uses
   them: ImsMedia draws video into the surfaces the dialer hands it
@@ -346,7 +354,7 @@ tools/build-all.sh               # all of the below, in order
 tools/setup-workdir.sh           # sources + patches, headers, ROM, deps
 tools/build-java.sh              # AIDL + a compile check
 tools/build-native.sh            # libimsstack.so, libimsmedia.so
-tools/build-apk.sh               # ImsStack.apk + overlays (wipes out/apk)
+tools/build-apk.sh               # ImsStack.apk + CarrierSettings.apk + overlays (wipes out/apk)
 tools/build-wfc.sh               # Iwlan.apk, QualifiedNetworksService.apk
 tools/pack-zip.sh                # the three zips
 sudo tests/run-e2e-install.sh    # installer end-to-end tests

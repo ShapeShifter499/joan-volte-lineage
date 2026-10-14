@@ -25,11 +25,12 @@ a device has one MMTEL `ImsService`.
 
 | Piece | Source | How it gets there |
 |---|---|---|
-| ImsStack (SIP, IPsec, calls, SMS) | AOSP `packages/modules/ImsStack`, `android-17.0.0_r1` | `upstream/aosp-ims/local_manifests/aosp-ims.xml`, then `upstream/aosp-ims/apply-patches.sh` |
-| ImsMedia (RTP, codecs, call audio) | AOSP `packages/modules/ImsMedia`, `android-17.0.0_r1`, replacing the tree's Android 15 copy | the same |
+| ImsStack (SIP, IPsec, calls, SMS) | `krazey/ImsStack` at the immutable revision in `aosp-ims/upstream.lock`, based on AOSP `android-17.0.0_r1` | `upstream/aosp-ims/local_manifests/aosp-ims.xml`, then `upstream/aosp-ims/apply-patches.sh` |
+| ImsMedia (RTP, codecs, call audio) | paired `krazey/ImsMedia`, replacing the tree's Android 15 copy | the same; joan's device patch also inherits `imsmedia.mk` and its SELinux policy |
+| CarrierSettings (ImsStack-private SIP/registration policy) | data-only `krazey/CarrierSettings`, package `org.lineageos.carriersettings` | the same; platform-signed in a source build |
 | IWLAN (the ePDG tunnel for Wi-Fi calling) | the tree's own, `packages/services/Iwlan` | `PRODUCT_PACKAGES` |
 | QNS (moves IMS between LTE and Wi-Fi) | the tree's own, `packages/modules/Telephony/services/QualifiedNetworksService` | `PRODUCT_PACKAGES` |
-| Device configuration | `device/lge/joan-common` | `upstream/aosp-ims/device/0001-joan-common-Add-the-AOSP-IMS-stack.patch` |
+| Device configuration | `device/lge/joan-common` | the four patches in `upstream/aosp-ims/device/` |
 
 Why Android 17: ImsStack first appeared there. Android 15 already has
 ImsMedia, but Android 17's ImsStack needs Android 17's ImsMedia (it links
@@ -38,12 +39,14 @@ are only services the framework binds by package name, so the tree's
 Android 15 versions do. (The zip carries Android 17 IWLAN and QNS only
 because the official ROM ships neither.)
 
-The patches in `aosp-ims/patches/ImsStack` and `aosp-ims/patches/ImsMedia`
-are the backport, the same ones the zip is built from:
+The active patches in `aosp-ims/patches/ImsStack` and
+`aosp-ims/patches/ImsMedia` are the joan delta, the same ones the zip is built
+from. Superseded AOSP-base patches are preserved under `patches/retired/` and
+are not applied:
 
 | Patch | What it does |
 |---|---|
-| ImsStack 0001 | Replaces the Android 16/17 APIs ImsStack uses with Android 15 equivalents |
+| ImsStack 0001 | Replaces the remaining Android 16/17 APIs with Android 15 equivalents and expresses krazey's pre-A17 source selector through Android-15-compatible `soong_config_module_type` syntax |
 | ImsStack 0002 | The debug menus without androidx.appcompat |
 | ImsStack 0003 | Hands call audio to Android (`AUDIO_HANDLER_ANDROID`), so Telecom uses `MODE_IN_COMMUNICATION`, the mode ImsMedia's audio path needs on this HAL |
 | ImsStack 0004 | Survives a refused outgoing-emergency-call listener (the zip lacks the signature permission) by falling back to the call state and `TelecomManager#isInEmergencyCall`. A platform-signed tree build holds the permission, registers the original listener and never uses the fallback |
@@ -59,13 +62,8 @@ are the backport, the same ones the zip is built from:
 | ImsStack 0012 | Resolves the network to bind by live capability, not a cached one |
 | ImsStack 0013 | Reports IWLAN only while the IMS APN itself runs over WLAN |
 | ImsStack 0014 | Binds a connecting socket before `connect()` and keeps `errno`: 0010's later bind failed every IPv4 TCP connection. Needed in a tree build too |
-| ImsStack 0015 | Ends an outgoing call as terminated once Telephony has seen it initiate: without domain selection, ImsPhoneCallTracker ignores a start failure after the first 100 Trying, and a call hung up before the first 18x never disconnected. Needed in a tree build too |
-| ImsMedia 0001 | Lets ImsMedia run inside the caller's own package (the zip's single APK). A separate `ImsMediaService`, as here, is bound as before |
-| ImsMedia 0002 | Declares `JNIImsMediaService.setTestMode`, which the pinned ImsMedia's native JNI table registers and its Java class lacked: the media service died at library load on the first call. Needed in a tree build too |
-| ImsMedia 0003 | Defers the native open when a session opens with no RTP config yet (incoming calls open at ring time), and runs it with the first modify |
-| ImsMedia 0004 | Logs the socket monitor and receive path |
-| ImsMedia 0005 | Sets thread priority through the kernel instead of the `scheduling_policy` service, whose lookup the zip's SELinux domain is denied (it blocked the downlink forever). In a tree build ImsMedia runs as `radio`, where the lookup is allowed; the patch is harmless there |
-| ImsMedia 0006 | Drops media-quality thresholds that arrive with no native session (crashed the media service at call teardown) |
+| ImsStack 0015 | Retired: krazey's `mLocalTerminationRequested` / `mInitiatingCallbackSent` state is a strict superset and also handles an explicit local terminate |
+| ImsMedia 0001 (rebased) | A deferred-open state machine for null-config incoming sessions: reports open once, opens natively on first modify, queues native operations, handles failure/close without a null dereference, and never sends the duplicate open-success callback from the old 0003. Five focused unit tests ship with the patch |
 
 ## Steps
 
@@ -75,7 +73,7 @@ From the top of a LineageOS 22.2 tree that already builds joan:
 
    ```
    cp <this repo>/upstream/aosp-ims/local_manifests/aosp-ims.xml .repo/local_manifests/
-   repo sync packages/modules/ImsMedia packages/modules/ImsStack
+   repo sync packages/modules/ImsMedia packages/modules/ImsStack packages/apps/CarrierSettings
    ```
 
 2. **Apply the patches and the device change.** One script does all of
@@ -92,7 +90,8 @@ From the top of a LineageOS 22.2 tree that already builds joan:
      `packages/modules/ImsMedia`;
    - `upstream/aosp-ims/device/0001-joan-common-Add-the-AOSP-IMS-stack.patch`,
      `0002-joan-common-Use-ImsStack-s-GBA-service.patch` and
-     `0003-joan-common-Turn-on-framework-incoming-call-handling.patch` to
+     `0003-joan-common-Turn-on-framework-incoming-call-handling.patch` and
+     `0004-joan-common-Integrate-ImsStack-CarrierSettings-policy.patch` to
      `device/lge/joan-common` (made against `lineage-22.2` at 47c4939,
      2025-02-11);
    - the per-carrier IMS config (below), spliced into joan-common's
@@ -103,8 +102,9 @@ From the top of a LineageOS 22.2 tree that already builds joan:
    `--no-carrier-data` leaves out the last two.
 
    The device patch:
-   - adds `ImsStack`, `ImsMediaService`, `Iwlan` and
-     `QualifiedNetworksService` to `PRODUCT_PACKAGES`, and the
+   - adds `ImsStack`, `Iwlan` and `QualifiedNetworksService`, inherits
+     ImsMedia and CarrierSettings's own product makefiles, includes krazey's
+     ImsMedia SELinux policy, and adds the
      `android.hardware.telephony.ims` feature;
    - sets the framework overlay: `config_device_volte_available`,
      `config_device_wfc_ims_available` and `config_device_vt_available`
@@ -115,7 +115,11 @@ From the top of a LineageOS 22.2 tree that already builds joan:
      `config_ims_rcs_package` = `com.android.imsstack`, and
      `config_support_rtt` true (0002 adds `config_gba_package` =
      `com.android.imsstack`);
-   - adds the carrier blocks to CarrierConfig's `vendor.xml` (below);
+   - builds the same-platform-signed, data-only CarrierSettings package and a
+     joan ImsStack RRO that disables dedicated-bearer QoS (joan's legacy data
+     stack does not report it);
+   - keeps the framework-consumed carrier blocks in CarrierConfig's
+     `vendor.xml` (below);
    - adds `system_ext/etc/default-permissions/default-permissions-ims.xml`
      (below);
    - (0003) sets `ro.telephony.block_binder_thread_on_incoming_calls=true`
@@ -149,8 +153,8 @@ permission steps.
 | Signature permissions | The platform key: `ACCESS_SURFACE_FLINGER`, `INTERACT_ACROSS_USERS_FULL` (ImsStack; requested, though nothing in the stack uses either), `MANAGE_IPSEC_TUNNELS` (IWLAN), `USE_IMSMEDIA`. These are what the zip has to do without. |
 | Runtime permissions | `default-permissions-ims.xml` from the device patch, granted on first boot and after each system update: microphone and camera for ImsMedia, phone state and location for ImsStack, IWLAN and QNS. |
 | Hidden APIs | Platform-signed apps are exempt from the hidden API policy. |
-| User types | `sysconfig_com.android.imsstack` and `preinstalled-packages-imsmedia.xml` install both for the system user. |
-| SELinux | Stock domains only: ImsStack runs as `platform_app` (own uid, platform key); ImsMedia as `radio` (`android.uid.phone`); IWLAN as `system_app` (`android.uid.system`); QNS as `platform_app`. No policy was written. Report any denials from the first boot. |
+| User types | `sysconfig_com.android.imsstack`, `preinstalled-packages-imsmedia.xml` and CarrierSettings's sysconfig install all three for the system user. |
+| SELinux | Existing domains: ImsStack runs as `platform_app`; ImsMedia as `radio`; IWLAN as `system_app`; QNS as `platform_app`. Krazey's narrow ImsMedia policy permits radio to use platform-app UDP sockets and find `scheduling_policy_service`; patch 0004 includes that directory. Report any additional denials from the first boot. |
 
 ## Carrier configuration
 
@@ -158,6 +162,12 @@ LineageOS ships IMS carrier config for Pixels, not for joan. The build
 gets it in `overlay/packages/apps/CarrierConfig/res/xml/vendor.xml`,
 which CarrierConfig applies after each carrier's own config, in one
 region between `aosp-ims-begin`/`aosp-ims-end` markers:
+
+Krazey's separately updatable CarrierSettings is an **additional private
+ImsStack policy plane**, not a replacement for framework CarrierConfig. It
+contains only the allowlisted SIP/registration/identity/AMR/Ut keys ImsStack
+reads directly. Framework-consumed availability, IWLAN/ePDG/QNS, emergency,
+QoS, RTT/video and APN data stay in the framework paths below.
 
 1. ePDG addresses for T-Mobile (and its MVNOs such as MetroPCS), AT&T
    and Verizon, whose ePDGs are not at the 3GPP default name (from the
@@ -249,9 +259,10 @@ Checked against the `android15-qpr2-release` sources and the LineageOS
   produces trees identical to the ones the zip is built from; a second
   run skips all of them.
 - The device patch applies to `lineage-22.2` of `joan-common`.
-- Android 15's Soong reads ImsStack's and ImsMedia's Android 17
+- Android 15's Soong reads ImsStack's, ImsMedia's and CarrierSettings's
   `Android.bp` files, as patched, without an error: every module type,
-  property, `select()` and product variable, in user and userdebug
+  property and product variable, including joan's `compat=true` source
+  selector, in user and userdebug
   builds, tests included (Soong resolves test modules in every build).
   `aosp-ims/tests/check-soong.sh` runs `build/soong` from
   `android15-qpr2-release` over them, and fails on a property it does
@@ -305,8 +316,11 @@ Checked against the `android15-qpr2-release` sources and the LineageOS
 - **23.x (Android 16):** the same steps should mostly apply; the
   Android 16 framework has some of the APIs patch 0001 replaces, so
   parts of it may be unnecessary. Not tried.
-- **24 (Android 17):** no backport. ImsStack and ImsMedia are in the
-  tree; only the device change is needed.
+- **24 (Android 17):** LineageOS has now merged a shared Generic IMS
+  makefile and accepts one-line device inheritance, but joan has no 24 device
+  branch and several bench-proven generic runtime fixes still need upstream
+  homes. See `upstream/AOSP-IMS-24-SCOPE.md`; do not carry the old claim that
+  "only the device change is needed."
 
 ## Do not
 

@@ -18,19 +18,23 @@ OUT=$WORK/out/zip
 mkdir -p "$OUT"
 python3 "$HERE/tools/make-installer.py" "$ROOT/scripts" "$OUT/scripts"
 
-python3 - "$ROOT" "$HERE" "$APK" "$OUT" "$VERSION_NAME" <<'EOF'
+python3 - "$ROOT" "$HERE" "$WORK" "$APK" "$OUT" "$VERSION_NAME" <<'EOF'
 import os, sys, time, zipfile
-root, here, apk, out, version = sys.argv[1:6]
+root, here, work, apk, out, version = sys.argv[1:7]
 install = {
     'META-INF/com/google/android/update-binary': f'{out}/scripts/update-binary',
     'META-INF/com/google/android/updater-script': f'{root}/META-INF/com/google/android/updater-script',
     'app/ImsStack.apk': f'{apk}/ImsStack.apk',
+    'app/CarrierSettings.apk': f'{apk}/CarrierSettings.apk',
     'app/ImsStackPhoneOverlay.apk': f'{apk}/ImsStackPhoneOverlay.apk',
     'app/ImsStackFrameworkOverlay.apk': f'{apk}/ImsStackFrameworkOverlay.apk',
+    'app/ImsStackConfigOverlay.apk': f'{apk}/ImsStackConfigOverlay.apk',
     'etc/permissions/com.android.imsstack.xml': f'{here}/permissions/privapp-permissions-com.android.imsstack.xml',
     'etc/permissions/android.hardware.telephony.ims.xml': f'{root}/permissions/android.hardware.telephony.ims.xml',
     'etc/default-permissions/com.android.imsstack.xml': f'{here}/permissions/default-permissions-com.android.imsstack.xml',
     'etc/sysconfig/com.android.imsstack.xml': f'{here}/permissions/sysconfig-com.android.imsstack.xml',
+    'etc/sysconfig/preinstalled-packages-carriersettings.xml':
+        f'{work}/src/CarrierSettings/sysconfig/preinstalled-packages-carriersettings.xml',
     # VoWiFi: AOSP IWLAN (ePDG tunnel) and QNS (LTE <-> Wi-Fi choice).
     'app/Iwlan.apk': f'{apk}/Iwlan.apk',
     'app/QualifiedNetworksService.apk': f'{apk}/QualifiedNetworksService.apk',

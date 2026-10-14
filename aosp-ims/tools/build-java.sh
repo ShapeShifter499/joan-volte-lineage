@@ -55,7 +55,10 @@ jc() { # jc <outdir> <classpath> <sources...>
     javac -J-Xmx4g -encoding UTF-8 -nowarn -proc:none -Xmaxerrs 200 \
         -source 21 -target 21 -d "$d" -classpath "$cp" "$@"
 }
-find "$ISS" "$IMF" "$OUT/gen" "$OUT/rgen-stack" "$HERE/stubs/java" -name '*.java' > "$OUT/stack.srcs"
+# krazey carries two files declaring the same package-private monitor class;
+# Soong selects exactly one. Android 15 uses the pre-17 compat adapter.
+find "$ISS" "$IMF" "$OUT/gen" "$OUT/rgen-stack" "$HERE/stubs/java" \
+    -name '*.java' ! -name 'DomainSelectionEmergencyModeMonitor.java' > "$OUT/stack.srcs"
 jc "$OUT/imsstack" "$CP" @"$OUT/stack.srcs"
 find "$S/ImsMedia/service/src" "$OUT/rgen-media" "$HERE/stubs/java" -name '*.java' > "$OUT/media.srcs"
 jc "$OUT/imsmedia" "$OUT/imsstack:$CP" @"$OUT/media.srcs"

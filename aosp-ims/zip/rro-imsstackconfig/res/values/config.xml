@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- msm8998/joan's data stack does not report dedicated IMS bearers.
+         Calls are proven on the default bearer with preconditions disabled. -->
+    <bool name="config_imsstack_dedicated_bearer_qos_supported">false</bool>
+</resources>

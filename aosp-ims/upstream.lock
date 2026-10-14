@@ -1,12 +1,19 @@
 # Pinned inputs of the AOSP IMS backport. Sourced by tools/*.sh.
 
-# AOSP 17 IMS stack: sources, patched by patches/<project>/*.patch.
-IMSSTACK_URL=https://android.googlesource.com/platform/packages/modules/ImsStack
-IMSSTACK_REF=android-17.0.0_r1
-IMSSTACK_COMMIT=1e3981c23117d75d5ad304b32bb030327ad33eaa
-IMSMEDIA_URL=https://android.googlesource.com/platform/packages/modules/ImsMedia
-IMSMEDIA_REF=android-17.0.0_r1
-IMSMEDIA_COMMIT=0101cb4caf48dbcc3b8fbc6ab3e41137b90b8e67
+# AOSP 17 IMS stack, with krazey's generic fixes and product integration.
+# Both forks are descendants of the exact android-17.0.0_r1 commits this
+# backport originally pinned; patches/<project> carries only joan/A15 deltas.
+IMSSTACK_URL=https://github.com/krazey/ImsStack.git
+IMSSTACK_REF=main
+IMSSTACK_COMMIT=5ff784d265a94b8227f8fcc93bf915f7635283f0
+IMSMEDIA_URL=https://github.com/krazey/ImsMedia.git
+IMSMEDIA_REF=main
+IMSMEDIA_COMMIT=cb1dd74e9d5e7b7693dfc5870037607eb58d8ea3
+
+# Data-only, same-signer carrier policy consumed privately by ImsStack.
+CARRIERSETTINGS_PACKAGE_URL=https://github.com/krazey/CarrierSettings.git
+CARRIERSETTINGS_PACKAGE_REF=main
+CARRIERSETTINGS_PACKAGE_COMMIT=2d00ce6100921547482bb3ecda690ec346d64be2
 # VoWiFi: the ePDG tunnel (IWLAN) and the LTE/Wi-Fi transport choice (QNS).
 IWLAN_URL=https://android.googlesource.com/platform/packages/services/Iwlan
 IWLAN_REF=android-17.0.0_r1

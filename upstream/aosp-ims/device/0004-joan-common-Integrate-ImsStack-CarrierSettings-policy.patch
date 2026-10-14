@@ -1,0 +1,108 @@
+From a71f6d0430c28db402bf66d3846fccd8f2e5d500 Mon Sep 17 00:00:00 2001
+From: Lance <Gero3977@gmail.com>
+Date: Tue, 13 Oct 2026 05:21:03 -0700
+Subject: [PATCH] joan-common: Integrate ImsStack CarrierSettings policy
+
+Build krazey CarrierSettings with the product platform key, select ImsStack pre-Android-17 telephony compatibility on the Android 15 tree, and disable dedicated-bearer QoS through ImsStackConfig because joan uses the proven default bearer.
+
+Assisted-by: Hermes-Agent:stepfun/step-5-preview:free
+Signed-off-by: Lance <Gero3977@gmail.com>
+---
+ BoardConfigCommon.mk                            |  1 +
+ joan-common.mk                                  |  8 ++++++--
+ rro_overlays/ImsStackConfigOverlay/Android.bp   |  5 +++++
+ .../ImsStackConfigOverlay/AndroidManifest.xml   | 17 +++++++++++++++++
+ .../ImsStackConfigOverlay/res/values/config.xml | 11 +++++++++++
+ 5 files changed, 40 insertions(+), 2 deletions(-)
+ create mode 100644 rro_overlays/ImsStackConfigOverlay/Android.bp
+ create mode 100644 rro_overlays/ImsStackConfigOverlay/AndroidManifest.xml
+ create mode 100644 rro_overlays/ImsStackConfigOverlay/res/values/config.xml
+
+diff --git a/BoardConfigCommon.mk b/BoardConfigCommon.mk
+index 5d358fa..58feb88 100644
+--- a/BoardConfigCommon.mk
++++ b/BoardConfigCommon.mk
+@@ -154,6 +154,7 @@ include device/lineage/sepolicy/libperfmgr/sepolicy.mk
+ BOARD_VENDOR_SEPOLICY_DIRS += $(COMMON_PATH)/sepolicy/vendor
+ SYSTEM_EXT_PRIVATE_SEPOLICY_DIRS += $(COMMON_PATH)/sepolicy/private
+ SYSTEM_EXT_PUBLIC_SEPOLICY_DIRS += $(COMMON_PATH)/sepolicy/public
++SYSTEM_EXT_PRIVATE_SEPOLICY_DIRS += packages/modules/ImsMedia/sepolicy/system_ext/private
+ 
+ # Timeservice
+ BOARD_USES_QC_TIME_SERVICES := true
+diff --git a/joan-common.mk b/joan-common.mk
+index 28b4667..f453c16 100644
+--- a/joan-common.mk
++++ b/joan-common.mk
+@@ -206,11 +206,15 @@ PRODUCT_PACKAGES += \
+ # AOSP's IMS stack: ImsStack (packages/modules/ImsStack) and ImsMedia from
+ # Android 17 with the Android 15 backport patches, and the tree's own IWLAN
+ # and QNS for Wi-Fi calling. The V30's modem has no IMS core of its own.
++# CarrierSettings is a data-only, same-platform-signer policy package used
++# privately by ImsStack; it does not replace framework CarrierConfig.
++$(call inherit-product, packages/apps/CarrierSettings/carrier_settings.mk)
++$(call inherit-product, packages/modules/ImsMedia/imsmedia.mk)
++$(call soong_config_set_bool,imsstack_namespace,use_android16_telephony_compat,true)
+ PRODUCT_PACKAGES += \
+-    ImsMediaService \
+     ImsStack \
++    ImsStackConfigOverlay \
+     Iwlan \
+-    preinstalled-packages-imsmedia.xml \
+     QualifiedNetworksService
+ 
+ # Init
+diff --git a/rro_overlays/ImsStackConfigOverlay/Android.bp b/rro_overlays/ImsStackConfigOverlay/Android.bp
+new file mode 100644
+index 0000000..d2168c0
+--- /dev/null
++++ b/rro_overlays/ImsStackConfigOverlay/Android.bp
+@@ -0,0 +1,5 @@
++runtime_resource_overlay {
++    name: "ImsStackConfigOverlay",
++    sdk_version: "current",
++    product_specific: true,
++}
+diff --git a/rro_overlays/ImsStackConfigOverlay/AndroidManifest.xml b/rro_overlays/ImsStackConfigOverlay/AndroidManifest.xml
+new file mode 100644
+index 0000000..64fd71d
+--- /dev/null
++++ b/rro_overlays/ImsStackConfigOverlay/AndroidManifest.xml
+@@ -0,0 +1,17 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++     Copyright (C) 2026 The LineageOS Project
++
++     SPDX-License-Identifier: Apache-2.0
++-->
++<manifest xmlns:android="http://schemas.android.com/apk/res/android"
++    package="com.android.imsstack.resources.joan"
++    android:versionCode="1"
++    android:versionName="1.0">
++    <application android:hasCode="false" />
++    <overlay
++        android:targetPackage="com.android.imsstack"
++        android:targetName="ImsStackConfig"
++        android:isStatic="true"
++        android:priority="0" />
++</manifest>
+diff --git a/rro_overlays/ImsStackConfigOverlay/res/values/config.xml b/rro_overlays/ImsStackConfigOverlay/res/values/config.xml
+new file mode 100644
+index 0000000..c82750f
+--- /dev/null
++++ b/rro_overlays/ImsStackConfigOverlay/res/values/config.xml
+@@ -0,0 +1,11 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++     Copyright (C) 2026 The LineageOS Project
++
++     SPDX-License-Identifier: Apache-2.0
++-->
++<resources>
++    <!-- msm8998/joan's data stack does not report dedicated IMS bearers.
++         Calls use the default bearer with SIP preconditions disabled. -->
++    <bool name="config_imsstack_dedicated_bearer_qos_supported">false</bool>
++</resources>
+-- 
+2.55.0
+

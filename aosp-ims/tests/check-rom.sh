@@ -60,11 +60,13 @@ check() {
         bad "$1:$path owner, mode or label: $(grep -o 'User:.*' <<< "$st" | head -1) $label"
     fi
 }
-for f in priv-app/ImsStack/ImsStack.apk priv-app/Iwlan/Iwlan.apk \
+for f in priv-app/ImsStack/ImsStack.apk app/CarrierSettings/CarrierSettings.apk \
+         priv-app/Iwlan/Iwlan.apk \
          priv-app/QualifiedNetworksService/QualifiedNetworksService.apk \
          etc/permissions/com.android.imsstack.xml etc/permissions/com.google.android.iwlan.xml \
          etc/permissions/com.android.telephony.qns.xml etc/permissions/android.hardware.telephony.ims.xml \
          etc/default-permissions/com.android.imsstack.xml etc/sysconfig/com.android.imsstack.xml \
+         etc/sysconfig/preinstalled-packages-carriersettings.xml \
          etc/sysconfig/com.google.android.iwlan.xml addon.d/60-aosp-ims.sh \
          etc/aosp-ims/merge-viettel-apns.sh etc/aosp-ims/viettel-45204.xml \
          etc/aosp-ims-incoming-calls.flipped; do
@@ -79,7 +81,8 @@ cmp -s "$T/addon.sh" "$(dirname "$0")/../zip/addon.d/60-aosp-ims.sh" \
     = "ro.telephony.block_binder_thread_on_incoming_calls=false" ] \
     && ok "system: incoming-call flip recorded as the zip records it" \
     || bad "system: no record of the incoming-call flip"
-for f in overlay/ImsStackPhoneOverlay.apk overlay/ImsStackFrameworkOverlay.apk etc/apns-conf.xml \
+for f in overlay/ImsStackPhoneOverlay.apk overlay/ImsStackFrameworkOverlay.apk \
+         overlay/ImsStackConfigOverlay.apk etc/apns-conf.xml \
          etc/apns-conf.xml.joan-orig etc/apns-conf.xml.joan-merged; do
     check product "/$f"
 done
@@ -130,7 +133,11 @@ if [ -n "$APK" ]; then
         debugfs -R "dump /system/priv-app/$a/$a.apk $T/$a.apk" "$T/system.img" >/dev/null 2>&1
         cmp -s "$T/$a.apk" "$APK/$a.apk" && ok "$a.apk is the one built" || bad "$a.apk differs from $APK"
     done
-    for o in ImsStackPhoneOverlay ImsStackFrameworkOverlay; do
+    debugfs -R "dump /system/app/CarrierSettings/CarrierSettings.apk $T/CarrierSettings.apk" \
+        "$T/system.img" >/dev/null 2>&1
+    cmp -s "$T/CarrierSettings.apk" "$APK/CarrierSettings.apk" \
+        && ok "CarrierSettings.apk is the one built" || bad "CarrierSettings.apk differs from $APK"
+    for o in ImsStackPhoneOverlay ImsStackFrameworkOverlay ImsStackConfigOverlay; do
         debugfs -R "dump /overlay/$o.apk $T/$o.apk" "$T/product.img" >/dev/null 2>&1
         cmp -s "$T/$o.apk" "$APK/$o.apk" && ok "$o.apk is the one built" || bad "$o.apk differs from $APK"
     done

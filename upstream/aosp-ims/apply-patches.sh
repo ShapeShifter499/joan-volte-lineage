@@ -1,9 +1,10 @@
 #!/bin/sh
 # Put the AOSP IMS stack into a LineageOS 22.2 tree for joan, in one go:
 #
-# 1. the Android 15 backport patches (aosp-ims/patches/, the same ones the
-#    flashable zip is built from) onto the Android 17 ImsStack and ImsMedia
-#    that local_manifests/aosp-ims.xml syncs;
+# 1. joan's Android 15 and device-behavior patches (aosp-ims/patches/, the
+#    same ones the flashable zip is built from) onto krazey's Android 17
+#    ImsStack and ImsMedia forks synced by local_manifests/aosp-ims.xml;
+#    the manifest also syncs the paired CarrierSettings data package;
 # 2. the device change, device/0001-*.patch, onto device/lge/joan-common;
 # 3. the per-carrier IMS config: what AOSP 17's CarrierConfig assets
 #    changed (aosp-ims/carrier/aosp17-carrierconfig-ims.xml), under the
@@ -52,6 +53,14 @@ apply() { # apply <project path in the tree> <patch>...
         echo "$project: applied: $subject"
     done
 }
+
+# CarrierSettings has no joan patch, but it is load-bearing: ImsStack accepts
+# its assets only when the package is a system app signed with the same key.
+# Fail here rather than silently producing a tree without its policy data.
+if ! git -C "$TREE/packages/apps/CarrierSettings" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "packages/apps/CarrierSettings: not synced. Add the supplied local manifest and repo sync first." >&2
+    exit 1
+fi
 
 apply packages/modules/ImsStack "$KIT"/aosp-ims/patches/ImsStack/*.patch
 apply packages/modules/ImsMedia "$KIT"/aosp-ims/patches/ImsMedia/*.patch

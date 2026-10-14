@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Joan cannot expose dedicated IMS bearer QoS through its legacy data
+     stack. Keep voice on the proven default bearer and clamp preconditions
+     off in ImsStack's device-capability layer. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.android.imsstack.rro.config"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <uses-sdk android:minSdkVersion="35" android:targetSdkVersion="35" />
+    <application android:hasCode="false" />
+    <overlay android:targetPackage="com.android.imsstack"
+        android:targetName="ImsStackConfig"
+        android:priority="3"
+        android:isStatic="true" />
+</manifest>

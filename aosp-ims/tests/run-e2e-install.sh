@@ -101,18 +101,23 @@ if [ "${1:-}" = "--inner" ]; then
   no_temps() { ! find "$S" "$P" -name '*.joan-new' | grep -q .; }
   installed_ok() {
     check 'cmp -s "$S/system/priv-app/ImsStack/ImsStack.apk" "$WORK/zip/app/ImsStack.apk"' "apk installed byte-for-byte"
+    check 'cmp -s "$S/system/app/CarrierSettings/CarrierSettings.apk" "$WORK/zip/app/CarrierSettings.apk"' "CarrierSettings installed byte-for-byte"
     check 'cmp -s "$S/system/etc/permissions/com.android.imsstack.xml" "$ROOT/aosp-ims/permissions/privapp-permissions-com.android.imsstack.xml"' "allowlist installed"
     check 'cmp -s "$S/system/etc/default-permissions/com.android.imsstack.xml" "$ROOT/aosp-ims/permissions/default-permissions-com.android.imsstack.xml"' "default grants installed"
     check 'cmp -s "$S/system/etc/sysconfig/com.android.imsstack.xml" "$ROOT/aosp-ims/permissions/sysconfig-com.android.imsstack.xml"' "sysconfig (power-save exemption) installed"
+    check 'cmp -s "$S/system/etc/sysconfig/preinstalled-packages-carriersettings.xml" "$WORK/zip/etc/sysconfig/preinstalled-packages-carriersettings.xml"' "CarrierSettings system-user sysconfig installed"
     check 'cmp -s "$S/system/priv-app/Iwlan/Iwlan.apk" "$WORK/zip/app/Iwlan.apk"' "VoWiFi: IWLAN installed"
     check 'cmp -s "$S/system/priv-app/QualifiedNetworksService/QualifiedNetworksService.apk" "$WORK/zip/app/QualifiedNetworksService.apk"' "VoWiFi: QNS installed"
     check 'cmp -s "$S/system/etc/permissions/com.google.android.iwlan.xml" "$ROOT/aosp-ims/permissions/privapp-permissions-com.google.android.iwlan.xml" && cmp -s "$S/system/etc/permissions/com.android.telephony.qns.xml" "$ROOT/aosp-ims/permissions/privapp-permissions-com.android.telephony.qns.xml"' "VoWiFi: allowlists installed"
     check 'future "$S/system/priv-app/Iwlan" && future "$S/system/priv-app/QualifiedNetworksService"' "VoWiFi: priv-app directories re-dated"
     check 'cmp -s "$P/overlay/ImsStackPhoneOverlay.apk" "$WORK/zip/app/ImsStackPhoneOverlay.apk"' "phone overlay installed"
     check 'cmp -s "$P/overlay/ImsStackFrameworkOverlay.apk" "$WORK/zip/app/ImsStackFrameworkOverlay.apk"' "framework overlay installed"
+    check 'cmp -s "$P/overlay/ImsStackConfigOverlay.apk" "$WORK/zip/app/ImsStackConfigOverlay.apk"' "ImsStack capability overlay installed"
     check 'future "$S/system/priv-app/ImsStack"' "priv-app directory re-dated so PackageManager re-parses it"
     check 'future "$S/system/priv-app/ImsStack/ImsStack.apk"' "apk re-dated"
+    check 'future "$S/system/app/CarrierSettings"' "CarrierSettings directory re-dated"
     check 'future "$P/overlay/ImsStackPhoneOverlay.apk" && future "$P/overlay/ImsStackFrameworkOverlay.apk"' "overlays re-dated"
+    check 'future "$P/overlay/ImsStackConfigOverlay.apk"' "ImsStack capability overlay re-dated"
     check 'grep -q "<permission name=\"android.permission.MODIFY_PHONE_STATE\"" "$S/system/etc/permissions/com.android.imsstack.xml"' "allowlist covers MODIFY_PHONE_STATE"
     check 'no_temps' "no .joan-new temp files left behind"
     check '[ ! -e "$S/system/etc/init/joan-grant.rc" ] && [ ! -e "$S/system/bin/joan-grant.sh" ]' "no boot-time grant on disk"
@@ -125,10 +130,13 @@ if [ "${1:-}" = "--inner" ]; then
   # script: the stack as the zip installed it, on the update's partitions.
   restored_ok() {
     check 'cmp -s "$S/system/priv-app/ImsStack/ImsStack.apk" "$WORK/zip/app/ImsStack.apk"' "update: apk restored byte-for-byte"
+    check 'cmp -s "$S/system/app/CarrierSettings/CarrierSettings.apk" "$WORK/zip/app/CarrierSettings.apk"' "update: CarrierSettings restored"
     check 'cmp -s "$S/system/etc/permissions/com.android.imsstack.xml" "$ROOT/aosp-ims/permissions/privapp-permissions-com.android.imsstack.xml" && cmp -s "$S/system/etc/default-permissions/com.android.imsstack.xml" "$ROOT/aosp-ims/permissions/default-permissions-com.android.imsstack.xml" && cmp -s "$S/system/etc/sysconfig/com.android.imsstack.xml" "$ROOT/aosp-ims/permissions/sysconfig-com.android.imsstack.xml"' "update: allowlist, default grants and sysconfig restored"
     check 'cmp -s "$S/system/priv-app/Iwlan/Iwlan.apk" "$WORK/zip/app/Iwlan.apk" && cmp -s "$S/system/priv-app/QualifiedNetworksService/QualifiedNetworksService.apk" "$WORK/zip/app/QualifiedNetworksService.apk"' "update: VoWiFi apps restored"
     check 'cmp -s "$S/system/etc/permissions/com.google.android.iwlan.xml" "$ROOT/aosp-ims/permissions/privapp-permissions-com.google.android.iwlan.xml" && cmp -s "$S/system/etc/permissions/com.android.telephony.qns.xml" "$ROOT/aosp-ims/permissions/privapp-permissions-com.android.telephony.qns.xml" && cmp -s "$S/system/etc/sysconfig/com.google.android.iwlan.xml" "$ROOT/aosp-ims/permissions/sysconfig-com.google.android.iwlan.xml"' "update: VoWiFi allowlists and sysconfig restored"
     check 'cmp -s "$P/overlay/ImsStackPhoneOverlay.apk" "$WORK/zip/app/ImsStackPhoneOverlay.apk" && cmp -s "$P/overlay/ImsStackFrameworkOverlay.apk" "$WORK/zip/app/ImsStackFrameworkOverlay.apk"' "update: overlays restored on product"
+    check 'cmp -s "$P/overlay/ImsStackConfigOverlay.apk" "$WORK/zip/app/ImsStackConfigOverlay.apk"' "update: capability overlay restored on product"
+    check 'cmp -s "$S/system/etc/sysconfig/preinstalled-packages-carriersettings.xml" "$WORK/zip/etc/sysconfig/preinstalled-packages-carriersettings.xml"' "update: CarrierSettings sysconfig restored"
     check 'cmp -s "$S/system/addon.d/60-aosp-ims.sh" "$ROOT/aosp-ims/zip/addon.d/60-aosp-ims.sh"' "update: addon.d script kept for the next update"
     check 'cmp -s "$S/system/etc/aosp-ims/merge-viettel-apns.sh" "$ROOT/scripts/merge-viettel-apns.sh" && cmp -s "$S/system/etc/aosp-ims/viettel-45204.xml" "$ROOT/apn/viettel-45204.xml"' "update: APN merge inputs restored"
     check '[ "$(stat -c %a "$S/system/priv-app/ImsStack")" = 755 ] && [ "$(stat -c %a "$S/system/priv-app/Iwlan")" = 755 ]' "update: priv-app directories 755"
@@ -283,13 +291,16 @@ if [ "${1:-}" = "--inner" ]; then
       check '[ "$rc" = 0 ] && [ "$urc" = 0 ]' "install then uninstall both exit 0 ($rc/$urc)"
       mount_chk
       check '[ ! -e "$S/system/priv-app/ImsStack" ]' "priv-app removed"
+      check '[ ! -e "$S/system/app/CarrierSettings" ]' "CarrierSettings removed"
       check '[ ! -e "$S/system/etc/permissions/com.android.imsstack.xml" ]' "allowlist removed"
       check '[ ! -e "$S/system/etc/default-permissions/com.android.imsstack.xml" ]' "default grants removed"
       check '[ ! -e "$S/system/etc/sysconfig/com.android.imsstack.xml" ]' "sysconfig removed"
+      check '[ ! -e "$S/system/etc/sysconfig/preinstalled-packages-carriersettings.xml" ]' "CarrierSettings sysconfig removed"
       check '[ ! -e "$S/system/priv-app/Iwlan" ] && [ ! -e "$S/system/priv-app/QualifiedNetworksService" ]' "VoWiFi apps removed"
       check '[ ! -e "$S/system/etc/permissions/com.google.android.iwlan.xml" ] && [ ! -e "$S/system/etc/permissions/com.android.telephony.qns.xml" ] && [ ! -e "$S/system/etc/sysconfig/com.google.android.iwlan.xml" ]' "VoWiFi allowlists and sysconfig removed"
       check '[ ! -e "$S/system/etc/permissions/android.hardware.telephony.ims.xml" ]' "IMS feature xml removed (it was ours)"
       check '[ ! -e "$P/overlay/ImsStackPhoneOverlay.apk" ] && [ ! -e "$P/overlay/ImsStackFrameworkOverlay.apk" ]' "overlays removed"
+      check '[ ! -e "$P/overlay/ImsStackConfigOverlay.apk" ]' "capability overlay removed"
       check 'cmp -s "$P/etc/apns-conf.xml" "$WORK/apns-orig.xml"' "APN list restored byte-for-byte"
       check 'cmp -s "$S/system/build.prop" "$WORK/buildprop-joan.txt"' "build.prop restored byte-for-byte"
       check '! find "$S" "$P" -name "*aosp-ims*" | grep -q .' "no aosp-ims marker or temp file left"
@@ -327,7 +338,7 @@ if [ "${1:-}" = "--inner" ]; then
       urc=$(run_uninstall)
       check '[ "$urc" = 0 ]' "uninstall after the update exits 0 (rc=$urc)"
       mount_chk
-      check '[ ! -e "$S/system/priv-app/ImsStack" ] && [ ! -e "$S/system/addon.d/60-aosp-ims.sh" ] && [ ! -e "$S/system/etc/aosp-ims" ]' "uninstall after the update: stack and addon.d script gone"
+      check '[ ! -e "$S/system/priv-app/ImsStack" ] && [ ! -e "$S/system/app/CarrierSettings" ] && [ ! -e "$S/system/addon.d/60-aosp-ims.sh" ] && [ ! -e "$S/system/etc/aosp-ims" ] && [ ! -e "$S/system/etc/sysconfig/preinstalled-packages-carriersettings.xml" ] && [ ! -e "$P/overlay/ImsStackConfigOverlay.apk" ]' "uninstall after the update: stack, carrier data and addon.d script gone"
       case "$SCEN" in
         ota)
           check 'cmp -s "$S/system/build.prop" "$WORK/buildprop-update.txt"' "uninstall: build.prop is the update's own again"
@@ -432,8 +443,10 @@ chmod 755 "$WORK/bin/chcon" "$WORK/bin/getprop"
 # the SDK. Everything else is the file that ships.
 python3 aosp-ims/tools/make-installer.py scripts "$GEN" >/dev/null
 head -c 190000 /dev/urandom > "$WORK/zip/app/ImsStack.apk"
+head -c 1000000 /dev/urandom > "$WORK/zip/app/CarrierSettings.apk"
 head -c 8530 /dev/urandom > "$WORK/zip/app/ImsStackPhoneOverlay.apk"
 head -c 8530 /dev/urandom > "$WORK/zip/app/ImsStackFrameworkOverlay.apk"
+head -c 8530 /dev/urandom > "$WORK/zip/app/ImsStackConfigOverlay.apk"
 head -c 60000 /dev/urandom > "$WORK/zip/app/Iwlan.apk"
 head -c 60000 /dev/urandom > "$WORK/zip/app/QualifiedNetworksService.apk"
 cp aosp-ims/permissions/privapp-permissions-com.google.android.iwlan.xml "$WORK/zip/etc/permissions/com.google.android.iwlan.xml"
@@ -444,6 +457,8 @@ cp aosp-ims/permissions/privapp-permissions-com.android.imsstack.xml "$WORK/zip/
 cp permissions/android.hardware.telephony.ims.xml "$WORK/zip/etc/permissions/"
 cp aosp-ims/permissions/default-permissions-com.android.imsstack.xml "$WORK/zip/etc/default-permissions/com.android.imsstack.xml"
 cp aosp-ims/permissions/sysconfig-com.android.imsstack.xml "$WORK/zip/etc/sysconfig/com.android.imsstack.xml"
+cp aosp-ims/work/src/CarrierSettings/sysconfig/preinstalled-packages-carriersettings.xml \
+  "$WORK/zip/etc/sysconfig/preinstalled-packages-carriersettings.xml"
 cp aosp-ims/permissions/sysconfig-com.google.android.iwlan.xml "$WORK/zip/etc/sysconfig/com.google.android.iwlan.xml"
 cp apn/viettel-45204.xml "$WORK/zip/apn/"
 cp scripts/merge-viettel-apns.sh "$WORK/zip/scripts/"

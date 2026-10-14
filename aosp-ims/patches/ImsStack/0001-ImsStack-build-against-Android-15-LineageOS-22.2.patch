@@ -1,32 +1,77 @@
-From 89330639da43c70bf60ad34d008987dd22206676 Mon Sep 17 00:00:00 2001
-From: Claude <noreply@anthropic.com>
-Date: Sun, 27 Sep 2026 06:02:09 +0000
-Subject: [PATCH 1/2] ImsStack: build against Android 15 (LineageOS 22.2)
+From 66306acad2b3cbbf1d07aa3c19ae3b187a93667e Mon Sep 17 00:00:00 2001
+From: Lance <Gero3977@gmail.com>
+Date: Tue, 13 Oct 2026 04:54:19 -0700
+Subject: [PATCH] ImsStack: build against Android 15 telephony APIs
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
-Four telephony APIs ImsStack uses arrived after Android 15. Every other
-framework API it needs is already present on Android 15 QPR2, hidden or
-flagged, so these are the only source changes needed to compile against
-LineageOS 22.2's framework:
+Keep krazey’s pre-Android-17 emergency monitor adapter and shim only the three Android 17 APIs that Android 15 still lacks: requestUiccIari, EXTRA_SETUP_EVENT_LIST, and BarringInfo.getCellIdentity.
 
-- TelephonyManager#requestUiccIari (17): report no IARIs, as a failed
-  request does. Only RCS reads them.
-- BarringInfo#getCellIdentity (17): read the CellIdentity back from the
-  parcel; BarringInfo writes it first.
-- TelephonyManager#EXTRA_SETUP_EVENT_LIST (17): local constant. Android 15
-  never sends the broadcast it belongs to.
-- TelephonyCallback.DomainSelectionEmergencyModeListener (16): not
-  registered; domain-selection emergency mode is not reported.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01SByt7CZfKR6U4r1VS86tHS
+Assisted-by: Hermes-Agent:stepfun/step-5-preview:free
+Signed-off-by: Lance <Gero3977@gmail.com>
 ---
- .../base/TelephonyManagerProxyImpl.java       | 27 +++----------------
- .../imsstack/core/StkSetupEventReceiver.java  |  7 ++++-
- .../core/agents/EmergencyStateAgent.java      | 16 +++++------
- .../core/agents/EmergencyStateInterface.java  |  5 ++--
- .../imsstack/core/agents/ImsRadioAgent.java   | 20 +++++++++++++-
- 5 files changed, 38 insertions(+), 37 deletions(-)
+ java/Android.bp                               | 36 +++++++++++++------
+ .../base/TelephonyManagerProxyImpl.java       | 27 +++-----------
+ .../imsstack/core/StkSetupEventReceiver.java  |  7 +++-
+ .../imsstack/core/agents/ImsRadioAgent.java   | 20 ++++++++++-
+ tests/java/Android.bp                         |  9 +----
+ 5 files changed, 55 insertions(+), 44 deletions(-)
 
+diff --git a/java/Android.bp b/java/Android.bp
+index a1da3c7..59901c0 100644
+--- a/java/Android.bp
++++ b/java/Android.bp
+@@ -34,7 +34,18 @@ filegroup {
+     ],
+ }
+ 
+-android_library {
++// Android 15 Soong cannot use select() on Java srcs. Keep the upstream
++// configuration variable, but expose it through the legacy Soong-config
++// module mechanism understood by LineageOS 22.2.
++soong_config_module_type {
++    name: "imsstack_compat_android_library",
++    module_type: "android_library",
++    config_namespace: "imsstack_namespace",
++    bool_variables: ["use_android16_telephony_compat"],
++    properties: ["srcs"],
++}
++
++imsstack_compat_android_library {
+     name: "imsstack",
+     platform_apis: true,
+     manifest: "AndroidManifest-lib.xml",
+@@ -44,16 +55,19 @@ android_library {
+     resource_dirs: [
+         "res",
+     ],
+-    srcs: [
+-        ":imsstack-java-common-srcs",
+-    ] + select(soong_config_variable("imsstack_namespace", "use_android16_telephony_compat"), {
+-        true: [
+-            "src/com/android/imsstack/core/agents/DomainSelectionEmergencyModeMonitorCompat.java",
+-        ],
+-        default: [
+-            "src/com/android/imsstack/core/agents/DomainSelectionEmergencyModeMonitor.java",
+-        ],
+-    }),
++    srcs: [":imsstack-java-common-srcs"],
++    soong_config_variables: {
++        use_android16_telephony_compat: {
++            srcs: [
++                "src/com/android/imsstack/core/agents/DomainSelectionEmergencyModeMonitorCompat.java",
++            ],
++            conditions_default: {
++                srcs: [
++                    "src/com/android/imsstack/core/agents/DomainSelectionEmergencyModeMonitor.java",
++                ],
++            },
++        },
++    },
+     aidl: {
+         include_dirs: [
+             "frameworks/native/aidl/gui",
 diff --git a/java/src/com/android/imsstack/base/TelephonyManagerProxyImpl.java b/java/src/com/android/imsstack/base/TelephonyManagerProxyImpl.java
 index a319c3e..7194b2a 100644
 --- a/java/src/com/android/imsstack/base/TelephonyManagerProxyImpl.java
@@ -90,85 +135,6 @@ index e4f8fe3..c19ed62 100644
              if (setupEventList != null) {
                  usat.updateSetupEventList(setupEventList);
              }
-diff --git a/java/src/com/android/imsstack/core/agents/EmergencyStateAgent.java b/java/src/com/android/imsstack/core/agents/EmergencyStateAgent.java
-index 3de2f65..913f254 100644
---- a/java/src/com/android/imsstack/core/agents/EmergencyStateAgent.java
-+++ b/java/src/com/android/imsstack/core/agents/EmergencyStateAgent.java
-@@ -115,7 +115,7 @@ public class EmergencyStateAgent implements EmergencyStateInterface {
-     }
- 
-     private void notifyEmergencyModeChanged(
--            @TelephonyManager.DomainSelectionEmergencyType int type, boolean entered) {
-+            int type, boolean entered) {
-         for (EmergencyStateListener l : mListeners) {
-             l.onEmergencyModeChanged(type, entered);
-         }
-@@ -201,21 +201,20 @@ public class EmergencyStateAgent implements EmergencyStateInterface {
- 
-         public void registerCallbacks() {
-             TelephonyManagerProxy tmp = getTelephonyManagerProxy(getSubId());
--            tmp.registerTelephonyCallback(this::post, mDomainSelectionListener);
-+            // Android 15 backport: TelephonyCallback.DomainSelectionEmergencyModeListener
-+            // arrived in Android 16, so the framework cannot report domain selection's
-+            // emergency mode here and mEmergencyModes stays empty.
-             tmp.registerTelephonyCallback(this::post, mEmergencyCallbackModeListener);
-         }
- 
-         public void unregisterCallbacks() {
-             TelephonyManagerProxy tmp = getTelephonyManagerProxy(getSubId());
--            tmp.unregisterTelephonyCallback(mDomainSelectionListener);
-             tmp.unregisterTelephonyCallback(mEmergencyCallbackModeListener);
-         }
- 
--        private final class DomainSelectionEmergencyModeListener extends TelephonyCallback
--                implements TelephonyCallback.DomainSelectionEmergencyModeListener {
--            @Override
-+        private final class DomainSelectionEmergencyModeListener extends TelephonyCallback {
-             public void onDomainSelectionEmergencyModeEntered(
--                    @TelephonyManager.DomainSelectionEmergencyType int type,
-+                    int type,
-                     int slotIndex, int subscriptionId) {
-                 if (slotIndex != mSlotId) {
-                     return;
-@@ -230,9 +229,8 @@ public class EmergencyStateAgent implements EmergencyStateInterface {
-                 notifyEmergencyModeChanged(type, true);
-             }
- 
--            @Override
-             public void onDomainSelectionEmergencyModeExited(
--                    @TelephonyManager.DomainSelectionEmergencyType int type,
-+                    int type,
-                     int slotIndex, int subscriptionId) {
-                 if (slotIndex != mSlotId) {
-                     return;
-diff --git a/java/src/com/android/imsstack/core/agents/EmergencyStateInterface.java b/java/src/com/android/imsstack/core/agents/EmergencyStateInterface.java
-index 8c159d7..6d63b1d 100644
---- a/java/src/com/android/imsstack/core/agents/EmergencyStateInterface.java
-+++ b/java/src/com/android/imsstack/core/agents/EmergencyStateInterface.java
-@@ -15,7 +15,6 @@
-  */
- package com.android.imsstack.core.agents;
- 
--import static android.telephony.TelephonyManager.DomainSelectionEmergencyType;
- import static android.telephony.TelephonyManager.EmergencyCallbackModeType;
- 
- import androidx.annotation.NonNull;
-@@ -73,7 +72,7 @@ public interface EmergencyStateInterface extends IAgent {
-          * @param type The emergency mode type.
-          * @param entered {@code true} if the emergency mode is entered, {@code false} otherwise.
-          */
--        void onEmergencyModeChanged(@DomainSelectionEmergencyType int type, boolean entered);
-+        void onEmergencyModeChanged(int type, boolean entered);
- 
-         /**
-          * Called to notify the update of emergency callback mode.
-@@ -106,5 +105,5 @@ public interface EmergencyStateInterface extends IAgent {
-      * @param type The emergency mode type.
-      * @return {@code true} if the emergency mode is entered, {@code false} otherwise.
-      */
--    boolean isInEmergencyMode(@DomainSelectionEmergencyType int type);
-+    boolean isInEmergencyMode(int type);
- }
 diff --git a/java/src/com/android/imsstack/core/agents/ImsRadioAgent.java b/java/src/com/android/imsstack/core/agents/ImsRadioAgent.java
 index bec9142..c43fe4e 100644
 --- a/java/src/com/android/imsstack/core/agents/ImsRadioAgent.java
@@ -209,6 +175,26 @@ index bec9142..c43fe4e 100644
          if (ci instanceof CellIdentityNr) {
              ImsLog.i(this, mSlotId, "handleBarringInfo: Ignoring, cellType=NR");
              return;
+diff --git a/tests/java/Android.bp b/tests/java/Android.bp
+index 3359841..2b6e455 100644
+--- a/tests/java/Android.bp
++++ b/tests/java/Android.bp
+@@ -35,14 +35,7 @@ android_test {
+     defaults: [
+         "imsstack_mockito_target_extended_defaults",
+     ],
+-    srcs: [
+-        ":imsstack-java-test-common-srcs",
+-    ] + select(soong_config_variable("imsstack_namespace", "use_android16_telephony_compat"), {
+-        true: [],
+-        default: [
+-            "src/com/android/imsstack/core/agents/EmergencyStateAgentTest.java",
+-        ],
+-    }),
++    srcs: [":imsstack-java-test-common-srcs"],
+     libs: [
+         "android.test.base.stubs.system",
+         "android.test.mock.stubs.system",
 -- 
-2.43.0
+2.55.0
 

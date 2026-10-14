@@ -3,10 +3,11 @@
 # not have the ROM's platform key (the flashable zip and the repacked ROM):
 # ImsStack plus the ImsMedia service in its own process
 # (tools/merge-manifest.py), both native libraries stored uncompressed, and
-# the two overlays that make it the device's ImsService.
+# the overlays that make it the device's ImsService and clamp joan's device
+# capabilities, plus the same-signer CarrierSettings data package.
 #
 # Run after build-java.sh (AIDL sources) and build-native.sh (libraries).
-# Output: $WORK/out/apk/{ImsStack.apk,ImsStackPhoneOverlay.apk,ImsStackFrameworkOverlay.apk}
+# Output: $WORK/out/apk/{ImsStack.apk,CarrierSettings.apk,*Overlay.apk}
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 . "$HERE/upstream.lock"
@@ -67,7 +68,7 @@ CP=$CP:$WORK/deps/androidx-annotation.jar:$WORK/deps/libphonenumber.jar
 [ -d "$WORK/out/java/gen" ] || { echo "run build-java.sh first (AIDL sources)"; exit 1; }
 find "$S/ImsStack/java/src" "$S/ImsMedia/framework/src" "$S/ImsMedia/service/src" \
     "$WORK/out/java/gen" "$OUT/rgen" "$HERE/stubs/java" "$HERE/zip/java" \
-    -name '*.java' > "$OUT/srcs"
+    -name '*.java' ! -name 'DomainSelectionEmergencyModeMonitor.java' > "$OUT/srcs"
 javac -J-Xmx4g -encoding UTF-8 -nowarn -proc:none -source 21 -target 21 \
     -d "$OUT/classes" -classpath "$CP" @"$OUT/srcs"
 # The annotation stubs exist only to compile; the platform owns those names.
@@ -113,8 +114,13 @@ with zipfile.ZipFile(os.path.join(out, 'unaligned.apk'), 'w', zipfile.ZIP_DEFLAT
 EOF
 "$BT/zipalign" -f -p 4 "$OUT/unaligned.apk" "$OUT/aligned.apk"
 
-# 5. Overlays.
-for rro in phone:ImsStackPhoneOverlay fw:ImsStackFrameworkOverlay; do
+# 5. Carrier data and overlays.
+python3 "$S/CarrierSettings/tools/build_data_apk.py" \
+    --aapt2 "$BT/aapt2" --android-jar "$PUB" \
+    --output "$OUT/CarrierSettings-unsigned.apk"
+
+for rro in phone:ImsStackPhoneOverlay fw:ImsStackFrameworkOverlay \
+           imsstackconfig:ImsStackConfigOverlay; do
     dir=$HERE/zip/rro-${rro%%:*}; name=${rro##*:}
     "$BT/aapt2" compile --dir "$dir/res" -o "$OUT/res/$name.zip"
     "$BT/aapt2" link -I "$PUB" --manifest "$dir/AndroidManifest.xml" \
@@ -135,8 +141,23 @@ fi
 sign() { "$BT/apksigner" sign --ks "$KS" --ks-pass pass:imsstack --ks-key-alias imsstack \
     --out "$2" "$1"; }
 sign "$OUT/aligned.apk" "$OUT/ImsStack.apk"
+sign "$OUT/CarrierSettings-unsigned.apk" "$OUT/CarrierSettings.apk"
 sign "$OUT/ImsStackPhoneOverlay-unsigned.apk" "$OUT/ImsStackPhoneOverlay.apk"
 sign "$OUT/ImsStackFrameworkOverlay-unsigned.apk" "$OUT/ImsStackFrameworkOverlay.apk"
+sign "$OUT/ImsStackConfigOverlay-unsigned.apk" "$OUT/ImsStackConfigOverlay.apk"
+
+# CarrierSettingsPackage rejects an otherwise valid system APK unless its
+# signer exactly matches ImsStack. Make that quiet runtime fallback a hard
+# build failure instead.
+cert_digest() {
+    "$BT/apksigner" verify --print-certs "$1" | python3 -c \
+        'import sys; p="Signer #1 certificate SHA-256 digest: "; print(next((l[len(p):].strip() for l in sys.stdin if l.startswith(p)), ""))'
+}
+stack_digest=$(cert_digest "$OUT/ImsStack.apk")
+carrier_digest=$(cert_digest "$OUT/CarrierSettings.apk")
+[ -n "$stack_digest" ] && [ "$stack_digest" = "$carrier_digest" ] \
+    || { echo "ImsStack/CarrierSettings signer mismatch"; exit 1; }
+echo "ImsStack/CarrierSettings signer: $stack_digest"
 
 # 7. The allowlist must cover every privileged permission requested, or
 #    PackageManager stops the boot. Checked against the ROM's own

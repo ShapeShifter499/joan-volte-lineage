@@ -1,6 +1,7 @@
 #!/bin/bash
 # Everything, in order: sources and inputs, Java check, native libraries,
-# the ImsStack APK and overlays, the VoWiFi APKs, the three flashable zips.
+# the ImsStack and CarrierSettings APKs and overlays, the VoWiFi APKs, and the
+# three flashable zips.
 set -euo pipefail
 T=$(cd "$(dirname "$0")" && pwd)
 "$T/setup-workdir.sh"

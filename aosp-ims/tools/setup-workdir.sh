@@ -37,6 +37,8 @@ upstream() { # upstream <name> <url> <ref> <commit>
 }
 upstream ImsStack "$IMSSTACK_URL" "$IMSSTACK_REF" "$IMSSTACK_COMMIT"
 upstream ImsMedia "$IMSMEDIA_URL" "$IMSMEDIA_REF" "$IMSMEDIA_COMMIT"
+upstream CarrierSettings "$CARRIERSETTINGS_PACKAGE_URL" \
+    "$CARRIERSETTINGS_PACKAGE_REF" "$CARRIERSETTINGS_PACKAGE_COMMIT"
 upstream Iwlan "$IWLAN_URL" "$IWLAN_REF" "$IWLAN_COMMIT"
 upstream Qns "$QNS_URL" "$QNS_REF" "$QNS_COMMIT"
 

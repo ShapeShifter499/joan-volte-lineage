@@ -1,0 +1,2 @@
+# Generated e-mail patches contain single-space blank context lines by design.
+*.patch -whitespace

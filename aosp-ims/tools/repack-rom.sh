@@ -77,6 +77,7 @@ unpack system
 mount -o loop,rw "$R/system.img" "$R/mnt"
 S=$R/mnt/system
 put "$APK/ImsStack.apk" "$S/priv-app/ImsStack/ImsStack.apk" 644
+put "$APK/CarrierSettings.apk" "$S/app/CarrierSettings/CarrierSettings.apk" 644
 put "$APK/Iwlan.apk" "$S/priv-app/Iwlan/Iwlan.apk" 644
 put "$APK/QualifiedNetworksService.apk" \
     "$S/priv-app/QualifiedNetworksService/QualifiedNetworksService.apk" 644
@@ -87,6 +88,8 @@ put "$P/privapp-permissions-com.android.telephony.qns.xml" "$S/etc/permissions/c
 put "$ROOT/permissions/android.hardware.telephony.ims.xml" "$S/etc/permissions/android.hardware.telephony.ims.xml" 644
 put "$P/default-permissions-com.android.imsstack.xml" "$S/etc/default-permissions/com.android.imsstack.xml" 644
 put "$P/sysconfig-com.android.imsstack.xml" "$S/etc/sysconfig/com.android.imsstack.xml" 644
+put "$WORK/src/CarrierSettings/sysconfig/preinstalled-packages-carriersettings.xml" \
+    "$S/etc/sysconfig/preinstalled-packages-carriersettings.xml" 644
 put "$P/sysconfig-com.google.android.iwlan.xml" "$S/etc/sysconfig/com.google.android.iwlan.xml" 644
 # The zip's addon.d script and its APN inputs: an official nightly flashed
 # over this ROM keeps the stack, as it does over a zip install.
@@ -125,8 +128,11 @@ put "$R/incoming-calls.flipped" "$S/etc/aosp-ims-incoming-calls.flipped" 644
 # gets its own build number, from the files it adds.
 INC=$(sed -n 's/^ro.build.version.incremental=//p' "$S/build.prop")
 [ -n "$INC" ] || { echo "build.prop: no ro.build.version.incremental"; exit 1; }
-ADDED=$(cat "$APK/ImsStack.apk" "$APK/Iwlan.apk" "$APK/QualifiedNetworksService.apk" \
-    "$APK/ImsStackPhoneOverlay.apk" "$APK/ImsStackFrameworkOverlay.apk" "$P"/*.xml \
+ADDED=$(cat "$APK/ImsStack.apk" "$APK/CarrierSettings.apk" \
+    "$APK/Iwlan.apk" "$APK/QualifiedNetworksService.apk" \
+    "$APK/ImsStackPhoneOverlay.apk" "$APK/ImsStackFrameworkOverlay.apk" \
+    "$APK/ImsStackConfigOverlay.apk" "$P"/*.xml \
+    "$WORK/src/CarrierSettings/sysconfig/preinstalled-packages-carriersettings.xml" \
     "$ROOT/permissions/android.hardware.telephony.ims.xml" "$ROOT/apn/viettel-45204.xml" \
     "$ROOT/scripts/merge-viettel-apns.sh" "$HERE/zip/addon.d/60-aosp-ims.sh" \
     "$HERE/tools/repack-rom.sh" | sha256sum | cut -c1-8)
@@ -147,6 +153,7 @@ unpack product
 mount -o loop,rw "$R/product.img" "$R/mnt"
 put "$APK/ImsStackPhoneOverlay.apk" "$R/mnt/overlay/ImsStackPhoneOverlay.apk" 644
 put "$APK/ImsStackFrameworkOverlay.apk" "$R/mnt/overlay/ImsStackFrameworkOverlay.apk" 644
+put "$APK/ImsStackConfigOverlay.apk" "$R/mnt/overlay/ImsStackConfigOverlay.apk" 644
 # Viettel 45204's IMS/XCAP APNs, merged into the world list as the zip
 # does, with the zip's bookkeeping: the ROM's list kept as .joan-orig and
 # the merged list's checksum as .joan-merged. The uninstall zip then puts

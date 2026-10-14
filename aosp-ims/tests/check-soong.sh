@@ -1,13 +1,14 @@
 #!/bin/bash
 # Android 15's Soong over the kit's Android.bp files (tests/soong).
 #
-# A LineageOS 22.2 tree build syncs ImsStack and ImsMedia from Android 17
-# and applies the kit's patches (upstream/aosp-ims). Soong reads every
+# A LineageOS 22.2 tree build syncs ImsStack, ImsMedia and CarrierSettings
+# from krazey's paired Android 17 integration and applies the kit's patches.
+# Soong reads every
 # Android.bp in the tree before it builds anything, so a module type,
 # property or dependency Android 15 does not have stops the whole build.
 # This fetches Android 15's Soong (build/soong and the Go modules it
 # needs, android15-qpr2-release) and runs tests/soong/imscheck_test.go
-# over $WORK/src/ImsStack and $WORK/src/ImsMedia, the patched sources
+# over $WORK/src/ImsStack, $WORK/src/ImsMedia and CarrierSettings, the sources
 # tools/setup-workdir.sh makes.
 #
 #   --verify-stubs  also check that every stand-in in tests/soong/stubs.bp
@@ -23,7 +24,7 @@ S=$WORK/soong15
 AOSP=https://android.googlesource.com
 retry() { local i; for i in 1 2 3 4 5; do "$@" && return 0; sleep $((i * 4)); done; return 1; }
 
-for d in ImsStack ImsMedia; do
+for d in ImsStack ImsMedia CarrierSettings; do
     [ -f "$WORK/src/$d/Android.bp" ] || [ -d "$WORK/src/$d/.git" ] \
         || { echo "$WORK/src/$d missing: run tools/setup-workdir.sh"; exit 1; }
 done
@@ -38,10 +39,11 @@ mkdir -p "$S/build/soong/imscheck"
 cp "$HERE/tests/soong/imscheck_test.go" "$S/build/soong/imscheck/"
 (
     cd "$S/build/soong"
-    IMSSTACK=$WORK/src/ImsStack IMSMEDIA=$WORK/src/ImsMedia STUBS=$HERE/tests/soong/stubs.bp \
+    IMSSTACK=$WORK/src/ImsStack IMSMEDIA=$WORK/src/ImsMedia \
+        CARRIERSETTINGS=$WORK/src/CarrierSettings STUBS=$HERE/tests/soong/stubs.bp \
         GOTOOLCHAIN=local GOFLAGS= go test ./imscheck/ -count=1 -v
 )
-echo "Android 15 Soong: ImsStack and ImsMedia Android.bp files OK"
+echo "Android 15 Soong: ImsStack, ImsMedia and CarrierSettings Android.bp files OK"
 
 [ "${1:-}" = --verify-stubs ] || exit 0
 

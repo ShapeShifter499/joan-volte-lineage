@@ -4,7 +4,8 @@
 #
 # /system/addon.d/60-aosp-ims.sh
 #
-# Keeps the AOSP IMS stack (com.android.imsstack, IWLAN and QNS) across
+# Keeps the AOSP IMS stack (com.android.imsstack, its CarrierSettings data,
+# IWLAN and QNS) across
 # LineageOS updates. A LineageOS update rewrites system, product and
 # system_ext; its backuptool runs this before and after. The files the
 # aosp-ims zip installed are backed up and put back, and the two edits it
@@ -22,6 +23,7 @@
 list_files() {
 cat <<EOF
 priv-app/ImsStack/ImsStack.apk
+app/CarrierSettings/CarrierSettings.apk
 priv-app/Iwlan/Iwlan.apk
 priv-app/QualifiedNetworksService/QualifiedNetworksService.apk
 etc/permissions/com.android.imsstack.xml
@@ -29,11 +31,13 @@ etc/permissions/com.google.android.iwlan.xml
 etc/permissions/com.android.telephony.qns.xml
 etc/default-permissions/com.android.imsstack.xml
 etc/sysconfig/com.android.imsstack.xml
+etc/sysconfig/preinstalled-packages-carriersettings.xml
 etc/sysconfig/com.google.android.iwlan.xml
 etc/aosp-ims/merge-viettel-apns.sh
 etc/aosp-ims/viettel-45204.xml
 product/overlay/ImsStackPhoneOverlay.apk
 product/overlay/ImsStackFrameworkOverlay.apk
+product/overlay/ImsStackConfigOverlay.apk
 EOF
 }
 
@@ -179,7 +183,8 @@ restore_apns() {
 
 post_restore() {
   [ -d "$FLAGS" ] || return 0
-  for d in priv-app/ImsStack priv-app/Iwlan priv-app/QualifiedNetworksService \
+  for d in priv-app/ImsStack app/CarrierSettings \
+           priv-app/Iwlan priv-app/QualifiedNetworksService \
            etc/default-permissions etc/sysconfig etc/aosp-ims; do
     [ -d "$S/$d" ] || continue
     chmod 755 "$S/$d"

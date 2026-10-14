@@ -1,22 +1,31 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  AOSP's IMS stack for LineageOS 22.2: ImsStack and ImsMedia from Android 17.
+  AOSP's IMS stack for LineageOS 22.2, using krazey's Android 17 integration
+  forks plus joan's device-specific backports.
 
   Copy this file to .repo/local_manifests/ in the LineageOS tree, sync the
-  two projects, then run upstream/aosp-ims/apply-patches.sh (see
+  three projects, then run upstream/aosp-ims/apply-patches.sh (see
   upstream/AOSP-IMS.md in https://github.com/ShapeShifter499/joan-volte-lineage).
 
-  The tags are the ones aosp-ims/upstream.lock pins and the patches are made
-  against: ImsStack 1e3981c23117, ImsMedia 0101cb4caf48.
+  Revisions are immutable and match aosp-ims/upstream.lock.
 -->
 <manifest>
-  <!-- Android 17's ImsStack links Android 17's ImsMediaFramework and native
-       libimsmedia_config, so ImsMedia moves to the same release. -->
-  <remove-project name="platform/packages/modules/ImsMedia" />
-  <project path="packages/modules/ImsMedia" name="platform/packages/modules/ImsMedia"
-           groups="pdk" remote="aosp" revision="refs/tags/android-17.0.0_r1" />
+  <remote name="github-krazey" fetch="https://github.com/" />
 
-  <!-- New in Android 17: not in the Android 15 manifest at all. -->
-  <project path="packages/modules/ImsStack" name="platform/packages/modules/ImsStack"
-           remote="aosp" revision="refs/tags/android-17.0.0_r1" />
+  <!-- Krazey's paired ImsMedia adds Android integration and SELinux-facing
+       service fixes on top of android-17.0.0_r1. -->
+  <remove-project name="platform/packages/modules/ImsMedia" />
+  <project path="packages/modules/ImsMedia" name="krazey/ImsMedia"
+           groups="pdk" remote="github-krazey"
+           revision="cb1dd74e9d5e7b7693dfc5870037607eb58d8ea3" />
+
+  <!-- ImsStack is absent from Android 15. This fork adds the separately
+       updateable, same-signer CarrierSettings policy plane and the pre-A17
+       emergency-mode compatibility selector. -->
+  <project path="packages/modules/ImsStack" name="krazey/ImsStack"
+           remote="github-krazey"
+           revision="5ff784d265a94b8227f8fcc93bf9d6c8f0a1b5a7" />
+  <project path="packages/apps/CarrierSettings" name="krazey/CarrierSettings"
+           remote="github-krazey"
+           revision="2d00ce6100921547482bb3ecda690ec346d64be2" />
 </manifest>

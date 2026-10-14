@@ -1,0 +1,496 @@
+From 82d00886c8cf9ed5d3cc25fe608243ef82b31ba6 Mon Sep 17 00:00:00 2001
+From: Lance <Gero3977@gmail.com>
+Date: Tue, 13 Oct 2026 04:57:52 -0700
+Subject: [PATCH] ImsMedia: defer native audio open until SDP exists
+
+Treat a config-less Java open as a real session without a native media graph. Build that graph from the first modify config, report its result as the modify response, queue native operations across the opening window, and make close/failure races null-safe without emitting a second open callback.
+
+Cover success, synchronous failure, queued operations, close-before-config, and close-during-open.
+
+Assisted-by: Hermes-Agent:stepfun/step-5-preview:free
+Signed-off-by: Lance <Gero3977@gmail.com>
+---
+ .../telephony/imsmedia/AudioSession.java      | 176 ++++++++++++++++--
+ .../telephony/imsmedia/AudioSessionTest.java  | 140 ++++++++++++--
+ 2 files changed, 290 insertions(+), 26 deletions(-)
+
+diff --git a/service/src/com/android/telephony/imsmedia/AudioSession.java b/service/src/com/android/telephony/imsmedia/AudioSession.java
+index d53565b..2912346 100644
+--- a/service/src/com/android/telephony/imsmedia/AudioSession.java
++++ b/service/src/com/android/telephony/imsmedia/AudioSession.java
+@@ -39,6 +39,7 @@ import androidx.annotation.Nullable;
+ import com.android.telephony.imsmedia.Utils.OpenSessionParams;
+ import com.android.telephony.imsmedia.util.Log;
+ 
++import java.util.ArrayList;
+ import java.util.List;
+ import java.util.stream.Collectors;
+ 
+@@ -90,6 +91,21 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+     private AudioListener mAudioListener;
+     private AudioLocalSession mLocalSession;
+ 
++    // ImsStack may create an audio session before remote SDP exists. The
++    // framework contract permits a null initial RtpConfig, but the native
++    // engine cannot build a graph until the first modifySession supplies one.
++    private enum DeferredOpenState {
++        NONE,
++        WAITING_FOR_CONFIG,
++        OPENING,
++        CLOSING,
++    }
++
++    private DeferredOpenState mDeferredOpenState = DeferredOpenState.NONE;
++    private OpenSessionParams mDeferredOpenParams;
++    private AudioConfig mDeferredModifyConfig;
++    private final ArrayList<Runnable> mDeferredCalls = new ArrayList<>();
++
+     AudioSession(final int sessionId, final IImsAudioSessionCallback callback) {
+         mSessionId = sessionId;
+         mCallback = callback;
+@@ -303,10 +319,26 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+                     handleAdjustDelay((int) msg.obj);
+                     break;
+                 case EVENT_OPEN_SESSION_SUCCESS:
+-                    handleOpenSuccess(msg.obj);
++                    if (mDeferredOpenState == DeferredOpenState.OPENING) {
++                        handleDeferredOpenSuccess(msg.obj);
++                    } else if (mDeferredOpenState == DeferredOpenState.CLOSING) {
++                        // closeSession was queued after the native open. Keep
++                        // the handle only so the close callback can retire it;
++                        // the client already received its one open callback.
++                        mLocalSession = (AudioLocalSession) msg.obj;
++                    } else {
++                        handleOpenSuccess(msg.obj);
++                    }
+                     break;
+                 case EVENT_OPEN_SESSION_FAILURE:
+-                    handleOpenFailure((int)msg.obj);
++                    if (mDeferredOpenState == DeferredOpenState.OPENING) {
++                        handleDeferredOpenFailure((int) msg.obj);
++                    } else if (mDeferredOpenState == DeferredOpenState.CLOSING) {
++                        clearDeferredOpen();
++                        handleSessionClosed();
++                    } else {
++                        handleOpenFailure((int)msg.obj);
++                    }
+                     break;
+                 case EVENT_SESSION_CLOSED:
+                     handleSessionClosed();
+@@ -349,6 +381,14 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+     private void handleOpenSession(OpenSessionParams sessionParams) {
+         if (isAudioOffload()) {
+             mOffloadService.openSession(mSessionId, sessionParams);
++        } else if (sessionParams.getRtpConfig() == null) {
++            // The Java session exists now, but there is no native media graph
++            // until the first modifySession provides remote SDP.
++            Log.i(TAG, "openSession without RtpConfig: deferring native open");
++            mAudioListener.setMediaCallback(sessionParams.getCallback());
++            mDeferredOpenParams = sessionParams;
++            mDeferredOpenState = DeferredOpenState.WAITING_FOR_CONFIG;
++            notifyOpenSuccess();
+         } else {
+             mAudioListener.setMediaCallback(sessionParams.getCallback());
+             int result = mAudioService.openSession(mSessionId, sessionParams);
+@@ -361,8 +401,27 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+     private void handleCloseSession() {
+         if (isAudioOffload()) {
+             mOffloadService.closeSession(mSessionId);
+-        } else {
++        } else if (mDeferredOpenState == DeferredOpenState.WAITING_FOR_CONFIG) {
++            // No native session was created, so there will be no native close
++            // event. Complete the close locally.
++            clearDeferredOpen();
++            handleSessionClosed();
++        } else if (mDeferredOpenState == DeferredOpenState.OPENING) {
++            // The native open request is already in flight. Queue close behind
++            // it, fail the pending modify exactly once, and ignore its later
++            // open-success callback.
++            AudioConfig config = mDeferredModifyConfig;
++            mDeferredModifyConfig = null;
++            mDeferredCalls.clear();
++            mDeferredOpenState = DeferredOpenState.CLOSING;
++            if (config != null) {
++                handleModifySessionResponse(config, ImsMediaSession.RESULT_NOT_READY);
++            }
++            mAudioService.closeSession(mSessionId);
++        } else if (mDeferredOpenState != DeferredOpenState.CLOSING) {
+             mAudioService.closeSession(mSessionId);
++        } else {
++            Log.d(TAG, "closeSession already pending");
+         }
+     }
+ 
+@@ -373,6 +432,27 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+             } catch (RemoteException e) {
+                 Log.e(TAG, "Exception occurred in modifySession", e);
+             }
++        } else if (mDeferredOpenState == DeferredOpenState.WAITING_FOR_CONFIG) {
++            OpenSessionParams params = mDeferredOpenParams;
++            mDeferredModifyConfig = config;
++            mDeferredOpenState = DeferredOpenState.OPENING;
++            Log.i(TAG, "deferred open: creating native session with first RtpConfig");
++            int result = mAudioService.openSession(mSessionId,
++                    new OpenSessionParams(params.getRtpFd(), params.getRtcpFd(),
++                            config, params.getCallback()));
++            if (result != ImsMediaSession.RESULT_SUCCESS) {
++                handleDeferredOpenFailure(result);
++            } else {
++                // AudioService detached the descriptors; the pending config
++                // and state now carry everything needed by the callback.
++                mDeferredOpenParams = null;
++            }
++        } else if (mDeferredOpenState == DeferredOpenState.OPENING) {
++            deferLocalOperation("modifySession", () -> mLocalSession.modifySession(config));
++        } else if (mDeferredOpenState == DeferredOpenState.CLOSING
++                || mLocalSession == null) {
++            Log.w(TAG, "modifySession with no native session: rejected");
++            handleModifySessionResponse(config, ImsMediaSession.RESULT_NOT_READY);
+         } else {
+             mLocalSession.modifySession(config);
+         }
+@@ -385,19 +465,22 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+             } catch (RemoteException e) {
+                 Log.e(TAG, "Remote exception occurred in HAL modifySession.", e);
+             }
+-        } else {
++        } else if (!deferLocalOperation("addConfig", () -> mLocalSession.addConfig(config))) {
+             mLocalSession.addConfig(config);
+         }
+     }
+ 
+     private void handleDeleteConfig(AudioConfig config) {
+-        if (!isAudioOffload()) {
++        if (!isAudioOffload()
++                && !deferLocalOperation("deleteConfig", () -> mLocalSession.deleteConfig(config))) {
+             mLocalSession.deleteConfig(config);
+         }
+     }
+ 
+     private void handleConfirmConfig(AudioConfig config) {
+-        if (!isAudioOffload()) {
++        if (!isAudioOffload()
++                && !deferLocalOperation("confirmConfig",
++                        () -> mLocalSession.confirmConfig(config))) {
+             mLocalSession.confirmConfig(config);
+         }
+     }
+@@ -409,7 +492,8 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+             } catch (RemoteException e) {
+                 Log.e(TAG, "Exception occurred in HAL sendDtmf", e);
+             }
+-        } else {
++        } else if (!deferLocalOperation("sendDtmf",
++                () -> mLocalSession.sendDtmf(digit, duration))) {
+             mLocalSession.sendDtmf(digit, duration);
+         }
+     }
+@@ -421,7 +505,8 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+             } catch (RemoteException e) {
+                 Log.e(TAG, "Exception occurred in HAL startDtmf", e);
+             }
+-        } else {
++        } else if (!deferLocalOperation("startDtmf",
++                () -> mLocalSession.sendDtmf(digit, DTMF_DEFAULT_DURATION))) {
+             mLocalSession.sendDtmf(digit, DTMF_DEFAULT_DURATION);
+         }
+     }
+@@ -446,7 +531,8 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+             } catch (RemoteException e) {
+                 Log.e(TAG, "Exception occurred in HAL sendHeaderExtension", e);
+             }
+-        } else {
++        } else if (!deferLocalOperation("sendHeaderExtension",
++                () -> mLocalSession.sendHeaderExtension(extensions))) {
+             mLocalSession.sendHeaderExtension(extensions);
+         }
+     }
+@@ -458,7 +544,8 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+             } catch (RemoteException e) {
+                 Log.e(TAG, "Exception occurred in HAL setMediaQualityThreshold", e);
+             }
+-        } else {
++        } else if (!deferLocalOperation("setMediaQualityThreshold",
++                () -> mLocalSession.setMediaQualityThreshold(threshold))) {
+             mLocalSession.setMediaQualityThreshold(threshold);
+         }
+     }
+@@ -470,17 +557,75 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+             } catch (RemoteException e) {
+                 Log.e(TAG, "Exception occurred in HAL requestRtpReceptionStats", e);
+             }
+-        } else {
++        } else if (!deferLocalOperation("requestRtpReceptionStats",
++                () -> mLocalSession.requestRtpReceptionStats(intervalMs))) {
+             mLocalSession.requestRtpReceptionStats(intervalMs);
+         }
+     }
+ 
+     private void handleAdjustDelay(int delayMs) {
+-        if (!isAudioOffload()) {
++        if (!isAudioOffload()
++                && !deferLocalOperation("adjustDelay", () -> mLocalSession.adjustDelay(delayMs))) {
+             mLocalSession.adjustDelay(delayMs);
+         }
+     }
+ 
++    /**
++     * Queue an operation while a deferred native open is pending, or drop it
++     * after close/failure. Returning true means the caller must not dereference
++     * mLocalSession now.
++     */
++    private boolean deferLocalOperation(String name, Runnable operation) {
++        if (mDeferredOpenState == DeferredOpenState.WAITING_FOR_CONFIG
++                || mDeferredOpenState == DeferredOpenState.OPENING) {
++            Log.i(TAG, name + " before native open: queued");
++            mDeferredCalls.add(operation);
++            return true;
++        }
++        if (mDeferredOpenState == DeferredOpenState.CLOSING || mLocalSession == null) {
++            Log.w(TAG, name + " with no native session: dropped");
++            return true;
++        }
++        return false;
++    }
++
++    private void handleDeferredOpenSuccess(Object session) {
++        if (!(session instanceof AudioLocalSession)) {
++            handleDeferredOpenFailure(ImsMediaSession.RESULT_INVALID_PARAM);
++            return;
++        }
++
++        mLocalSession = (AudioLocalSession) session;
++        AudioConfig config = mDeferredModifyConfig;
++        ArrayList<Runnable> deferredCalls = new ArrayList<>(mDeferredCalls);
++        clearDeferredOpen();
++
++        // openSessionSuccess was already delivered when the Java session was
++        // created. The native open completes the first modify, not a second
++        // open, so report exactly one modify response.
++        if (config != null) {
++            handleModifySessionResponse(config, ImsMediaSession.RESULT_SUCCESS);
++        }
++        for (Runnable operation : deferredCalls) {
++            operation.run();
++        }
++    }
++
++    private void handleDeferredOpenFailure(int error) {
++        AudioConfig config = mDeferredModifyConfig;
++        clearDeferredOpen();
++        if (config != null) {
++            handleModifySessionResponse(config, error);
++        }
++    }
++
++    private void clearDeferredOpen() {
++        mDeferredOpenState = DeferredOpenState.NONE;
++        mDeferredOpenParams = null;
++        mDeferredModifyConfig = null;
++        mDeferredCalls.clear();
++    }
++
+     private void handleOpenSuccess(Object session) {
+        if (session instanceof IImsMediaSession) {
+             try {
+@@ -493,6 +638,10 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+             mLocalSession = (AudioLocalSession)session;
+         }
+ 
++        notifyOpenSuccess();
++    }
++
++    private void notifyOpenSuccess() {
+         try {
+             mCallback.onOpenSessionSuccess(this);
+         } catch (RemoteException e) {
+@@ -512,6 +661,9 @@ public final class AudioSession extends IImsAudioSession.Stub implements IMediaS
+     }
+ 
+     private void handleSessionClosed() {
++        mLocalSession = null;
++        mHalSession = null;
++        clearDeferredOpen();
+         try {
+             mCallback.onSessionClosed();
+         }  catch (RemoteException e) {
+diff --git a/tests/unit/src/com/android/telephony/imsmedia/AudioSessionTest.java b/tests/unit/src/com/android/telephony/imsmedia/AudioSessionTest.java
+index 4bf8a24..93ef539 100644
+--- a/tests/unit/src/com/android/telephony/imsmedia/AudioSessionTest.java
++++ b/tests/unit/src/com/android/telephony/imsmedia/AudioSessionTest.java
+@@ -19,9 +19,13 @@ package com.android.telephony.imsmedia;
+ import static com.google.common.truth.Truth.assertThat;
+ 
+ import static org.junit.Assert.fail;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.anyInt;
+ import static org.mockito.Mockito.eq;
++import static org.mockito.Mockito.never;
+ import static org.mockito.Mockito.times;
+ import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
+ 
+ import android.os.Looper;
+ import android.os.Parcel;
+@@ -49,6 +53,7 @@ import org.junit.After;
+ import org.junit.Before;
+ import org.junit.Test;
+ import org.junit.runner.RunWith;
++import org.mockito.ArgumentCaptor;
+ import org.mockito.Mock;
+ import org.mockito.MockitoAnnotations;
+ 
+@@ -110,29 +115,136 @@ public class AudioSessionTest extends ImsMediaTest {
+         return parcel;
+     }
+ 
+-    @Test
+-    public void testOpenSessionWithoutAudioConfig() {
+-        DatagramSocket rtpSocket = null;
+-        DatagramSocket rtcpSocket = null;
+-
++    private OpenSessionParams createOpenSessionParams(AudioConfig config) {
+         try {
+-            rtpSocket = new DatagramSocket();
+-            rtcpSocket = new DatagramSocket();
++            DatagramSocket rtpSocket = new DatagramSocket();
++            DatagramSocket rtcpSocket = new DatagramSocket();
++            return new OpenSessionParams(
++                    ParcelFileDescriptor.fromDatagramSocket(rtpSocket),
++                    ParcelFileDescriptor.fromDatagramSocket(rtcpSocket),
++                    config, null);
+         } catch (SocketException e) {
+-            fail("SocketException:" + e);
++            throw new AssertionError("SocketException", e);
+         }
++    }
+ 
+-        OpenSessionParams params = new OpenSessionParams(
+-                ParcelFileDescriptor.fromDatagramSocket(rtpSocket),
+-                ParcelFileDescriptor.fromDatagramSocket(rtcpSocket),
+-                null, null);
+-
++    @Test
++    public void testOpenSessionWithoutAudioConfig() throws Exception {
++        OpenSessionParams params = createOpenSessionParams(null);
+         audioSession.openSession(params);
+         processAllMessages();
+-        verify(audioService, times(1)).openSession(eq(SESSION_ID), eq(params));
++        verify(audioService, never()).openSession(eq(SESSION_ID), any(OpenSessionParams.class));
++        verify(callback, times(1)).onOpenSessionSuccess(audioSession);
+         assertThat(mWakeLockManager.mWakeLock.isHeld()).isEqualTo(false);
+     }
+ 
++    @Test
++    public void testDeferredOpenFirstModifyReportsOneOpenAndOneModify() throws Exception {
++        when(audioService.openSession(eq(SESSION_ID), any(OpenSessionParams.class)))
++                .thenReturn(SUCCESS);
++        audioSession.openSession(createOpenSessionParams(null));
++        processAllMessages();
++
++        AudioConfig config = AudioConfigTest.createAudioConfig();
++        audioSession.modifySession(config);
++        processAllMessages();
++
++        ArgumentCaptor<OpenSessionParams> params =
++                ArgumentCaptor.forClass(OpenSessionParams.class);
++        verify(audioService, times(1)).openSession(eq(SESSION_ID), params.capture());
++        assertThat(params.getValue().getRtpConfig()).isEqualTo(config);
++
++        audioSession.onOpenSessionSuccess(audioLocalSession);
++        processAllMessages();
++        verify(callback, times(1)).onOpenSessionSuccess(audioSession);
++        verify(callback, times(1)).onModifySessionResponse(config, SUCCESS);
++    }
++
++    @Test
++    public void testDeferredOpenSynchronousFailureIsModifyFailure() throws Exception {
++        when(audioService.openSession(eq(SESSION_ID), any(OpenSessionParams.class)))
++                .thenReturn(NO_RESOURCES);
++        audioSession.openSession(createOpenSessionParams(null));
++        processAllMessages();
++
++        AudioConfig config = AudioConfigTest.createAudioConfig();
++        audioSession.modifySession(config);
++        processAllMessages();
++
++        verify(callback, times(1)).onOpenSessionSuccess(audioSession);
++        verify(callback, times(1)).onModifySessionResponse(config, NO_RESOURCES);
++        verify(callback, never()).onOpenSessionFailure(anyInt());
++    }
++
++    @Test
++    public void testDeferredCallsReplayAfterNativeOpen() throws Exception {
++        when(audioService.openSession(eq(SESSION_ID), any(OpenSessionParams.class)))
++                .thenReturn(SUCCESS);
++        audioSession.openSession(createOpenSessionParams(null));
++        processAllMessages();
++
++        MediaQualityThreshold threshold =
++                MediaQualityThresholdTest.createMediaQualityThreshold();
++        audioSession.setMediaQualityThreshold(threshold);
++        audioSession.sendDtmf(DTMF_DIGIT, DTMF_DURATION);
++        AudioConfig config = AudioConfigTest.createAudioConfig();
++        audioSession.modifySession(config);
++        processAllMessages();
++
++        // This one arrives after native open was requested but before its
++        // asynchronous success callback.
++        audioSession.setMediaQualityThreshold(threshold);
++        processAllMessages();
++        verify(audioLocalSession, never()).setMediaQualityThreshold(threshold);
++
++        audioSession.onOpenSessionSuccess(audioLocalSession);
++        processAllMessages();
++        verify(audioLocalSession, times(2)).setMediaQualityThreshold(threshold);
++        verify(audioLocalSession, times(1)).sendDtmf(DTMF_DIGIT, DTMF_DURATION);
++    }
++
++    @Test
++    public void testCloseBeforeFirstModifyCompletesLocally() throws Exception {
++        audioSession.openSession(createOpenSessionParams(null));
++        processAllMessages();
++        audioSession.closeSession();
++        processAllMessages();
++
++        verify(audioService, never()).openSession(eq(SESSION_ID), any(OpenSessionParams.class));
++        verify(audioService, never()).closeSession(SESSION_ID);
++        verify(callback, times(1)).onSessionClosed();
++
++        MediaQualityThreshold threshold =
++                MediaQualityThresholdTest.createMediaQualityThreshold();
++        audioSession.setMediaQualityThreshold(threshold);
++        processAllMessages();
++        verify(audioLocalSession, never()).setMediaQualityThreshold(threshold);
++    }
++
++    @Test
++    public void testCloseDuringDeferredNativeOpenIsSafe() throws Exception {
++        when(audioService.openSession(eq(SESSION_ID), any(OpenSessionParams.class)))
++                .thenReturn(SUCCESS);
++        audioSession.openSession(createOpenSessionParams(null));
++        processAllMessages();
++        AudioConfig config = AudioConfigTest.createAudioConfig();
++        audioSession.modifySession(config);
++        processAllMessages();
++
++        audioSession.closeSession();
++        processAllMessages();
++        verify(audioService, times(1)).closeSession(SESSION_ID);
++        verify(callback, times(1)).onModifySessionResponse(
++                config, ImsMediaSession.RESULT_NOT_READY);
++
++        // Late native events must not create a second logical open.
++        audioSession.onOpenSessionSuccess(audioLocalSession);
++        audioSession.onSessionClosed();
++        processAllMessages();
++        verify(callback, times(1)).onOpenSessionSuccess(audioSession);
++        verify(callback, times(1)).onSessionClosed();
++    }
++
+     @Test
+     public void testCloseSession() {
+         audioSession.closeSession();
+-- 
+2.55.0
+

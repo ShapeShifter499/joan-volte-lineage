@@ -71,12 +71,23 @@ INSTALL = [
     ('  "$TMP/etc/default-permissions/com.android.imsstack.xml")\n',
      '  "$TMP/etc/default-permissions/com.android.imsstack.xml" \\\n'
      '  "$TMP/etc/sysconfig/com.android.imsstack.xml" \\\n'
+     '  "$TMP/etc/sysconfig/preinstalled-packages-carriersettings.xml" \\\n'
+     '  "$TMP/app/CarrierSettings.apk" \\\n'
      '  "$TMP/app/Iwlan.apk" "$TMP/app/QualifiedNetworksService.apk" \\\n'
      '  "$TMP/etc/permissions/com.google.android.iwlan.xml" \\\n'
      '  "$TMP/etc/permissions/com.android.telephony.qns.xml" \\\n'
      '  "$TMP/etc/sysconfig/com.google.android.iwlan.xml" \\\n'
      '  "$TMP/addon.d/60-aosp-ims.sh" "$TMP/scripts/merge-viettel-apns.sh" \\\n'
      '  "$TMP/apn/viettel-45204.xml")\n', 1),
+    ('PROD_NEED=$(need_kb "$TMP/app/ImsStackPhoneOverlay.apk" "$TMP/app/ImsStackFrameworkOverlay.apk")\n'
+     'PROD_NEED=$((PROD_NEED + 8))\n'
+     'ensure_space "$PRODMNT" product "$PROD_NEED" \\\n'
+     '  || error "product has too little free space for the two overlays (needs about $PROD_NEED KB). Nothing was changed."\n',
+     'PROD_NEED=$(need_kb "$TMP/app/ImsStackPhoneOverlay.apk" \\\n'
+     '  "$TMP/app/ImsStackFrameworkOverlay.apk" "$TMP/app/ImsStackConfigOverlay.apk")\n'
+     'PROD_NEED=$((PROD_NEED + 12))\n'
+     'ensure_space "$PRODMNT" product "$PROD_NEED" \\\n'
+     '  || error "product has too little free space for the three overlays (needs about $PROD_NEED KB). Nothing was changed."\n', 1),
     # After the allowlist: power-save and data-saver exemptions, so an
     # incoming call reaches the stack while the phone sleeps.
     ('ui_print "Installing ImsService priv-app"\n',
@@ -85,6 +96,18 @@ INSTALL = [
   copy_file "$TMP/etc/sysconfig/com.android.imsstack.xml" \\
     "$SYS/etc/sysconfig/com.android.imsstack.xml" 644 u:object_r:system_file:s0
 fi
+if [ -f "$TMP/etc/sysconfig/preinstalled-packages-carriersettings.xml" ]; then
+  copy_file "$TMP/etc/sysconfig/preinstalled-packages-carriersettings.xml" \\
+    "$SYS/etc/sysconfig/preinstalled-packages-carriersettings.xml" 644 u:object_r:system_file:s0
+fi
+if [ -f "$TMP/app/CarrierSettings.apk" ]; then
+  ui_print "Installing same-signer CarrierSettings data package"
+  mkdir -p "$SYS/app/CarrierSettings"
+  chmod 755 "$SYS/app/CarrierSettings" 2>/dev/null || true
+  chcon u:object_r:system_file:s0 "$SYS/app/CarrierSettings" 2>/dev/null || true
+  copy_file "$TMP/app/CarrierSettings.apk" \\
+    "$SYS/app/CarrierSettings/CarrierSettings.apk" 644 u:object_r:system_file:s0
+fi
 # VoWiFi: allowlists (and IWLAN's power-save exemption) before their apks.
 for f in com.google.android.iwlan com.android.telephony.qns; do
   if [ -f "$TMP/etc/permissions/$f.xml" ]; then
@@ -92,7 +115,7 @@ for f in com.google.android.iwlan com.android.telephony.qns; do
   fi
 done
 if [ -f "$TMP/etc/sysconfig/com.google.android.iwlan.xml" ]; then
-  copy_file "$TMP/etc/sysconfig/com.google.android.iwlan.xml" \\
+  copy_file "$TMP/etc/sysconfig/com.google.android.iwlan.xml" \
     "$SYS/etc/sysconfig/com.google.android.iwlan.xml" 644 u:object_r:system_file:s0
 fi
 ui_print "Installing ImsService priv-app (AOSP ImsStack + ImsMedia)"
@@ -109,8 +132,8 @@ ui_print "Installing ImsService priv-app (AOSP ImsStack + ImsMedia)"
      '''ui_print "Installing ImsService priv-app (AOSP ImsStack + ImsMedia)"
 BP="$SYS/build.prop"
 IC=ro.telephony.block_binder_thread_on_incoming_calls
-if [ -f "$BP" ] && grep -q "^$IC=false\$" "$BP"; then
-  sed "s/^$IC=false\$/$IC=true/" "$BP" > "$TMP/build.prop.aosp-ims"
+if [ -f "$BP" ] && grep -q "^$IC=false\\$" "$BP"; then
+  sed "s/^$IC=false\\$/$IC=true/" "$BP" > "$TMP/build.prop.aosp-ims"
   copy_file "$TMP/build.prop.aosp-ims" "$BP" 644 u:object_r:system_file:s0
   echo "$IC=false" > "$SYS/etc/aosp-ims-incoming-calls.flipped"
   chmod 644 "$SYS/etc/aosp-ims-incoming-calls.flipped" 2>/dev/null || true
@@ -134,9 +157,20 @@ done
     # Temp files and package-cache stamps cover the VoWiFi apps too.
     ('rm -f "$SYS/priv-app/ImsStack/"*.joan-new \\\n',
      'rm -f "$SYS/priv-app/ImsStack/"*.joan-new \\\n'
+     '      "$SYS/app/CarrierSettings/"*.joan-new \\\n'
      '      "$SYS/priv-app/Iwlan/"*.joan-new "$SYS/priv-app/QualifiedNetworksService/"*.joan-new \\\n'
      '      "$SYS/etc/sysconfig/"*.joan-new \\\n'
      '      "$SYS/etc/aosp-ims/"*.joan-new "$SYS/addon.d/"*.joan-new \\\n', 1),
+    ('# --- IMS APN rows (merge, never replace) -------------------------------\n',
+     '''if [ -f "$TMP/app/ImsStackConfigOverlay.apk" ]; then
+  ui_print "Installing ImsStack device-capability overlay"
+  mkdir -p "$PRODMNT/overlay"
+  copy_file "$TMP/app/ImsStackConfigOverlay.apk" \\
+    "$PRODMNT/overlay/ImsStackConfigOverlay.apk" 644 u:object_r:system_file:s0
+fi
+
+# --- IMS APN rows (merge, never replace) -------------------------------
+''', 1),
     # A LineageOS update rewrites system and product, everything above; its
     # backuptool runs /system/addon.d scripts before and after. This one
     # puts the stack back and makes the build.prop and APN-list edits again
@@ -166,6 +200,8 @@ fi
 ''', 1),
     ('  "$PRODMNT/overlay/ImsStackPhoneOverlay.apk" "$PRODMNT/overlay/ImsStackFrameworkOverlay.apk"\n',
      '  "$PRODMNT/overlay/ImsStackPhoneOverlay.apk" "$PRODMNT/overlay/ImsStackFrameworkOverlay.apk" \\\n'
+     '  "$PRODMNT/overlay/ImsStackConfigOverlay.apk" \\\n'
+     '  "$SYS/app/CarrierSettings/CarrierSettings.apk" "$SYS/app/CarrierSettings" \\\n'
      '  "$SYS/priv-app/Iwlan/Iwlan.apk" "$SYS/priv-app/Iwlan" \\\n'
      '  "$SYS/priv-app/QualifiedNetworksService/QualifiedNetworksService.apk" \\\n'
      '  "$SYS/priv-app/QualifiedNetworksService"\n', 1),
@@ -213,11 +249,14 @@ UNINSTALL = [
     ('ui_print "joan-volte uninstall: removing ImsService"\n',
      'ui_print "AOSP IMS uninstall: removing com.android.imsstack"\n', 1),
     ('rm -rf "$SYS/priv-app/JoanIms"\n', 'rm -rf "$SYS/priv-app/ImsStack"\n', 1),
+    ('rm -rf "$SYS/priv-app/ImsStack"\n',
+     'rm -rf "$SYS/priv-app/ImsStack" "$SYS/app/CarrierSettings"\n', 1),
     ('rm -f "$SYS/etc/permissions/org.joan.ims.xml" "$SYS/etc/permissions/"*.joan-new\n',
      'rm -f "$SYS/etc/permissions/com.android.imsstack.xml" "$SYS/etc/permissions/"*.joan-new\n'
      'rm -f "$SYS/etc/sysconfig/com.android.imsstack.xml"\n', 1),
     ('rm -f "$SYS/etc/default-permissions/org.joan.ims.xml"\n',
      'rm -f "$SYS/etc/default-permissions/com.android.imsstack.xml"\n'
+     'rm -f "$SYS/etc/sysconfig/preinstalled-packages-carriersettings.xml"\n'
      'rm -f "$SYS/addon.d/60-aosp-ims.sh"\n'
      'rm -rf "$SYS/etc/aosp-ims"\n'
      'rm -rf "$SYS/priv-app/Iwlan" "$SYS/priv-app/QualifiedNetworksService"\n'
@@ -232,8 +271,8 @@ UNINSTALL = [
 BP="$SYS/build.prop"
 IC=ro.telephony.block_binder_thread_on_incoming_calls
 if [ -f "$SYS/etc/aosp-ims-incoming-calls.flipped" ]; then
-  if grep -q "^$IC=true\$" "$BP" 2>/dev/null \
-      && sed "s/^$IC=true\$/$IC=false/" "$BP" > "$BP.aosp-ims-new" \
+  if grep -q "^$IC=true\\$" "$BP" 2>/dev/null \
+      && sed "s/^$IC=true\\$/$IC=false/" "$BP" > "$BP.aosp-ims-new" \
       && chmod 644 "$BP.aosp-ims-new" \
       && { chcon u:object_r:system_file:s0 "$BP.aosp-ims-new" 2>/dev/null; true; } \
       && mv -f "$BP.aosp-ims-new" "$BP"; then
@@ -245,12 +284,14 @@ fi
     ('rm -f "$PRODMNT/overlay/JoanImsPhoneDefault.apk"\n',
      'rm -f "$PRODMNT/overlay/ImsStackPhoneOverlay.apk"\n', 1),
     ('rm -f "$PRODMNT/overlay/JoanFwVolte.apk"\n',
-     'rm -f "$PRODMNT/overlay/ImsStackFrameworkOverlay.apk"\n', 1),
+     'rm -f "$PRODMNT/overlay/ImsStackFrameworkOverlay.apk"\n'
+     'rm -f "$PRODMNT/overlay/ImsStackConfigOverlay.apk"\n', 1),
 ]
 
 
 def rewrite(src, rules, name):
-    text = open(src).read()
+    with open(src, encoding='utf-8') as stream:
+        text = stream.read()
     for old, new, count in rules:
         n = text.count(old)
         if n != count:

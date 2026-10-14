@@ -1,0 +1,214 @@
+From 89330639da43c70bf60ad34d008987dd22206676 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 06:02:09 +0000
+Subject: [PATCH 1/2] ImsStack: build against Android 15 (LineageOS 22.2)
+
+Four telephony APIs ImsStack uses arrived after Android 15. Every other
+framework API it needs is already present on Android 15 QPR2, hidden or
+flagged, so these are the only source changes needed to compile against
+LineageOS 22.2's framework:
+
+- TelephonyManager#requestUiccIari (17): report no IARIs, as a failed
+  request does. Only RCS reads them.
+- BarringInfo#getCellIdentity (17): read the CellIdentity back from the
+  parcel; BarringInfo writes it first.
+- TelephonyManager#EXTRA_SETUP_EVENT_LIST (17): local constant. Android 15
+  never sends the broadcast it belongs to.
+- TelephonyCallback.DomainSelectionEmergencyModeListener (16): not
+  registered; domain-selection emergency mode is not reported.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SByt7CZfKR6U4r1VS86tHS
+---
+ .../base/TelephonyManagerProxyImpl.java       | 27 +++----------------
+ .../imsstack/core/StkSetupEventReceiver.java  |  7 ++++-
+ .../core/agents/EmergencyStateAgent.java      | 16 +++++------
+ .../core/agents/EmergencyStateInterface.java  |  5 ++--
+ .../imsstack/core/agents/ImsRadioAgent.java   | 20 +++++++++++++-
+ 5 files changed, 38 insertions(+), 37 deletions(-)
+
+diff --git a/java/src/com/android/imsstack/base/TelephonyManagerProxyImpl.java b/java/src/com/android/imsstack/base/TelephonyManagerProxyImpl.java
+index a319c3e..7194b2a 100644
+--- a/java/src/com/android/imsstack/base/TelephonyManagerProxyImpl.java
++++ b/java/src/com/android/imsstack/base/TelephonyManagerProxyImpl.java
+@@ -274,29 +274,10 @@ public class TelephonyManagerProxyImpl implements TelephonyManagerProxy {
+ 
+     @Override
+     public Set<String> requestUiccIari() {
+-        TelephonyManager tm = getTelephonyManager();
+-        if (tm == null) {
+-            return Collections.emptySet();
+-        }
+-        CompletableFuture<Set<String>> future = new CompletableFuture<>();
+-        OutcomeReceiver<Set<String>, Exception> callback = new OutcomeReceiver<>() {
+-            @Override
+-            public void onResult(Set<String> iariSet) {
+-                future.complete(iariSet);
+-            }
+-            @Override
+-            public void onError(@NonNull Exception ex) {
+-                future.complete(Collections.emptySet());
+-            }
+-        };
+-
+-        tm.requestUiccIari(ExecutorHolder.sExecutor, callback);
+-
+-        try {
+-            return future.get(1, TimeUnit.SECONDS);
+-        } catch (Exception e) {
+-            return Collections.emptySet();
+-        }
++        // Android 15 backport: TelephonyManager#requestUiccIari arrived in Android 17, and
++        // Android 15 has no other route to the ISIM's IARI list (used by RCS only). Report
++        // none, which is what a failed request returns.
++        return Collections.emptySet();
+     }
+ 
+     @Override
+diff --git a/java/src/com/android/imsstack/core/StkSetupEventReceiver.java b/java/src/com/android/imsstack/core/StkSetupEventReceiver.java
+index e4f8fe3..c19ed62 100644
+--- a/java/src/com/android/imsstack/core/StkSetupEventReceiver.java
++++ b/java/src/com/android/imsstack/core/StkSetupEventReceiver.java
+@@ -30,6 +30,11 @@ import com.android.imsstack.util.ImsLog;
+  * Receives and processes stk setup event list intent.
+  */
+ public class StkSetupEventReceiver extends BroadcastReceiver {
++    // Android 15 backport: TelephonyManager#EXTRA_SETUP_EVENT_LIST arrived in Android 17,
++    // the release that starts sending ACTION_STK_SETUP_EVENT_LIST.
++    private static final String EXTRA_SETUP_EVENT_LIST =
++            "android.telephony.extra.SETUP_EVENT_LIST";
++
+     @Override
+     public void onReceive(Context context, Intent intent) {
+         ImsLog.d("onReceive: " + intent);
+@@ -41,7 +46,7 @@ public class StkSetupEventReceiver extends BroadcastReceiver {
+ 
+         UsatInterface usat = (sim != null) ? sim.getUsatInterface() : null;
+         if (usat != null) {
+-            int[] setupEventList = intent.getIntArrayExtra(TelephonyManager.EXTRA_SETUP_EVENT_LIST);
++            int[] setupEventList = intent.getIntArrayExtra(EXTRA_SETUP_EVENT_LIST);
+             if (setupEventList != null) {
+                 usat.updateSetupEventList(setupEventList);
+             }
+diff --git a/java/src/com/android/imsstack/core/agents/EmergencyStateAgent.java b/java/src/com/android/imsstack/core/agents/EmergencyStateAgent.java
+index 3de2f65..913f254 100644
+--- a/java/src/com/android/imsstack/core/agents/EmergencyStateAgent.java
++++ b/java/src/com/android/imsstack/core/agents/EmergencyStateAgent.java
+@@ -115,7 +115,7 @@ public class EmergencyStateAgent implements EmergencyStateInterface {
+     }
+ 
+     private void notifyEmergencyModeChanged(
+-            @TelephonyManager.DomainSelectionEmergencyType int type, boolean entered) {
++            int type, boolean entered) {
+         for (EmergencyStateListener l : mListeners) {
+             l.onEmergencyModeChanged(type, entered);
+         }
+@@ -201,21 +201,20 @@ public class EmergencyStateAgent implements EmergencyStateInterface {
+ 
+         public void registerCallbacks() {
+             TelephonyManagerProxy tmp = getTelephonyManagerProxy(getSubId());
+-            tmp.registerTelephonyCallback(this::post, mDomainSelectionListener);
++            // Android 15 backport: TelephonyCallback.DomainSelectionEmergencyModeListener
++            // arrived in Android 16, so the framework cannot report domain selection's
++            // emergency mode here and mEmergencyModes stays empty.
+             tmp.registerTelephonyCallback(this::post, mEmergencyCallbackModeListener);
+         }
+ 
+         public void unregisterCallbacks() {
+             TelephonyManagerProxy tmp = getTelephonyManagerProxy(getSubId());
+-            tmp.unregisterTelephonyCallback(mDomainSelectionListener);
+             tmp.unregisterTelephonyCallback(mEmergencyCallbackModeListener);
+         }
+ 
+-        private final class DomainSelectionEmergencyModeListener extends TelephonyCallback
+-                implements TelephonyCallback.DomainSelectionEmergencyModeListener {
+-            @Override
++        private final class DomainSelectionEmergencyModeListener extends TelephonyCallback {
+             public void onDomainSelectionEmergencyModeEntered(
+-                    @TelephonyManager.DomainSelectionEmergencyType int type,
++                    int type,
+                     int slotIndex, int subscriptionId) {
+                 if (slotIndex != mSlotId) {
+                     return;
+@@ -230,9 +229,8 @@ public class EmergencyStateAgent implements EmergencyStateInterface {
+                 notifyEmergencyModeChanged(type, true);
+             }
+ 
+-            @Override
+             public void onDomainSelectionEmergencyModeExited(
+-                    @TelephonyManager.DomainSelectionEmergencyType int type,
++                    int type,
+                     int slotIndex, int subscriptionId) {
+                 if (slotIndex != mSlotId) {
+                     return;
+diff --git a/java/src/com/android/imsstack/core/agents/EmergencyStateInterface.java b/java/src/com/android/imsstack/core/agents/EmergencyStateInterface.java
+index 8c159d7..6d63b1d 100644
+--- a/java/src/com/android/imsstack/core/agents/EmergencyStateInterface.java
++++ b/java/src/com/android/imsstack/core/agents/EmergencyStateInterface.java
+@@ -15,7 +15,6 @@
+  */
+ package com.android.imsstack.core.agents;
+ 
+-import static android.telephony.TelephonyManager.DomainSelectionEmergencyType;
+ import static android.telephony.TelephonyManager.EmergencyCallbackModeType;
+ 
+ import androidx.annotation.NonNull;
+@@ -73,7 +72,7 @@ public interface EmergencyStateInterface extends IAgent {
+          * @param type The emergency mode type.
+          * @param entered {@code true} if the emergency mode is entered, {@code false} otherwise.
+          */
+-        void onEmergencyModeChanged(@DomainSelectionEmergencyType int type, boolean entered);
++        void onEmergencyModeChanged(int type, boolean entered);
+ 
+         /**
+          * Called to notify the update of emergency callback mode.
+@@ -106,5 +105,5 @@ public interface EmergencyStateInterface extends IAgent {
+      * @param type The emergency mode type.
+      * @return {@code true} if the emergency mode is entered, {@code false} otherwise.
+      */
+-    boolean isInEmergencyMode(@DomainSelectionEmergencyType int type);
++    boolean isInEmergencyMode(int type);
+ }
+diff --git a/java/src/com/android/imsstack/core/agents/ImsRadioAgent.java b/java/src/com/android/imsstack/core/agents/ImsRadioAgent.java
+index bec9142..c43fe4e 100644
+--- a/java/src/com/android/imsstack/core/agents/ImsRadioAgent.java
++++ b/java/src/com/android/imsstack/core/agents/ImsRadioAgent.java
+@@ -19,6 +19,7 @@ import android.annotation.NonNull;
+ import android.content.Context;
+ import android.os.Handler;
+ import android.os.Looper;
++import android.os.Parcel;
+ import android.telephony.AccessNetworkConstants;
+ import android.telephony.BarringInfo;
+ import android.telephony.BarringInfo.BarringServiceInfo;
+@@ -383,9 +384,26 @@ public class ImsRadioAgent implements ImsRadioInterface {
+         return id;
+     }
+ 
++    /**
++     * Android 15 backport: BarringInfo#getCellIdentity arrived in Android 17. BarringInfo
++     * parcels its CellIdentity first, so read it back from there.
++     */
++    private static CellIdentity getBarringCellIdentity(BarringInfo barringInfo) {
++        Parcel p = Parcel.obtain();
++        try {
++            barringInfo.writeToParcel(p, 0);
++            p.setDataPosition(0);
++            return p.readParcelable(CellIdentity.class.getClassLoader(), CellIdentity.class);
++        } catch (RuntimeException e) {
++            return null;
++        } finally {
++            p.recycle();
++        }
++    }
++
+     @VisibleForTesting
+     protected void handleBarringInfo(BarringInfo barringInfo) {
+-        CellIdentity ci = barringInfo.getCellIdentity();
++        CellIdentity ci = getBarringCellIdentity(barringInfo);
+         if (ci instanceof CellIdentityNr) {
+             ImsLog.i(this, mSlotId, "handleBarringInfo: Ignoring, cellType=NR");
+             return;
+-- 
+2.43.0
+
